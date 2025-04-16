@@ -1,0 +1,69 @@
+The Python program in the python_calc subdirectory
+
+********************
+There are three .dat ascii files in the 
+  directory.dat      
+  indices.dat  
+  work.dat
+
+In the   directory.dat   ascii file:
+Specify the subdirectories which have the ascii input refractive index files
+
+The   indices.dat   ascii file lists the refractive index files (leave as is)
+The listing is coordinated with the  calc_indices.py  module which reads in
+a specific set of indices
+
+The   work.dat   ascii file specifies the work to be done.
+EDIT this file to specify the specific work to be done.
+Generally, integer flags are set to 1 to do something, 0 to not do something.
+See the   example   subdirectory for an example of the work.dat file and the output
+produced by the program
+
+iset       For the main calculation, specify which index set is used
+           The iset value corresponds to one of the sets listed in the
+           indices.dat   ascii file
+
+iwave      If=1 will use an output wavenumber scale.
+           If=2 will use an output wavelength scale.
+w1,w2,dw   The range of wavenumber (or wavelength) and point spacing.
+
+The size distribution is a log-normal size distribution with 2 modes 
+den1,rad1,sig1    total number (#/cm3), mean radius (microns), distribution width 
+den2,rad2,sig2    total number (#/cm3), mean radius (microns), distributiion width 
+Note that alog(sig1) and alog(sig2) are used in the log-normal distributions, so
+the input sig1 is e.g. 2.3 
+
+********************
+To run the Python program type
+./ri_main.py
+
+An extinction spectrum should appear on the screen (provided you have a graphics application
+installed on your laprop, and you have access to the python matplotlib). 
+The png of what's shown is in the output    ext.png   file 
+
+I had the freeware Xming application installed on my laptop.
+See  https://sourceforge.net/projects/xming/
+
+To not do the graph, set   igraph=0   in   calc_ext.py
+since calc_ext.py has these lines of code after igraph=1 is specificed
+        import matplotlib
+        import matplotlib.pyplot as plt
+
+The   f.out   ascii output file (in the subdirectory from which you run the Python code) has the extinction,
+scattering, absorption, single scattering albedo, and asymmetry parameter spectra.
+
+An example (for the use of the 2020 Deguine volcanic ash indices) is given in the example subdirectory
+cp the work.dat file to the subdirectory which has the .py modules.
+
+********************
+Please do send comments on program bugs, and suggestions on ways to improve and
+enhance the program.
+
+********************
+Best regards,
+Steven Massie
+Laboratory for Atmospheric and Space Physics
+University of Colorado 
+Boulder, Colorado
+Steven.Massie@lasp.colorado.edu
+1-303-735-6583

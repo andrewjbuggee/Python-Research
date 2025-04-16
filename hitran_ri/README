@@ -1,0 +1,200 @@
+The HITRAN-Refractive-Indices (HITRAN-RI) IDL program
+
+This program reads in the HITRAN2020 indices of refraction and
+calculates Mie spectra based upon the user's specification
+of a specific refractive index set and a specific particle 
+size distribution.
+
+To unpack the    hitran_ri.tar   tar file that has the programs and
+all subdirectories, use the command     tar -xf hitran_ri.tar
+
+One will see the following subdirectories and files
+
+*****
+ascii             ascii files of the refractive indices
+netcdf            netCDF files of the refractive indices
+
+fortran_ascii     fortran 90 code (reads in the ascii files of the indices, does
+                  a Mie calculation, and sends calculations to output ascii files)
+idl_calc          IDL code (reads in netCDF files of the indices, does 
+                  a Mie calculation, and sends calculations to output ascii, netCF
+                  and ps graphics files) 
+python_calc       Python code (reads in the ascii files of the indices, does 
+                  a Mie calculation, and sends calculations to an output ascii file
+                  The program also displays a graph of the extinction spectrum
+
+papers            has pdfs of the original reference papers of the indices
+commentary.pdf    recommended books on light scattering and particle size distributions
+massie_hervig_JSQRT_2013.pdf   pdf of the JQSRT paper which discusses the HITRAN-RI program
+
+You may want to use the unix command   chmod 644 *.pro to get rid
+of the *'s after the download  or unpacking is done, and   chmod 755 netcdf   etc
+for the archive, ascii, commentary, fortran, etc  subdirectories
+
+********************
+Using the   idl_calc   subdirectory as an example:
+
+There are four .dat ascii files
+  directory.dat      
+  indices.dat  
+  work.dat
+  compare_spectra.dat
+
+In the   directory.dat   ascii file:
+Specify the subdirectory which has the netCDF input refractive indices files
+Specify the subdirectory to which output text and ps files are written to
+The subdirectories are one level down from the directory that contains
+the .pro's and the .dat files.
+
+The   indices.dat   ascii file lists the refractive index files (leave as is)
+The listing is coordinated with the  rdindices.pro  routine which reads in
+a specific set of indices
+
+The  compare_spectra.dat  ascii file in the compare_spectra subdirectory
+specifies which spectra files to intercompare (the user places ascii files of
+calculations and/or observed extinction spectra in this subdirectory)
+
+The   work.dat   ascii file specifies the work to be done.
+EDIT this file to specify the specific work to be done.
+Generally, integer flags are set to 1 to do something, 0 to not do something.
+See the   example   subdirectory for an example of the work.dat file and the output
+produced by the program
+
+itest      Specify itest=1 in work.dat if a test case is to be calculated.
+
+icompare   Specify icompare=1 if you compare (graph) two sets of indices.
+
+imix       Compare mixing rules
+
+imultisets To graph the indices from several sets of indices put imultisets=1
+           This is done after the user runs the program for the desired sets of indices
+           and places the output ascii files in the multisets subdirectory
+           See the comments in multisetsgraph.pro for details
+
+Normally, itest=0, icompare=0, imix=0,  imultisets=0
+
+iset       For the main calculation, specify which index set is used
+           The iset value corresponds to one of the sets listed in the
+           indices.dat   ascii file. The indices.dat file and rdindices.pro
+           routine will change as more indices are incorporated into the
+           IDL program.
+igraphi    If=1 will graph the indices of refraction (original set and
+           those interpolated to the specified output scale).
+
+iwave      If=1 will use an output wavenumber scale.
+           If=2 will use an output wavelength scale.
+w1,w2,dw   The range of wavenumber (or wavelength) and point spacing.
+
+The size distribution is a log-normal size distribution with 2 modes 
+den1,rad1,sig1    total number (#/cm3), mean radius (microns), distribution width 
+den2,rad2,sig2    total number (#/cm3), mean radius (microns), distributiion width 
+Note that alog(sig1) and alog(sig2) are used in the log-normal distributions, so
+the input sig1 is e.g. 2.3 
+
+igraphd    If=1 will graph the size distribution used in the calculation.
+
+igraphe    To graph the extinction, scattering, absorption, asymmetry, and
+           single scattering albedo spectra put igraphe=1
+
+Other print flags allows one to write out the details from the various
+parts of the code, and write out ascii and netCDF files of the output
+from the code.
+
+****
+To run the idl program, type in    idl   on the command line
+> idl
+folowed by 
+>.r main
+
+The program will ask you some information (the specifics depend upon on which
+refractive index set you work with). The program prints out to the screen (e.g. 
+tells you the path names of various ps graphics, ascii and netCDF data files
+that are created by the program)
+
+A variety of ps files (for the indices, size distribution, and spectra of extinction, scattering,
+absorption, single scattering albedo, and asymmetry parameter) and ascii files of these 
+quantities are sent to the    output  subdirectory.
+The ps (postscript graphics files) can be viewed on the user's laptop by the    gv   command
+(type gv followed by the name of the ps file)
+
+The   f.out   ascii file (in the idl_calc subdirectory from which you run the program) also contains the results
+of the calculation.
+
+An example (using the Deguine volcanic ash indices, published in 2020) is given in the example subdirectory
+cp  the work.dat file to the subdirecotry   idl_calc
+
+********************
+The Python program
+
+Edit the work.dat file
+
+In this edition of the Pythoa programn, the work.dat file is shorter thna the idl_calc work.dat file
+The Python program does the bare essentials (specify the material to work with, specify the 
+particle size distribution, specify the wavelength range, and then calculate the extinction spectrum).
+
+To run the Python program type
+./ri_main.py
+
+An extinction spectrum should appear on the screen (provided you have a graphics application
+installed on your laprop, and you have access to the python matplotlib). 
+The png of what's shown is in the    ext.png   file 
+
+I had the freeware Xming application installed on my laptop.
+See  https://sourceforge.net/projects/xming/
+
+To not do the graph, set   igraph=0   in   calc_ext.py
+since calc_ext.py has these lines of code after igraph=1 is specificed
+        import matplotlib
+        import matplotlib.pyplot as plt
+
+The f.out ascii output file (in the subdirectory from which you run the Python code) has the extinction, scattering,
+absorption, single scattering albedo, and asymmetry parameter spectra.
+
+An example (for the use of the 2020 Deguine volcanic ash indices) is given in the example subdirectory
+cp the   work.dat   file to the    python_calc   subdirectory
+
+********************
+The fortran f.90 program
+
+The user will need to edit the   Makefile   to specify the compiler that
+is to be used
+
+For the version I applied, I had these lines in the Makefile
+
+SET2= -L/usr/lib/gcc/x86_64-redhat-linux/4.8.5/
+SET3= -L/usr/pgi/linux86-64/14.9/lib/ -lgfortran
+prg: $(SRCS)
+        gfortran $(FFLAGS) -o prg $(SRCS)  -L/usr/local/lib  \
+        $(SET2) $(SET3)
+
+The command line       
+> make
+
+produced the   prg*   executable
+
+Next, edit the   work.dat   file
+
+To run the fortran program type
+>./prg
+
+The fortran program does not output graphics files or netCDF files
+
+The calculated spectra are given in the   f.out   ascii file and the 
+  ext.ascii  indices_interp.ascii  indices_orig.ascii  size.ascii
+files also written to the directory from which the fortran_ascii program is run from. 
+
+An example (for the use of the 2020 Deguine volcanic ash indices) is given in the example subdirectory
+cp the    work.dat   file to the     fortran_ascii   subdirectory
+
+********************
+Please do send comments on program bugs, and suggestions on ways to improve and
+enhance the program.
+
+********************
+Best regards,
+Steven Massie
+Laboratory for Atmospheric and Space Physics
+University of Colorado 
+Boulder, Colorado
+Steven.Massie@lasp.colorado.edu
+1-303-735-6583
