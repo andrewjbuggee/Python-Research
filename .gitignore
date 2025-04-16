@@ -1,5 +1,31 @@
-# Data files
+# Data and document files
 *.dat
+*.html
+*.hdf
+*.mat
+*.nc
+*.fig
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.xlsx
+*.par
+*.mov
+*.avi
+*.PDS
+*.tiff
+*.tif
+*.geo.tiff
+
+# weird hitran files
+hitran_ri/ascii/*
+hitran_ri/fortran_ascii/*
+hitran_ri/idl_calc/*
+hitran_ri/netcdf/*
+hitran_ri/papers/*
+*.out
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
