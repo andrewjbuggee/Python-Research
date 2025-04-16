@@ -27,12 +27,12 @@ hitran_ri/idl_calc/*
 hitran_ri/netcdf/*
 hitran_ri/papers/*
 *.out
-hitran_ri/python_calc/indicesdat
-hitran_ri/python_calc/indicesorig
-hitran_ri/python_calc/sizedist
-hitran_ri/python_calc/sizedistparam
-hitran_ri/python_calc/subdirectories
-hitran_ri/python_calc/wavescale
+hitran_ri/python_calc/indicesdat.*
+hitran_ri/python_calc/indicesorig.*
+hitran_ri/python_calc/sizedist.*
+hitran_ri/python_calc/sizedistparam.*
+hitran_ri/python_calc/subdirectories.*
+hitran_ri/python_calc/wavescale.*
 
 
 # Byte-compiled / optimized / DLL files
