@@ -1,29 +1,18 @@
 name: pyoe_examples
 channels:
-- conda-forge
-# - default
+  - conda-forge
+  - defaults
+
 dependencies:
-- python=3.10
-- numpy=1.26.4
-- nb_conda=2.2.1
-- matplotlib=3.9.2
-- scipy=1.11.4
-- pandas=2.2.3
-- xarray=2024.10.0
-- uncertainties=3.2.2
-- seaborn=0.13.2
-- pip=24.3.1
-- cython=3.0.11
-- dask=2024.11.2
-- netcdf4=1.7.2
-- numba=0.60.0
-- setuptools=59.8.0
-- libgcc
-- libgfortran
-- fftw
-- lapack
-- pip:
-  # - pyOptimalEstimation
-  # - git+git://github.com/maahn/pamtra2.git@7d4cb2feb42342b5bdf088b08fbf9ccacfce08aa
-  - git+https://github.com/maahn/pamtra2.git
-  - git+https://github.com/maahn/pyOptimalEstimation.git
+  - python=3.10  # Stable Python version
+  - numpy=1.22.*  # Ensure compatibility with other scientific libraries
+  - scipy=1.11.4  # Scientific computing
+  - pandas=2.2.3  # Data analysis
+  - xarray=2024.10.0  # N-D labeled arrays
+  - dask=2024.11.2  # Parallel computing
+  - numba=0.60.0  # JIT compiler for Python
+  - cython=3.0.11  # C extensions for Python
+  - pip=24.3.1  # Python package installer
+  - pip:
+      - git+https://github.com/maahn/pamtra2.git  # Specific branch of pamtra2
+      - git+https://github.com/maahn/pyOptimalEstimation.git  # Optimal estimation library

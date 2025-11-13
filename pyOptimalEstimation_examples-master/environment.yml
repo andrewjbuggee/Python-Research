@@ -1,25 +1,30 @@
-#Mybinder is picky, so it get's it's own environment file
+# Refined environment.yml file
+# This file specifies the dependencies for the Python environment.
+# Ensure compatibility and use conda-forge as the primary channel.
+
 channels:
-- conda-forge
-- default
+  - conda-forge
+
 dependencies:
-- python=3.10
-- numpy=1.26.4
-- nb_conda=2.2.1
-- matplotlib=3.9.2
-- scipy=1.11.4
-- pandas=2.2.3
-- xarray=2024.10.0
-- uncertainties=3.2.2
-- seaborn=0.13.2
-- pip=24.3.1
-- cython=3.0.11
-- dask=2024.11.2
-- netcdf4=1.7.2
-- numba=0.60.0
-- setuptools=59.8.0
-- pip:
-  # - pyOptimalEstimation
-  # - git+git://github.com/maahn/pamtra2.git@7d4cb2feb42342b5bdf088b08fbf9ccacfce08aa
-  - git+https://github.com/maahn/pamtra2.git@python_only
-  - pyOptimalEstimation
+  - python=3.10  # Stable Python version
+  - numpy=1.26.4  # Ensure compatibility with other scientific libraries
+  - nb_conda=2.2.1  # Jupyter notebook Conda integration
+  - matplotlib=3.9.2  # Plotting library
+  - scipy=1.11.4  # Scientific computing
+  - pandas=2.2.3  # Data analysis
+  - xarray=2024.10.0  # N-D labeled arrays
+  - uncertainties=3.2.2  # Error propagation
+  - seaborn=0.13.2  # Statistical data visualization
+  - pip=24.3.1  # Python package installer
+  - cython=3.0.11  # C extensions for Python
+  - dask=2024.11.2  # Parallel computing
+  - netcdf4=1.7.2  # NetCDF file support
+  - numba=0.60.0  # JIT compiler for Python
+  - setuptools=59.8.0  # Package management
+  - pip:
+      - git+https://github.com/maahn/pamtra2.git@python_only  # Specific branch of pamtra2
+      - pyOptimalEstimation  # Optimal estimation library
+
+# Notes:
+# - Ensure that the conda-forge channel is prioritized for consistent builds.
+# - Uncomment and adjust dependencies as needed for your specific use case.
