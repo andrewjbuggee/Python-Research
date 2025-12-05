@@ -1,0 +1,24 @@
+name: pyoe_examples
+channels:
+- conda-forge
+dependencies:
+- python=3.10
+- numpy=1.23.5
+- pandas=1.5.3  # Compatible with xarray 2022.3.0
+- xarray=2022.3.0  # Required for pamtra2 compatibility
+- matplotlib=3.7.1  # Older version for compatibility
+- scipy=1.10.1  # Compatible version
+- seaborn=0.12.2  # Older version for compatibility
+- dask=2023.5.0  # Older version compatible with pandas 1.x
+- netcdf4=1.6.3
+- nb_conda=2.2.1
+- uncertainties=3.1.7
+- cython=0.29.35
+- numba=0.57.0
+- setuptools=59.8.0
+- pip=23.1.2
+- fftw
+- lapack
+- pip:
+  - git+https://github.com/maahn/pamtra2.git
+  - git+https://github.com/maahn/pyOptimalEstimation.git
