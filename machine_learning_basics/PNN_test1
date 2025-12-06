@@ -1,0 +1,260 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Set random seeds for reproducibility
+torch.manual_seed(42)
+np.random.seed(42)
+
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+class PINN(nn.Module):
+    """Physics-Informed Neural Network for 1D Heat Equation"""
+    
+    def __init__(self, layers):
+        super(PINN, self).__init__()
+        
+        # Build neural network
+        self.layers = nn.ModuleList()
+        for i in range(len(layers) - 1):
+            self.layers.append(nn.Linear(layers[i], layers[i+1]))
+        
+        # Initialize weights using Xavier initialization
+        self.init_weights()
+    
+    def init_weights(self):
+        for m in self.layers:
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                nn.init.zeros_(m.bias)
+    
+    def forward(self, x, t):
+        """Forward pass through the network"""
+        # Concatenate inputs
+        inputs = torch.cat([x, t], dim=1)
+        
+        # Pass through layers with activation
+        for i, layer in enumerate(self.layers[:-1]):
+            inputs = torch.tanh(layer(inputs))
+        
+        # Output layer (no activation)
+        u = self.layers[-1](inputs)
+        return u
+
+
+def compute_pde_residual(model, x, t, alpha=0.01):
+    """
+    Compute the residual of the heat equation:
+    ∂u/∂t - α * ∂²u/∂x² = 0
+    """
+    # Enable gradient computation
+    x.requires_grad_(True)
+    t.requires_grad_(True)
+    
+    # Forward pass
+    u = model(x, t)
+    
+    # Compute first derivatives using autograd
+    u_t = torch.autograd.grad(
+        u, t, 
+        grad_outputs=torch.ones_like(u),
+        create_graph=True,
+        retain_graph=True
+    )[0]
+    
+    u_x = torch.autograd.grad(
+        u, x,
+        grad_outputs=torch.ones_like(u),
+        create_graph=True,
+        retain_graph=True
+    )[0]
+    
+    # Compute second derivative
+    u_xx = torch.autograd.grad(
+        u_x, x,
+        grad_outputs=torch.ones_like(u_x),
+        create_graph=True,
+        retain_graph=True
+    )[0]
+    
+    # PDE residual: ∂u/∂t - α * ∂²u/∂x²
+    residual = u_t - alpha * u_xx
+    
+    return residual
+
+
+def initial_condition(x):
+    """Initial condition: u(x, 0) = sin(πx)"""
+    return torch.sin(np.pi * x)
+
+
+def boundary_condition_left(t):
+    """Boundary condition at x=0: u(0, t) = 0"""
+    return torch.zeros_like(t)
+
+
+def boundary_condition_right(t):
+    """Boundary condition at x=1: u(1, t) = 0"""
+    return torch.zeros_like(t)
+
+
+def generate_training_data(n_ic=100, n_bc=100, n_pde=10000):
+    """Generate collocation points for training"""
+    
+    # Initial condition points (t=0, x in [0,1])
+    x_ic = torch.rand(n_ic, 1, device=device)
+    t_ic = torch.zeros(n_ic, 1, device=device)
+    u_ic = initial_condition(x_ic)
+    
+    # Boundary condition points (x=0 or x=1, t in [0,1])
+    t_bc = torch.rand(n_bc, 1, device=device)
+    x_bc_left = torch.zeros(n_bc, 1, device=device)
+    x_bc_right = torch.ones(n_bc, 1, device=device)
+    u_bc_left = boundary_condition_left(t_bc)
+    u_bc_right = boundary_condition_right(t_bc)
+    
+    # PDE collocation points (interior domain)
+    x_pde = torch.rand(n_pde, 1, device=device)
+    t_pde = torch.rand(n_pde, 1, device=device)
+    
+    return (x_ic, t_ic, u_ic), (x_bc_left, x_bc_right, t_bc, u_bc_left, u_bc_right), (x_pde, t_pde)
+
+
+def train_pinn(model, epochs=5000, lr=1e-3, alpha=0.01):
+    """Train the PINN"""
+    
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    
+    # Generate training data
+    ic_data, bc_data, pde_data = generate_training_data()
+    x_ic, t_ic, u_ic = ic_data
+    x_bc_left, x_bc_right, t_bc, u_bc_left, u_bc_right = bc_data
+    x_pde, t_pde = pde_data
+    
+    losses = []
+    
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        
+        # Initial condition loss
+        u_pred_ic = model(x_ic, t_ic)
+        loss_ic = torch.mean((u_pred_ic - u_ic)**2)
+        
+        # Boundary condition loss
+        u_pred_bc_left = model(x_bc_left, t_bc)
+        u_pred_bc_right = model(x_bc_right, t_bc)
+        loss_bc = torch.mean((u_pred_bc_left - u_bc_left)**2) + \
+                  torch.mean((u_pred_bc_right - u_bc_right)**2)
+        
+        # PDE residual loss
+        residual = compute_pde_residual(model, x_pde, t_pde, alpha)
+        loss_pde = torch.mean(residual**2)
+        
+        # Total loss (weighted sum)
+        loss = loss_ic + loss_bc + loss_pde
+        
+        # Backward pass and optimization
+        loss.backward()
+        optimizer.step()
+        
+        losses.append(loss.item())
+        
+        # Print progress
+        if (epoch + 1) % 500 == 0:
+            print(f'Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.6f}, '
+                  f'IC: {loss_ic.item():.6f}, BC: {loss_bc.item():.6f}, '
+                  f'PDE: {loss_pde.item():.6f}')
+    
+    return losses
+
+
+def visualize_solution(model, alpha=0.01):
+    """Visualize the learned solution"""
+    
+    model.eval()
+    
+    # Create mesh grid
+    x = np.linspace(0, 1, 100)
+    t = np.linspace(0, 1, 100)
+    X, T = np.meshgrid(x, t)
+    
+    # Flatten for prediction
+    x_flat = torch.tensor(X.flatten()[:, None], dtype=torch.float32, device=device)
+    t_flat = torch.tensor(T.flatten()[:, None], dtype=torch.float32, device=device)
+    
+    # Predict
+    with torch.no_grad():
+        u_pred = model(x_flat, t_flat).cpu().numpy()
+    
+    U_pred = u_pred.reshape(X.shape)
+    
+    # Analytical solution for comparison
+    U_analytical = np.zeros_like(X)
+    for i in range(len(t)):
+        U_analytical[i, :] = np.exp(-alpha * np.pi**2 * t[i]) * np.sin(np.pi * x)
+    
+    # Plot
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    
+    # PINN solution
+    im1 = axes[0].contourf(X, T, U_pred, levels=50, cmap='hot')
+    axes[0].set_xlabel('x')
+    axes[0].set_ylabel('t')
+    axes[0].set_title('PINN Solution')
+    plt.colorbar(im1, ax=axes[0])
+    
+    # Analytical solution
+    im2 = axes[1].contourf(X, T, U_analytical, levels=50, cmap='hot')
+    axes[1].set_xlabel('x')
+    axes[1].set_ylabel('t')
+    axes[1].set_title('Analytical Solution')
+    plt.colorbar(im2, ax=axes[1])
+    
+    # Error
+    error = np.abs(U_pred - U_analytical)
+    im3 = axes[2].contourf(X, T, error, levels=50, cmap='viridis')
+    axes[2].set_xlabel('x')
+    axes[2].set_ylabel('t')
+    axes[2].set_title('Absolute Error')
+    plt.colorbar(im3, ax=axes[2])
+    
+    plt.tight_layout()
+    plt.savefig('pinn_heat_equation.png', dpi=150, bbox_inches='tight')
+    plt.show()
+    
+    # Print error statistics
+    print(f'\nMean Absolute Error: {np.mean(error):.6f}')
+    print(f'Max Absolute Error: {np.max(error):.6f}')
+
+
+if __name__ == '__main__':
+    # Define network architecture
+    layers = [2, 32, 32, 32, 1]  # Input: (x,t), Hidden layers, Output: u
+    
+    # Create model
+    model = PINN(layers).to(device)
+    print(f'Model created with {sum(p.numel() for p in model.parameters())} parameters')
+    print(f'Using device: {device}')
+    
+    # Train the model
+    print('\nTraining PINN...')
+    losses = train_pinn(model, epochs=5000, lr=1e-3, alpha=0.01)
+    
+    # Plot training loss
+    plt.figure(figsize=(10, 4))
+    plt.plot(losses)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss')
+    plt.yscale('log')
+    plt.grid(True)
+    plt.savefig('training_loss.png', dpi=150, bbox_inches='tight')
+    plt.show()
+    
+    # Visualize solution
+    print('\nGenerating visualizations...')
+    visualize_solution(model, alpha=0.01)
+    
+    print('\nDone!')
