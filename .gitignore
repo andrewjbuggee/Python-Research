@@ -209,3 +209,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+daac_data_download_python
