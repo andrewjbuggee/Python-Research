@@ -19,6 +19,9 @@
 *.geo.tiff
 *.DS_Store
 *.xml
+*.cdf
+*.csv
+
 
 # weird hitran files
 hitran_ri/ascii/*
