@@ -155,10 +155,11 @@ def combine_netcdf_for_alpha(alpha_value, base_dir, output_dir):
     
     print(f"  Completed reading {nlam} files")
     
-    # Create output file
-    output_file = os.path.join(output_dir, f'wc_gamma_{alpha_str}_combined.nc')
+    # Create output file with custom name
+    output_file = os.path.join(output_dir, f'wc_mieTable_gamma_rEff_1-35microns_gammaDist_alpha_{alpha_str}.cdf')
     print(f"\nWriting combined file: {output_file}")
     
+    # Use NETCDF4 format (same as input files) with .cdf extension
     nc_out = Dataset(output_file, 'w', format='NETCDF4')
     
     # Create dimensions

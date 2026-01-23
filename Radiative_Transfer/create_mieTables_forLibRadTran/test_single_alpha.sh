@@ -12,15 +12,37 @@ if [ ! -f "combine_alpha_netcdf.py" ]; then
     exit 1
 fi
 
-# Load Python
+# Load Python module
 module purge
-module load python/3.10.2
+
+echo "Searching for Python 3 module..."
+if module load python 2>/dev/null; then
+    echo "Loaded default python module"
+elif module load python/3.11.6 2>/dev/null; then
+    echo "Loaded python/3.11.6"
+elif module load python/3.10.10 2>/dev/null; then
+    echo "Loaded python/3.10.10"
+elif module load python/3.9.10 2>/dev/null; then
+    echo "Loaded python/3.9.10"
+elif module load anaconda 2>/dev/null; then
+    echo "Loaded anaconda"
+else
+    echo "ERROR: Could not find Python 3"
+    echo ""
+    echo "Please run 'module spider python' to see available versions"
+    echo "Then edit this script to load the correct module"
+    exit 1
+fi
+
+# Show Python version
+python3 --version
+echo ""
 
 # Check/install netCDF4
-python -c "import netCDF4" 2>/dev/null
+python3 -c "import netCDF4" 2>/dev/null
 if [ $? -ne 0 ]; then
     echo "Installing netCDF4..."
-    pip install --user netCDF4
+    pip3 install --user netCDF4
     echo ""
 fi
 
@@ -29,13 +51,13 @@ ALPHA_TEST=14
 
 echo "Testing with alpha = $ALPHA_TEST"
 echo "This will combine 221 wavelength files into one file"
-echo "Expected output: wc_gamma_014_combined.nc"
+echo "Expected output: wc_mieTable_gamma_rEff_1-35microns_gammaDist_alpha_014.cdf"
 echo ""
 echo "Starting test run..."
 echo "=================================================="
 echo ""
 
-python combine_alpha_netcdf.py $ALPHA_TEST
+python3 combine_alpha_netcdf.py $ALPHA_TEST
 
 EXIT_CODE=$?
 
@@ -47,7 +69,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "Output file should be at:"
     echo "  /projects/anbu8374/Matlab-Research/Radiative_Transfer_Physics/"
     echo "  mieTables_gamma/netCDF_gammaDist_more_rEffs_moreAlpha/"
-    echo "  combined_by_alpha/wc_gamma_014_combined.nc"
+    echo "  combined_by_alpha/wc_mieTable_gamma_rEff_1-35microns_gammaDist_alpha_014.cdf"
     echo ""
     echo "You can inspect the output file with:"
     echo "  ncdump -h <output_file>"

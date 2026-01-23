@@ -19,7 +19,8 @@ These scripts combine NetCDF Mie scattering tables across wavelengths for each a
 - 48 combined files (one per alpha value)
 - Each combines all 221 wavelengths
 - Output directory: `combined_by_alpha/` (will be created automatically)
-- Output files: `wc_gamma_XXX_combined.nc`
+- Output files: `wc_mieTable_gamma_rEff_1-35microns_gammaDist_alpha_XXX.cdf`
+- File format: NETCDF4 (same as input files, compatible with libRadtran)
 
 ## Files in This Package
 
@@ -57,6 +58,7 @@ bash test_single_alpha.sh
 ```
 
 This will:
+- Find and load an available Python 3 module
 - Install netCDF4 if needed
 - Process alpha = 14 (combines 221 wavelength files)
 - Show you the output file location
@@ -65,7 +67,7 @@ This will:
 ```bash
 # View NetCDF header
 module load netcdf
-ncdump -h /projects/anbu8374/Matlab-Research/Radiative_Transfer_Physics/mieTables_gamma/netCDF_gammaDist_more_rEffs_moreAlpha/combined_by_alpha/wc_gamma_014_combined.nc
+ncdump -h /projects/anbu8374/Matlab-Research/Radiative_Transfer_Physics/mieTables_gamma/netCDF_gammaDist_more_rEffs_moreAlpha/combined_by_alpha/wc_mieTable_gamma_rEff_1-35microns_gammaDist_alpha_014.cdf
 ```
 
 ### Step 3: Submit Full Job Array
@@ -137,7 +139,7 @@ Each combined file contains:
 
 ```matlab
 % Read combined NetCDF file
-filename = '/projects/anbu8374/Matlab-Research/Radiative_Transfer_Physics/mieTables_gamma/netCDF_gammaDist_more_rEffs_moreAlpha/combined_by_alpha/wc_gamma_014_combined.nc';
+filename = '/projects/anbu8374/Matlab-Research/Radiative_Transfer_Physics/mieTables_gamma/netCDF_gammaDist_more_rEffs_moreAlpha/combined_by_alpha/wc_mieTable_gamma_rEff_1-35microns_gammaDist_alpha_014.cdf';
 
 % Read variables
 wavelengths = ncread(filename, 'wavelen');  % (221,1)
@@ -166,7 +168,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Open file
-nc = Dataset('combined_by_alpha/wc_gamma_014_combined.nc', 'r')
+nc = Dataset('combined_by_alpha/wc_mieTable_gamma_rEff_1-35microns_gammaDist_alpha_014.cdf', 'r')
 
 # Read variables
 wavelengths = nc.variables['wavelen'][:]  # (221,)
@@ -187,10 +189,21 @@ nc.close()
 
 ## Troubleshooting
 
+**Problem: Python module not found**
+```bash
+# Find available Python modules on Alpine
+module spider python
+
+# Load a specific version (example)
+module load python/3.11.6
+```
+
+The scripts will automatically try to find an available Python 3 module. If this fails, you can edit the scripts to load a specific version available on your system.
+
 **Problem: netCDF4 module not found**
 ```bash
-module load python/3.10.4
-pip install --user netCDF4
+# After loading a Python module
+pip3 install --user netCDF4
 ```
 
 **Problem: Files not found**

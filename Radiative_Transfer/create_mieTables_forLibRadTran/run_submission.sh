@@ -35,14 +35,27 @@ fi
 
 # Check if Python module is available
 module purge
-module load python/3.10.4
+
+if module load python 2>/dev/null; then
+    echo "Loaded default python module"
+elif module load python/3.11.6 2>/dev/null; then
+    echo "Loaded python/3.11.6"
+elif module load python/3.10.10 2>/dev/null; then
+    echo "Loaded python/3.10.10"
+elif module load anaconda 2>/dev/null; then
+    echo "Loaded anaconda"
+else
+    echo "ERROR: Could not load Python 3"
+    echo "Please check available modules with: module spider python"
+    exit 1
+fi
 
 # Check if netCDF4 is installed
-python -c "import netCDF4" 2>/dev/null
+python3 -c "import netCDF4" 2>/dev/null
 if [ $? -ne 0 ]; then
     echo "WARNING: netCDF4 module not found"
     echo "Installing netCDF4 for Python..."
-    pip install --user netCDF4
+    pip3 install --user netCDF4
     echo ""
 fi
 

@@ -16,7 +16,31 @@
 
 # Load required modules
 module purge
-module load python/3.10.4
+
+# Try to load Python 3 (Alpine has different versions available)
+# Try common Python 3 module names
+if module load python 2>/dev/null; then
+    echo "Loaded default python module"
+elif module load python/3.11.6 2>/dev/null; then
+    echo "Loaded python/3.11.6"
+elif module load python/3.10.10 2>/dev/null; then
+    echo "Loaded python/3.10.10"
+elif module load python/3.9.10 2>/dev/null; then
+    echo "Loaded python/3.9.10"
+elif module load anaconda 2>/dev/null; then
+    echo "Loaded anaconda"
+else
+    echo "ERROR: Could not load Python module"
+    echo "Available Python modules:"
+    module spider python
+    exit 1
+fi
+
+# Show Python version
+python3 --version
+
+# Install netCDF4 if not already installed (to user directory)
+python3 -c "import netCDF4" 2>/dev/null || pip3 install --user netCDF4
 
 # Create logs directory if it doesn't exist
 mkdir -p logs
@@ -66,7 +90,7 @@ echo "Started: $(date)"
 echo "=========================================="
 
 # Run Python script for this alpha value
-python combine_alpha_netcdf.py $ALPHA
+python3 combine_alpha_netcdf.py $ALPHA
 
 EXIT_CODE=$?
 
