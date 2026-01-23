@@ -14,7 +14,7 @@ fi
 
 # Load Python
 module purge
-module load python/3.10.4
+module load python/3.10.2
 
 # Check/install netCDF4
 python -c "import netCDF4" 2>/dev/null
