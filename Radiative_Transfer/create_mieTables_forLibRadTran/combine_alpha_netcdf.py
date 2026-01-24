@@ -58,7 +58,7 @@ def combine_netcdf_for_alpha(alpha_value, base_dir, output_dir):
         wavelengths.append(wl_nm)
         
         # Construct filename - note the underscore after alpha string
-        nc_file = os.path.join(wdir, f'wc_gamma_{alpha_str}_0_mie.cdf')
+        nc_file = os.path.join(wdir, f'wc.gamma_{alpha_str}_0_mie.cdf')
         
         if not os.path.exists(nc_file):
             print(f"WARNING: File not found: {nc_file}")

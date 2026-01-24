@@ -9,7 +9,7 @@
 #SBATCH --partition=amilan
 #SBATCH --qos=normal
 #SBATCH --job-name=test_single_alpha_combine_mieTables
-#SBATCH --output=ftest_single_alpha_combine_mieTables.out
+#SBATCH --output=test_single_alpha_combine_mieTables.out
 #SBATCH --error=test_single_alpha_combine_mieTables.err
 #SBATCH --mail-user=anbu8374@colorado.edu
 #SBATCH --mail-type=ALL
