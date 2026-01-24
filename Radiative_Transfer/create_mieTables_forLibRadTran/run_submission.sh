@@ -1,4 +1,18 @@
 #!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=20G
+#SBATCH --time=00:30:00     # Longer time for multiple files
+#SBATCH --partition=amilan
+#SBATCH --qos=normal
+#SBATCH --job-name=alpha_combine_mieTables  
+#SBATCH --output=alpha_combine_mieTables.out
+#SBATCH --error=alpha_combine_mieTables.err
+#SBATCH --mail-user=anbu8374@colorado.edu
+#SBATCH --mail-type=ALL
+
+
 # Helper script to submit the Mie table combination job array
 
 echo "=================================================="
