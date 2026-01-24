@@ -1,6 +1,21 @@
 #!/bin/bash
 # Test script to process a single alpha value before submitting full job array
 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=20G
+#SBATCH --time=00:30:00     # Longer time for multiple files
+#SBATCH --partition=amilan
+#SBATCH --qos=normal
+#SBATCH --job-name=test_single_alpha_combine_mieTables
+#SBATCH --output=ftest_single_alpha_combine_mieTables.out
+#SBATCH --error=test_single_alpha_combine_mieTables.err
+#SBATCH --mail-user=anbu8374@colorado.edu
+#SBATCH --mail-type=ALL
+
+
+
 echo "=================================================="
 echo "Test Run - Single Alpha Value"
 echo "=================================================="
