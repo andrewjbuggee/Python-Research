@@ -22,6 +22,7 @@ base_request = {
     "product_type": ["reanalysis"],
     "variable": [
         "fraction_of_cloud_cover",
+        "geopotential",
         "relative_humidity",
         "specific_humidity",
         "specific_cloud_liquid_water_content",

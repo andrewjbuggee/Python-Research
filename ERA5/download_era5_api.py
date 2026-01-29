@@ -2,8 +2,8 @@ import cdsapi
 import os
 
 # Configuration - MODIFY THESE
-download_dir = "/Users/andrewbuggee/Documents/MATLAB/Matlab-Research/Hyperspectral_Cloud_Retrievals/ERA5_reanalysis/ERA5_data/VOCALS_REx_overlap/Oct_2008/"  # Change this to your desired directory
-filename = "era5_vocalsrex_oct2008.zip"  # Change this to your desired filename
+download_dir = "/Users/andrewbuggee/Documents/MATLAB/Matlab-Research/Hyperspectral_Cloud_Retrievals/ERA5_reanalysis/ERA5_data/VOCALS_REx_overlap/"  # Change this to your desired directory
+filename = "era5_vocalsrex_oct2008_15_test.nc"  # Change this to your desired filename
 
 # Create directory if it doesn't exist
 os.makedirs(download_dir, exist_ok=True)
@@ -17,7 +17,9 @@ request = {
     "product_type": ["reanalysis"],
     "variable": [
         "fraction_of_cloud_cover",
+        "geopotential",
         "relative_humidity",
+        "specific_humidity",
         "specific_cloud_liquid_water_content",
         "temperature"
     ],
