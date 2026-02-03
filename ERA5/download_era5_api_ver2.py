@@ -5,7 +5,7 @@ import os
 
 # Configuration - MODIFY THESE
 download_dir = "/Users/andrewbuggee/Documents/MATLAB/Matlab-Research/Hyperspectral_Cloud_Retrievals/ERA5_reanalysis/ERA5_data/VOCALS_REx_overlap/October_2008/"  # Change this to your desired directory
-base_filename = "era5_vocalsrex_october_2008"  # Base filename (will add date suffix)
+base_filename = "era5_vocalsrex_October_2008"  # Base filename (will add date suffix)
 
 # Create directory if it doesn't exist
 os.makedirs(download_dir, exist_ok=True)

@@ -6,7 +6,7 @@ import os
 # Configuration - MODIFY THESE
 download_dir = "/Users/andrewbuggee/Documents/MATLAB/Matlab-Research/Hyperspectral_Cloud_Retrievals/ERA5_reanalysis/ERA5_data/VOCALS_REx_overlap/November_2008/"  # Change this to your desired directory
 
-base_filename = "era5_vocalsrex_november_2008"  # Base filename (will add date suffix)
+base_filename = "era5_vocalsrex_November_2008"  # Base filename (will add date suffix)
 
 # Create directory if it doesn't exist
 os.makedirs(download_dir, exist_ok=True)
@@ -29,7 +29,7 @@ base_request = {
         "temperature"
     ],
     "year": ["2008"],
-    "month": ["10"],
+    "month": ["11"],
     "time": [
         "00:00", "01:00", "02:00",
         "03:00", "04:00", "05:00",
@@ -78,7 +78,7 @@ for i, day in enumerate(days, 1):
     request["day"] = [day]
     
     # Submit request and download
-    print(f"[{i}/{len(days)}] Downloading data for 2008-10-{day}...")
+    print(f"[{i}/{len(days)}] Downloading data for 2008-11-{day}...")
     print(f"      Output: {filename}")
     
     try:
