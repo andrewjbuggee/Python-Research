@@ -103,7 +103,6 @@ def combine_netcdf_for_alpha(alpha_value, base_dir, output_dir):
     # Variables with shape (nlam, nreff)
     ext_all = np.zeros((nlam, nreff))
     ssa_all = np.zeros((nlam, nreff))
-    gg_all = np.zeros((nlam, nreff))
     rho_all = np.zeros((nlam, nreff))
     
     # Variables with shape (nlam)
@@ -135,7 +134,6 @@ def combine_netcdf_for_alpha(alpha_value, base_dir, output_dir):
         # Read 2D variables (squeeze out nlam=1 dimension)
         ext_all[i, :] = np.squeeze(nc.variables['ext'][:])
         ssa_all[i, :] = np.squeeze(nc.variables['ssa'][:])
-        gg_all[i, :] = np.squeeze(nc.variables['gg'][:])
         rho_all[i, :] = np.squeeze(nc.variables['rho'][:])
         
         # Read scalar refractive indices
@@ -161,7 +159,7 @@ def combine_netcdf_for_alpha(alpha_value, base_dir, output_dir):
     
     # Use NETCDF4 format (same as input files) with .cdf extension
     nc_out = Dataset(output_file, 'w', format='NETCDF4')
-    
+
     # Create dimensions
     nc_out.createDimension('nlam', nlam)
     nc_out.createDimension('nreff', nreff)
@@ -169,73 +167,68 @@ def combine_netcdf_for_alpha(alpha_value, base_dir, output_dir):
     nc_out.createDimension('nmommax', nmommax)
     nc_out.createDimension('nphamat', nphamat)
     nc_out.createDimension('nrho', 1)
-    
+
+    # Global attributes - version is CRITICAL for libRadTran compatibility.
+    # Without it, libRadTran assumes "old format" (single wavelength per file)
+    # and shifts all array indexing by one dimension, causing read errors.
+    nc_out.version = np.int64(20090626)
+    nc_out.file_info = f'Custom Mie table for gamma distribution with alpha = {alpha_value}'
+    nc_out.parameterization = 'mie'
+    nc_out.size_distr = 'Gamma distribution.'
+    nc_out.param_alpha = float(alpha_value)
+
     # Create and write variables
     # 1D variables
     var_wavelen = nc_out.createVariable('wavelen', 'f8', ('nlam',))
     var_wavelen[:] = wavelengths_arr
-    var_wavelen.units = 'micrometers'
-    var_wavelen.long_name = 'Wavelength'
-    
+
     var_reff = nc_out.createVariable('reff', 'f8', ('nreff',))
     var_reff[:] = reff
-    var_reff.units = 'micrometers'
-    var_reff.long_name = 'Effective radius'
-    
+
     var_refre = nc_out.createVariable('refre', 'f8', ('nlam',))
     var_refre[:] = refre_all
-    var_refre.long_name = 'Real part of refractive index'
-    
+
     var_refim = nc_out.createVariable('refim', 'f8', ('nlam',))
     var_refim[:] = refim_all
-    var_refim.long_name = 'Imaginary part of refractive index'
-    
+
+    # rho: libRadTran expects shape (nrho,), not (nlam, nreff)
+    var_rho = nc_out.createVariable('rho', 'f8', ('nrho',))
+    var_rho[:] = [rho_all.flat[0]]
+
     # 2D variables
     var_ext = nc_out.createVariable('ext', 'f8', ('nlam', 'nreff'))
     var_ext[:] = ext_all
-    var_ext.long_name = 'Extinction efficiency'
-    
+
     var_ssa = nc_out.createVariable('ssa', 'f8', ('nlam', 'nreff'))
     var_ssa[:] = ssa_all
-    var_ssa.long_name = 'Single scattering albedo'
-    
-    var_gg = nc_out.createVariable('gg', 'f8', ('nlam', 'nreff'))
-    var_gg[:] = gg_all
-    var_gg.long_name = 'Asymmetry parameter'
-    
-    var_rho = nc_out.createVariable('rho', 'f8', ('nlam', 'nreff'))
-    var_rho[:] = rho_all
-    var_rho.long_name = 'Density'
-    
+
+    # Note: 'gg' is intentionally omitted. libRadTran computes the asymmetry
+    # parameter from pmom internally; the reference files do not include 'gg'.
+
     # 3D variables
     var_ntheta = nc_out.createVariable('ntheta', 'i4', ('nlam', 'nreff', 'nphamat'))
     var_ntheta[:] = ntheta_all
-    var_ntheta.long_name = 'Number of phase function angles'
-    
-    var_nmom = nc_out.createVariable('nmom', 'i4', ('nlam', 'nreff', 'nphamat'))
-    var_nmom[:] = nmom_all
-    var_nmom.long_name = 'Number of Legendre moments'
-    
-    # 4D variables
-    var_theta = nc_out.createVariable('theta', 'f4', ('nlam', 'nreff', 'nphamat', 'nthetamax'))
-    var_theta[:] = theta_all
-    var_theta.long_name = 'Scattering angles'
-    var_theta.units = 'degrees'
-    
-    var_phase = nc_out.createVariable('phase', 'f4', ('nlam', 'nreff', 'nphamat', 'nthetamax'))
-    var_phase[:] = phase_all
-    var_phase.long_name = 'Phase function'
-    
-    var_pmom = nc_out.createVariable('pmom', 'f4', ('nlam', 'nreff', 'nphamat', 'nmommax'))
-    var_pmom[:] = pmom_all
-    var_pmom.long_name = 'Legendre polynomial expansion coefficients'
-    
-    # Add global attributes
-    nc_out.description = f'Combined Mie table for gamma distribution with alpha = {alpha_value}'
-    nc_out.alpha_parameter = alpha_value
-    nc_out.source = 'Combined from individual wavelength files'
-    nc_out.wavelength_range_nm = f'{int(wavelengths_arr[0]*1000)} - {int(wavelengths_arr[-1]*1000)}'
-    nc_out.n_wavelengths = nlam
+
+    # nmom: libRadTran expects shape (nlam, nreff), not (nlam, nreff, nphamat)
+    var_nmom = nc_out.createVariable('nmom', 'i4', ('nlam', 'nreff'))
+    var_nmom[:] = nmom_all[:, :, 0]
+
+    # 4D variables with _FillValue for unused entries
+    var_theta = nc_out.createVariable('theta', 'f4', ('nlam', 'nreff', 'nphamat', 'nthetamax'),
+                                       fill_value=np.float32(-999.0))
+    theta_masked = np.ma.masked_values(theta_all, -999.0)
+    var_theta[:] = theta_masked
+
+    var_phase = nc_out.createVariable('phase', 'f4', ('nlam', 'nreff', 'nphamat', 'nthetamax'),
+                                       fill_value=np.float32(-999.0))
+    phase_masked = np.ma.masked_values(phase_all, -999.0)
+    var_phase[:] = phase_masked
+
+    # pmom: _FillValue=0.0 (matching reference wc.sol.mie.cdf)
+    var_pmom = nc_out.createVariable('pmom', 'f4', ('nlam', 'nreff', 'nphamat', 'nmommax'),
+                                      fill_value=np.float32(0.0))
+    pmom_masked = np.ma.masked_values(pmom_all, 0.0)
+    var_pmom[:] = pmom_masked
     
     nc_out.close()
     
