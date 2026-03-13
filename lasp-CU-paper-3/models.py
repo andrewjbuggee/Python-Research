@@ -31,8 +31,8 @@ from typing import Optional, Tuple
 class RetrievalConfig:
     """Configuration for the retrieval network."""
     # Input dimensions
-    n_wavelengths: int = 7          # MODIS bands; set to 35 for HySICS
-    n_geometry_inputs: int = 4      # SZA, VZA, phi, wind_speed
+    n_wavelengths: int = 636         # HySICS bands; use all 636 spectral channels
+    n_geometry_inputs: int = 4      # Solar zenith, viewing zenith, solar azimuth, viewing azimuth
     # Output dimensions
     n_levels: int = 10              # Vertical levels in profile
     # Architecture
@@ -41,9 +41,9 @@ class RetrievalConfig:
     activation: str = "gelu"
     # Physical bounds (used in output layer)
     re_min: float = 1.0             # μm
-    re_max: float = 25.0            # μm
+    re_max: float = 50.0            # μm
     tau_min: float = 3.0
-    tau_max: float = 30.0
+    tau_max: float = 60.0
 
     @property
     def input_dim(self):
@@ -54,8 +54,8 @@ class RetrievalConfig:
 class EmulatorConfig:
     """Configuration for the forward model emulator (Stage 2)."""
     n_levels: int = 10
-    n_geometry_inputs: int = 4      # SZA, VZA, phi, wind_speed
-    n_wavelengths_out: int = 7      # Output reflectance channels
+    n_geometry_inputs: int = 4           # Solar zenith, viewing zenith, solar azimuth, viewing azimuth
+    n_wavelengths_out: int = 636         # output reflectance channels;HySICS bands; use all 636 spectral channels
     hidden_dims: tuple = (256, 256, 256, 256, 256)
     dropout: float = 0.05
     activation: str = "gelu"

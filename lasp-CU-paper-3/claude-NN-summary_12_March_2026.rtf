@@ -1,0 +1,200 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2709
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;\f1\fswiss\fcharset0 ArialMT;\f2\fnil\fcharset0 Calibri-Bold;
+\f3\froman\fcharset0 Times-Roman;\f4\fnil\fcharset0 Calibri;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+\margl1440\margr1440\vieww12780\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 \
+\pard\pardeftab720\sl216\partightenfactor0
+
+\f1\fs18\fsmilli9333 \cf2 \expnd0\expndtw0\kerning0
+\'95
+\f2\b Conversation Summary \'97 Paper 3: PINN for Cloud Droplet Profile Retrieval
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Context
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 You're finalizing your dissertation (defense target: June 2026) at LASP/CU Boulder. Papers 1 and 2 used optimal estimation (Gauss-Newton) to retrieve vertical profiles of cloud droplet effective radius from MODIS multispectral reflectances, validated against VOCALS-REx in situ data. Paper 3 will tackle the same problem using physics-informed neural networks.
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Key Problems from Papers 1 & 2 That Motivate Paper 3
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Non-unique solutions:
+\f4\b0  Many droplet profiles produce reflectances within MODIS uncertainty (Figs. 8-9 of Paper 1). The Gauss-Newton solver finds local minima.
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Weak cloud base sensitivity:
+\f4\b0  Weighting functions at all SWIR wavelengths peak near cloud top; only ~8% of signal at 2.13 \uc0\u956 m comes from the lowest quartile.
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Hard constraints required:
+\f4\b0  Without enforcing r_bot < r_top, the solver converges to physically unrealistic states.
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Only 2 vertical levels retrieved:
+\f4\b0  The state vector was x = (r_top, r_bot, \uc0\u964 _c) with the full profile assumed adiabatic via Eq. 4.
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Agreed-Upon Approach: Hybrid Two-Stage Strategy
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Stage 1 \'97 Direct Retrieval Network (build first, sufficient for a strong paper):
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Train a supervised neural network on ~500k libRadtran simulations
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Input: reflectances R(\uc0\u955 ) + geometry (SZA, VZA, \u966 , wind speed)
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Output: r_e at N=10 vertical levels + \uc0\u964 _c, as 
+\f2\b separate named outputs
+\f4\b0  (not a raw vector)
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Add physics-based penalties to the loss: monotonicity (replaces r_bot < r_top), adiabatic shape (soft version of Eq. 4), smoothness
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Loss = L_supervised + \uc0\u955 \u8321 \'b7L_monotonicity + \u955 \u8322 \'b7L_adiabatic + \u955 \u8323 \'b7L_smoothness
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Stage 2 \'97 Add Forward Model Emulator (if time permits, ~1-2 weeks extra):
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Train a separate NN to emulate libRadtran: (profile, \uc0\u964 _c, geometry) \u8594  predicted R(\u955 )
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Freeze emulator, plug into training loop as an additional loss term: L_data = ||\uc0\u82 \u770 (\u955 ) - R_observed(\u955 )||\'b2
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 The retrieval network from Stage 1 is 
+\f2\b reused unchanged
+\f4\b0  \'97 the emulator is an add-on
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 This makes it a true PINN because the forward model (radiative transfer) is embedded in the training loop
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Key Design Decision: Output Structure
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 The retrieval network's forward method returns a dictionary with keys 'profile', 'tau_c', 'profile_normalized', 'tau_normalized'. This clean separation enables the Stage 2 emulator to be connected directly to the retrieval network output without any restructuring.
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Project Files Created
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 All saved to /lasp-CU-paper-3/:
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b src/models.py
+\f4\b0  \'97 DropletProfileNetwork (Stage 1), ForwardModelEmulator (Stage 2), all loss functions (SupervisedLoss, PhysicsLoss, CombinedLoss, EmulatorDataLoss), config dataclasses
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b src/data.py
+\f4\b0  \'97 LibRadtranDataset (HDF5 PyTorch Dataset), create_dataloaders, adiabatic_profile (your Eq. 4), generate_random_profiles, placeholder for VOCALS-REx loading
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b train.py
+\f4\b0  \'97 SLURM-submittable training script with early stopping, checkpointing, YAML config
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b configs/stage1_modis.yaml
+\f4\b0  \'97 Training hyperparameters
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b scripts/train_alpine.sh
+\f4\b0  \'97 SLURM script for Alpine (A100 GPU partition)
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b notebooks/01_data_preparation.ipynb
+\f4\b0  \'97 Generate training data, save to HDF5 (has synthetic placeholder; needs real libRadtran integration)
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b notebooks/02_training_experimentation.ipynb
+\f4\b0  \'97 Interactive training, loss curves, profile visualization, checkpoint loading from Alpine
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b notebooks/03_vocals_validation.ipynb
+\f4\b0  \'97 VOCALS-REx comparison framework with placeholder data for your 3 cases (Fig. 3a-c), publication figure templates, ensemble uncertainty estimation
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b PowerPoint Slides Created
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 10-slide deck (pinn_advisor_slides.pptx) for your biweekly advisor meeting explaining the approach to someone unfamiliar with ML. Covers: the problem, what a NN is, direct retrieval diagram, what makes it physics-informed, PINN architecture, 2-levels-to-N-levels comparison, hybrid strategy, timeline, and summary.
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Key Technical Details
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Framework: 
+\f2\b PyTorch
+\f4\b0  (not MATLAB) \'97 needed for autograd through the emulator in Stage 2
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Architecture: MLP with 4\'d7256 hidden layers, GELU activation, LayerNorm, dropout=0.1
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Output activation: Sigmoid scaled to physical bounds [1, 25] \uc0\u956 m for r_e and [3, 30] for \u964 _c
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Jupyter notebooks for development, train.py for Alpine SLURM runs, checkpoints transferred between the two
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 num_workers=0 in Jupyter DataLoaders to avoid multiprocessing issues
+\f3\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f2\b Next Step
+\f3\b0\fs24 \
+
+\f1\fs18\fsmilli9333 \'95
+\f4 Get Notebook 01 working with 
+\f2\b real libRadtran data
+\f4\b0  on Alpine. Once you have an HDF5 file with actual reflectance spectra, everything downstream flows from it.
+\f3\fs24 \
+}
