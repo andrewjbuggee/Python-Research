@@ -7,10 +7,10 @@ from datetime import datetime, timedelta
 import scipy.io
 
 # Configuration - MODIFY THESE
-download_dir = "/Users/anbu8374/Documents/MATLAB/Matlab-Research/Hyperspectral_Cloud_Retrievals/ERA5_reanalysis/ERA5_data/ORACLES"  # Change this to your desired directory
+download_dir = "/Users/anbu8374/Documents/MATLAB/Matlab-Research/Hyperspectral_Cloud_Retrievals/ERA5_reanalysis/ERA5_data/ORACLES/"  # Change this to your desired directory
 
 # MAT file path
-mat_path = "/Users/anbu8374/Documents/MATLAB/Matlab-Research/Hyperspectral_Cloud_Retrievals/ORACLES/oracles_data/ensemble_profiles_with_precip_from_33_files_LWC-threshold_0.05_Nc-threshold_10_13-Mar-2026.mat"
+mat_path = "/Users/anbu8374/Documents/MATLAB/Matlab-Research/Hyperspectral_Cloud_Retrievals/ORACLES/oracles_data/ensemble_profiles_with_precip_from_33_files_LWC-threshold_0.05_Nc-threshold_10_16-Mar-2026.mat"
 
 # Create directory if it doesn't exist
 os.makedirs(download_dir, exist_ok=True)
@@ -88,7 +88,7 @@ base_request = {
     ],
     "data_format": "netcdf",
     "download_format": "unarchived",
-    "area": [0, -10, -30, 5],  # [North, West, South, East] - Southeast Atlantic for ORACLES
+    "area": [0, -15, -35, 16],  # [North, West, South, East] - Southeast Atlantic for ORACLES
 }
 
 # Initialize CDS API client
