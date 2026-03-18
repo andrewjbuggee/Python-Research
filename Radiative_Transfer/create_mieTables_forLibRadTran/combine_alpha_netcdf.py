@@ -154,7 +154,7 @@ def combine_netcdf_for_alpha(alpha_value, base_dir, output_dir):
     print(f"  Completed reading {nlam} files")
     
     # Create output file with custom name
-    output_file = os.path.join(output_dir, f'wc_mieTable_gamma_rEff_1-35microns_gammaDist_alpha_{alpha_str}.cdf')
+    output_file = os.path.join(output_dir, f'wc_mieTable_gamma_rEff_1-50microns_gammaDist_alpha_{alpha_str}.cdf')
     print(f"\nWriting combined file: {output_file}")
     
     # Use NETCDF4 format (same as input files) with .cdf extension
@@ -213,22 +213,38 @@ def combine_netcdf_for_alpha(alpha_value, base_dir, output_dir):
     var_nmom = nc_out.createVariable('nmom', 'i4', ('nlam', 'nreff'))
     var_nmom[:] = nmom_all[:, :, 0]
 
-    # 4D variables with _FillValue for unused entries
+    # 4D variables with _FillValue for unused entries.
+    # Build explicit masks from ntheta/nmom counts rather than matching sentinel
+    # values — trailing entries may be 0.0 rather than -999.0 depending on how
+    # the per-wavelength files were written.
+    theta_mask = np.ones((nlam, nreff, nphamat, nthetamax), dtype=bool)
+    for i in range(nlam):
+        for j in range(nreff):
+            for k in range(nphamat):
+                nt = ntheta_all[i, j, k]
+                theta_mask[i, j, k, :nt] = False
+
     var_theta = nc_out.createVariable('theta', 'f4', ('nlam', 'nreff', 'nphamat', 'nthetamax'),
                                        fill_value=np.float32(-999.0))
-    theta_masked = np.ma.masked_values(theta_all, -999.0)
-    var_theta[:] = theta_masked
+    theta_clean = np.where(theta_mask, -999.0, theta_all)
+    var_theta[:] = np.ma.array(theta_clean, mask=theta_mask)
 
     var_phase = nc_out.createVariable('phase', 'f4', ('nlam', 'nreff', 'nphamat', 'nthetamax'),
                                        fill_value=np.float32(-999.0))
-    phase_masked = np.ma.masked_values(phase_all, -999.0)
-    var_phase[:] = phase_masked
+    phase_clean = np.where(theta_mask, -999.0, phase_all)
+    var_phase[:] = np.ma.array(phase_clean, mask=theta_mask)
 
     # pmom: _FillValue=0.0 (matching reference wc.sol.mie.cdf)
+    pmom_mask = np.ones((nlam, nreff, nphamat, nmommax), dtype=bool)
+    for i in range(nlam):
+        for j in range(nreff):
+            nm = nmom_all[i, j, 0]
+            pmom_mask[i, j, :, :nm] = False
+
     var_pmom = nc_out.createVariable('pmom', 'f4', ('nlam', 'nreff', 'nphamat', 'nmommax'),
                                       fill_value=np.float32(0.0))
-    pmom_masked = np.ma.masked_values(pmom_all, 0.0)
-    var_pmom[:] = pmom_masked
+    pmom_clean = np.where(pmom_mask, 0.0, pmom_all)
+    var_pmom[:] = np.ma.array(pmom_clean, mask=pmom_mask)
     
     nc_out.close()
     
@@ -254,7 +270,7 @@ if __name__ == "__main__":
         print(f"Valid alpha values: {valid_alphas}")
         sys.exit(1)
     
-    base_dir = '/projects/anbu8374/Matlab-Research/Radiative_Transfer_Physics/mieTables_gamma/netCDF_gammaDist_more_rEffs_moreAlpha'
+    base_dir = '/projects/anbu8374/Matlab-Research/Radiative_Transfer_Physics/mieTables_gamma/netCDF_gammaDist_rEff_1_50_microns_moreAlpha'
     output_dir = os.path.join(base_dir, 'combined_by_alpha')
     
     # Create output directory if it doesn't exist
