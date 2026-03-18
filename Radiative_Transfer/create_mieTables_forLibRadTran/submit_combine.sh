@@ -1,8 +1,9 @@
 #!/bin/bash
+#SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --job-name=combine_mie
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --partition=amilan
 #SBATCH --qos=normal
 #SBATCH --output=logs/combine_alpha_%a.out
@@ -43,7 +44,7 @@ python3 --version
 python3 -c "import netCDF4" 2>/dev/null || pip3 install --user netCDF4
 
 # Create logs directory if it doesn't exist
-mkdir -p logs
+mkdir -p logs_2
 
 # Map SLURM_ARRAY_TASK_ID to actual alpha value
 # Indices 1-40 map to alpha 1-40
