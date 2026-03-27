@@ -30,12 +30,15 @@ MODIS_WAVELENGTHS = np.array([645, 858.5, 469, 555, 1240, 1640, 2130])
 DEFAULT_N_LEVELS = 10
 
 # Physical bounds on effective radius (μm)
+# Update RE_MAX after running convert_matFiles_to_HDF.py — the scan pass
+# will print the observed max across all in-situ profiles.
 RE_MIN = 1.0
-RE_MAX = 25.0
+RE_MAX = 25.0   # TODO: update from scan
 
 # Optical depth bounds
-TAU_MIN = 3.0
-TAU_MAX = 30.0
+# Update TAU_MAX after running convert_matFiles_to_HDF.py scan.
+TAU_MIN = 0.0   # in-situ profiles include sub-cloud layers where tau=0
+TAU_MAX = 30.0  # TODO: update from scan
 
 
 # =============================================================================
@@ -159,15 +162,19 @@ class LibRadtranDataset(Dataset):
 
     Expected HDF5 structure:
         /reflectances   : (n_samples, n_wavelengths) — TOA reflectance spectra
-        /profiles       : (n_samples, n_levels) — r_e profiles (top to base)
+        /profiles       : (n_samples, n_levels) — r_e profiles (top to base),
+                          interpolated to n_levels evenly-spaced altitude levels
         /tau_c          : (n_samples,) — cloud optical depth
         /sza            : (n_samples,) — solar zenith angle (degrees)
         /vza            : (n_samples,) — viewing zenith angle (degrees)
-        /phi            : (n_samples,) — relative azimuth angle (degrees)
-        /wind_speed     : (n_samples,) — surface wind speed (m/s)
+        /vaz            : (n_samples,) — viewing azimuth angle (degrees)
+        /saz            : (n_samples,) — solar azimuth angle (degrees)
         /wavelengths    : (n_wavelengths,) — wavelength grid (nm)
 
-    You can create this HDF5 file using the data preparation notebook.
+    The geometry inputs are concatenated in the order [SZA, VZA, SAZ, VAZ],
+    matching the n_geometry_inputs=4 convention in RetrievalConfig.
+
+    Create this HDF5 file by running convert_matFiles_to_HDF.py.
     """
 
     def __init__(self, h5_path: str, normalize: bool = True):
@@ -192,8 +199,8 @@ class LibRadtranDataset(Dataset):
             # Geometry inputs (if present)
             self.sza = f['sza'][:].astype(np.float32) if 'sza' in f else None
             self.vza = f['vza'][:].astype(np.float32) if 'vza' in f else None
-            self.phi = f['phi'][:].astype(np.float32) if 'phi' in f else None
-            self.wind_speed = f['wind_speed'][:].astype(np.float32) if 'wind_speed' in f else None
+            self.vaz = f['vaz'][:].astype(np.float32) if 'vaz' in f else None
+            self.saz = f['saz'][:].astype(np.float32) if 'saz' in f else None
 
             # Metadata
             self.wavelengths = f['wavelengths'][:] if 'wavelengths' in f else None
@@ -219,13 +226,19 @@ class LibRadtranDataset(Dataset):
         self.tau_max = TAU_MAX
 
         # Geometry normalization ranges
+        # SZA range kept wide for future datasets with non-zero SZA
         self.sza_range = (0.0, 80.0)    # degrees
-        self.vza_range = (0.0, 60.0)    # degrees
-        self.phi_range = (0.0, 180.0)   # degrees
-        self.ws_range = (0.0, 15.0)     # m/s
+        self.vza_range = (0.0, 65.0)    # degrees; current dataset: 0–65
+        self.vaz_range = (0.0, 180.0)   # degrees; viewing azimuth
+        self.saz_range = (0.0, 180.0)   # degrees; solar azimuth
 
-    def _normalize_input(self, refl, sza=None, vza=None, phi=None, ws=None):
-        """Normalize inputs to approximately [0, 1]."""
+    def _normalize_input(self, refl, sza=None, vza=None, saz=None, vaz=None):
+        """
+        Normalize inputs to approximately [0, 1].
+
+        Geometry inputs are appended in the order [SZA, VZA, SAZ, VAZ],
+        matching the n_geometry_inputs=4 convention in RetrievalConfig.
+        """
         refl_norm = (refl - self.refl_min) / (self.refl_max - self.refl_min + 1e-8)
 
         parts = [refl_norm]
@@ -233,10 +246,10 @@ class LibRadtranDataset(Dataset):
             parts.append(np.array([(sza - self.sza_range[0]) / (self.sza_range[1] - self.sza_range[0])]))
         if vza is not None:
             parts.append(np.array([(vza - self.vza_range[0]) / (self.vza_range[1] - self.vza_range[0])]))
-        if phi is not None:
-            parts.append(np.array([(phi - self.phi_range[0]) / (self.phi_range[1] - self.phi_range[0])]))
-        if ws is not None:
-            parts.append(np.array([(ws - self.ws_range[0]) / (self.ws_range[1] - self.ws_range[0])]))
+        if saz is not None:
+            parts.append(np.array([(saz - self.saz_range[0]) / (self.saz_range[1] - self.saz_range[0])]))
+        if vaz is not None:
+            parts.append(np.array([(vaz - self.vaz_range[0]) / (self.vaz_range[1] - self.vaz_range[0])]))
 
         return np.concatenate(parts).astype(np.float32)
 
@@ -256,15 +269,15 @@ class LibRadtranDataset(Dataset):
 
         sza = self.sza[idx] if self.sza is not None else None
         vza = self.vza[idx] if self.vza is not None else None
-        phi = self.phi[idx] if self.phi is not None else None
-        ws = self.wind_speed[idx] if self.wind_speed is not None else None
+        saz = self.saz[idx] if self.saz is not None else None
+        vaz = self.vaz[idx] if self.vaz is not None else None
 
         if self.normalize:
-            x = self._normalize_input(refl, sza, vza, phi, ws)
+            x = self._normalize_input(refl, sza, vza, saz, vaz)
             profile_norm, tau_norm = self._normalize_target(profile, tau_c)
         else:
             parts = [refl]
-            for g in [sza, vza, phi, ws]:
+            for g in [sza, vza, saz, vaz]:
                 if g is not None:
                     parts.append(np.array([g]))
             x = np.concatenate(parts).astype(np.float32)

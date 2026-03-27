@@ -106,12 +106,16 @@ class DropletProfileNetwork(nn.Module):
             in_dim = h_dim
         self.encoder = nn.Sequential(*layers)
 
-        # Profile head: outputs r_e at N levels
+        # Profile head: outputs mean r_e at N levels
         # Sigmoid output scaled to [re_min, re_max]
         self.profile_head = nn.Sequential(
             nn.Linear(in_dim, c.n_levels),
             nn.Sigmoid(),
         )
+
+        # Profile uncertainty head: outputs log-std at N levels (in normalized space)
+        # Clamped in forward to keep std in a numerically stable range
+        self.profile_std_head = nn.Linear(in_dim, c.n_levels)
 
         # Tau head: outputs cloud optical depth
         # Sigmoid output scaled to [tau_min, tau_max]
@@ -138,17 +142,27 @@ class DropletProfileNetwork(nn.Module):
         Returns
         -------
         output : dict with keys:
-            'profile' : (batch, n_levels) — r_e in [re_min, re_max] (μm)
-                         Index 0 = cloud top, index -1 = cloud base
-            'tau_c'   : (batch, 1) — optical depth in [tau_min, tau_max]
-            'profile_normalized' : (batch, n_levels) — r_e in [0, 1]
-            'tau_normalized'     : (batch, 1) — tau in [0, 1]
+            'profile'      : (batch, n_levels) — mean r_e in [re_min, re_max] (μm)
+                              Index 0 = cloud top, index -1 = cloud base
+            'profile_std'  : (batch, n_levels) — std of r_e (μm)
+            'tau_c'        : (batch, 1) — optical depth in [tau_min, tau_max]
+            'profile_normalized'     : (batch, n_levels) — mean r_e in [0, 1]
+            'profile_std_normalized' : (batch, n_levels) — std in [0, 1] space
+            'tau_normalized'         : (batch, 1) — tau in [0, 1]
         """
         features = self.encoder(x)
 
-        # Profile output: sigmoid → [0,1] then scale to physical range
+        # Profile mean: sigmoid → [0,1] then scale to physical range
         profile_norm = self.profile_head(features)       # (batch, n_levels), in [0, 1]
         profile = profile_norm * (self.re_max - self.re_min) + self.re_min
+
+        # Profile std: exp(log_std) in normalized [0,1] space.
+        # Clamp log_std to [-6, 2] → std in roughly [0.002, 7.4] normalized units,
+        # i.e. [~0.1, ~370] μm — well outside physical range on the high end but
+        # the NLL loss will drive it toward the data-appropriate scale.
+        profile_log_std = self.profile_std_head(features)
+        profile_std_norm = torch.exp(profile_log_std.clamp(-6.0, 2.0))  # (batch, n_levels)
+        profile_std = profile_std_norm * (self.re_max - self.re_min)     # physical units (μm)
 
         # Tau output: sigmoid → [0,1] then scale to physical range
         tau_norm = self.tau_head(features)                # (batch, 1), in [0, 1]
@@ -156,8 +170,10 @@ class DropletProfileNetwork(nn.Module):
 
         return {
             'profile': profile,
+            'profile_std': profile_std,
             'tau_c': tau_c,
             'profile_normalized': profile_norm,
+            'profile_std_normalized': profile_std_norm,
             'tau_normalized': tau_norm,
         }
 
@@ -233,12 +249,14 @@ class ForwardModelEmulator(nn.Module):
 
 class SupervisedLoss(nn.Module):
     """
-    Standard supervised regression loss for Stage 1.
+    Supervised loss for Stage 1.
 
-    L = MSE(profile_pred, profile_true) + α * MSE(tau_pred, tau_true)
+    Profile: Gaussian negative log-likelihood (NLL) using per-level μ and σ.
+        L_profile = mean[ log(σ) + (y - μ)² / (2σ²) ]
+    Tau: MSE on normalized output (tau uncertainty not modeled).
 
-    Uses normalized outputs so that profile and tau losses are on
-    comparable scales.
+    All quantities are in normalized [0, 1] space so profile and tau
+    losses remain on comparable scales.
     """
 
     def __init__(self, tau_weight: float = 1.0):
@@ -260,7 +278,12 @@ class SupervisedLoss(nn.Module):
         -------
         losses : dict with 'profile_loss', 'tau_loss', 'total'
         """
-        profile_loss = self.mse(output['profile_normalized'], profile_true)
+        mu = output['profile_normalized']           # (batch, n_levels)
+        sigma = output['profile_std_normalized']    # (batch, n_levels), positive by construction
+
+        # Gaussian NLL (constant 0.5*log(2π) dropped — doesn't affect gradients)
+        profile_loss = (torch.log(sigma) + 0.5 * ((profile_true - mu) / sigma).pow(2)).mean()
+
         tau_loss = self.mse(output['tau_normalized'].squeeze(-1), tau_true)
 
         total = profile_loss + self.tau_weight * tau_loss
@@ -294,12 +317,10 @@ class PhysicsLoss(nn.Module):
     """
 
     def __init__(self,
-                 lambda_monotonicity: float = 1.0,
-                 lambda_adiabatic: float = 0.5,
+                 lambda_monotonicity: float = 0.01,
                  lambda_smoothness: float = 0.1):
         super().__init__()
         self.lambda_mono = lambda_monotonicity
-        self.lambda_adiab = lambda_adiabatic
         self.lambda_smooth = lambda_smoothness
 
     def monotonicity_loss(self, profile: torch.Tensor) -> torch.Tensor:
@@ -364,16 +385,13 @@ class PhysicsLoss(nn.Module):
         losses : dict with individual terms and weighted total.
         """
         mono = self.monotonicity_loss(profile)
-        adiab = self.adiabatic_loss(profile)
         smooth = self.smoothness_loss(profile)
 
         total = (self.lambda_mono * mono +
-                 self.lambda_adiab * adiab +
                  self.lambda_smooth * smooth)
 
         return {
             'monotonicity': mono,
-            'adiabatic': adiab,
             'smoothness': smooth,
             'physics_total': total,
         }
@@ -454,8 +472,7 @@ class CombinedLoss(nn.Module):
     def __init__(self,
                  config: RetrievalConfig,
                  lambda_physics: float = 0.1,
-                 lambda_monotonicity: float = 1.0,
-                 lambda_adiabatic: float = 0.5,
+                 lambda_monotonicity: float = 0.01,
                  lambda_smoothness: float = 0.1,
                  lambda_emulator_data: float = 0.0,
                  emulator: Optional[ForwardModelEmulator] = None,
@@ -466,7 +483,6 @@ class CombinedLoss(nn.Module):
         self.supervised = SupervisedLoss(tau_weight=1.0)
         self.physics = PhysicsLoss(
             lambda_monotonicity=lambda_monotonicity,
-            lambda_adiabatic=lambda_adiabatic,
             lambda_smoothness=lambda_smoothness,
         )
         self.lambda_physics = lambda_physics
@@ -507,7 +523,6 @@ class CombinedLoss(nn.Module):
             'supervised_profile': sup_losses['profile_loss'],
             'supervised_tau': sup_losses['tau_loss'],
             'physics_monotonicity': phys_losses['monotonicity'],
-            'physics_adiabatic': phys_losses['adiabatic'],
             'physics_smoothness': phys_losses['smoothness'],
             'physics_total': phys_losses['physics_total'],
             'emulator_data': emulator_data_loss,
