@@ -33,7 +33,7 @@ DEFAULT_N_LEVELS = 10
 # Update RE_MAX after running convert_matFiles_to_HDF.py — the scan pass
 # will print the observed max across all in-situ profiles.
 RE_MIN = 1.5
-RE_MAX = 55.0   # TODO: update from scan
+RE_MAX = 35.0   # TODO: update from scan
 
 # Optical depth bounds
 # Update TAU_MAX after running convert_matFiles_to_HDF.py scan.
