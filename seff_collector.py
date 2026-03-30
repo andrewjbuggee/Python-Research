@@ -14,7 +14,6 @@ Note: Requires access to seff command (available on CU Boulder Alpine cluster)
 import subprocess
 import re
 import sys
-import statistics
 from datetime import timedelta
 
 
@@ -74,6 +73,20 @@ def parse_seff_output(seff_text):
 def format_time(seconds):
     """Convert seconds to HH:MM:SS format."""
     return str(timedelta(seconds=int(seconds)))
+
+
+def calc_mean(values):
+    """Calculate mean of a list."""
+    return sum(values) / len(values) if values else 0
+
+
+def calc_stdev(values):
+    """Calculate sample standard deviation."""
+    if len(values) < 2:
+        return 0
+    mean = calc_mean(values)
+    variance = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
+    return variance ** 0.5
 
 
 def main():
@@ -147,9 +160,9 @@ def main():
         print("  Count: {} tasks".format(len(mem_effs)))
         print("  Min:   {:7.2f}%".format(min(mem_effs)))
         print("  Max:   {:7.2f}%".format(max(mem_effs)))
-        print("  Mean:  {:7.2f}%".format(statistics.mean(mem_effs)))
+        print("  Mean:  {:7.2f}%".format(calc_mean(mem_effs)))
         if len(mem_effs) > 1:
-            print("  Stdev: {:7.2f}%".format(statistics.stdev(mem_effs)))
+            print("  Stdev: {:7.2f}%".format(calc_stdev(mem_effs)))
     else:
         print("\nMemory Efficiency: NO DATA (cluster may not support seff)")
 
@@ -161,9 +174,9 @@ def main():
         print("  Count: {} tasks".format(len(wall_times)))
         print("  Min:   {}".format(format_time(min(wall_times))))
         print("  Max:   {}".format(format_time(max(wall_times))))
-        print("  Mean:  {}".format(format_time(statistics.mean(wall_times))))
+        print("  Mean:  {}".format(format_time(calc_mean(wall_times))))
         if len(wall_times) > 1:
-            print("  Stdev: {}".format(format_time(statistics.stdev(wall_times))))
+            print("  Stdev: {}".format(format_time(calc_stdev(wall_times))))
     else:
         print("\nWall Time: NO DATA")
 
@@ -175,9 +188,9 @@ def main():
         print("  Count: {} tasks".format(len(cpu_effs)))
         print("  Min:   {:7.2f}%".format(min(cpu_effs)))
         print("  Max:   {:7.2f}%".format(max(cpu_effs)))
-        print("  Mean:  {:7.2f}%".format(statistics.mean(cpu_effs)))
+        print("  Mean:  {:7.2f}%".format(calc_mean(cpu_effs)))
         if len(cpu_effs) > 1:
-            print("  Stdev: {:7.2f}%".format(statistics.stdev(cpu_effs)))
+            print("  Stdev: {:7.2f}%".format(calc_stdev(cpu_effs)))
     else:
         print("\nCPU Efficiency: NO DATA")
 
