@@ -40,9 +40,9 @@ class RetrievalConfig:
     dropout: float = 0.1
     activation: str = "gelu"
     # Physical bounds (used in output layer)
-    re_min: float = 1.0             # μm
-    re_max: float = 50.0            # μm
-    tau_min: float = 1.0
+    re_min: float = 0.5             # μm
+    re_max: float = 55.0            # μm
+    tau_min: float = 0.5
     tau_max: float = 60.0
 
     @property
@@ -124,6 +124,10 @@ class DropletProfileNetwork(nn.Module):
             nn.Sigmoid(),
         )
 
+        # Tau uncertainty head: outputs log-std of tau (in normalized space).
+        # Clamped in forward to the same stable range as profile_std_head.
+        self.tau_std_head = nn.Linear(in_dim, 1)
+
         # Store bounds as buffers (move to GPU with model)
         self.register_buffer('re_min', torch.tensor(c.re_min))
         self.register_buffer('re_max', torch.tensor(c.re_max))
@@ -146,9 +150,11 @@ class DropletProfileNetwork(nn.Module):
                               Index 0 = cloud top, index -1 = cloud base
             'profile_std'  : (batch, n_levels) — std of r_e (μm)
             'tau_c'        : (batch, 1) — optical depth in [tau_min, tau_max]
+            'tau_std'      : (batch, 1) — std of tau (same physical units as tau_c)
             'profile_normalized'     : (batch, n_levels) — mean r_e in [0, 1]
             'profile_std_normalized' : (batch, n_levels) — std in [0, 1] space
             'tau_normalized'         : (batch, 1) — tau in [0, 1]
+            'tau_std_normalized'     : (batch, 1) — std of tau in [0, 1] space
         """
         features = self.encoder(x)
 
@@ -168,13 +174,20 @@ class DropletProfileNetwork(nn.Module):
         tau_norm = self.tau_head(features)                # (batch, 1), in [0, 1]
         tau_c = tau_norm * (self.tau_max - self.tau_min) + self.tau_min
 
+        # Tau std: same approach as profile_std — exp(clamped log-std) in normalized space
+        tau_log_std = self.tau_std_head(features)
+        tau_std_norm = torch.exp(tau_log_std.clamp(-6.0, 2.0))           # (batch, 1)
+        tau_std = tau_std_norm * (self.tau_max - self.tau_min)            # physical units
+
         return {
             'profile': profile,
             'profile_std': profile_std,
             'tau_c': tau_c,
+            'tau_std': tau_std,
             'profile_normalized': profile_norm,
             'profile_std_normalized': profile_std_norm,
             'tau_normalized': tau_norm,
+            'tau_std_normalized': tau_std_norm,
         }
 
 
@@ -251,18 +264,17 @@ class SupervisedLoss(nn.Module):
     """
     Supervised loss for Stage 1.
 
-    Profile: Gaussian negative log-likelihood (NLL) using per-level μ and σ.
-        L_profile = mean[ log(σ) + (y - μ)² / (2σ²) ]
-    Tau: MSE on normalized output (tau uncertainty not modeled).
+    Both profile and tau use Gaussian negative log-likelihood (NLL):
+        L = mean[ log(σ) + (y - μ)² / (2σ²) ]
 
-    All quantities are in normalized [0, 1] space so profile and tau
-    losses remain on comparable scales.
+    This lets the network learn calibrated uncertainty for both outputs.
+    All quantities are in normalized [0, 1] space so the two loss terms
+    remain on comparable scales.
     """
 
     def __init__(self, tau_weight: float = 1.0):
         super().__init__()
         self.tau_weight = tau_weight
-        self.mse = nn.MSELoss()
 
     def forward(self, output: dict,
                 profile_true: torch.Tensor,
@@ -284,7 +296,9 @@ class SupervisedLoss(nn.Module):
         # Gaussian NLL (constant 0.5*log(2π) dropped — doesn't affect gradients)
         profile_loss = (torch.log(sigma) + 0.5 * ((profile_true - mu) / sigma).pow(2)).mean()
 
-        tau_loss = self.mse(output['tau_normalized'].squeeze(-1), tau_true)
+        tau_mu = output['tau_normalized'].squeeze(-1)       # (batch,)
+        tau_sigma = output['tau_std_normalized'].squeeze(-1)  # (batch,), positive by construction
+        tau_loss = (torch.log(tau_sigma) + 0.5 * ((tau_true - tau_mu) / tau_sigma).pow(2)).mean()
 
         total = profile_loss + self.tau_weight * tau_loss
 

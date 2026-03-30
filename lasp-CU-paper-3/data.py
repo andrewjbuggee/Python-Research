@@ -32,13 +32,13 @@ DEFAULT_N_LEVELS = 10
 # Physical bounds on effective radius (μm)
 # Update RE_MAX after running convert_matFiles_to_HDF.py — the scan pass
 # will print the observed max across all in-situ profiles.
-RE_MIN = 1.5
-RE_MAX = 35.0   # TODO: update from scan
+RE_MIN = 0.5
+RE_MAX = 55.0   # TODO: update from scan
 
 # Optical depth bounds
 # Update TAU_MAX after running convert_matFiles_to_HDF.py scan.
-TAU_MIN = 0.0   # in-situ profiles include sub-cloud layers where tau=0
-TAU_MAX = 36.0  # TODO: update from scan
+TAU_MIN = 0.5   # in-situ profiles include sub-cloud layers where tau=0
+TAU_MAX = 60.0  # TODO: update from scan
 
 
 # =============================================================================
