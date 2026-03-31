@@ -25,8 +25,8 @@ output_file="memory_efficiency_data.txt"
 echo "Collecting memory efficiency data from seff..."
 echo "Job_ID,Memory_Efficiency_Percent" > "$output_file"
 
-for i in {201..273}; do
-    job_id="25096241_$i"
+for i in {301..373}; do
+    job_id="25096243_$i"
     # Extract memory efficiency line and parse the percentage
     mem_eff=$(seff $job_id 2>/dev/null | grep "Memory Efficiency" | awk '{print $3}' | sed 's/%//')
     
