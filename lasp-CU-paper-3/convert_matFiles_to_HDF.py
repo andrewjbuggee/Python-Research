@@ -25,7 +25,7 @@ Structure of each .MAT file
   tau : (n_insitu,) float64   — cumulative optical depth; tau[-1] = tau_c
   lwc : (n_insitu,) float64   — liquid water content (not used here)
 
-SZA is fixed at 0° for all simulations in this dataset (overhead sun).
+SZA varies per .mat file and is parsed from the filename (pattern: _sza_<value>_).
 
 Output HDF5 structure (matches LibRadtranDataset in data.py)
 --------------------------------------------------------------
@@ -36,11 +36,11 @@ Output HDF5 structure (matches LibRadtranDataset in data.py)
   /vza           (n_total,)           — viewing zenith angle (deg)
   /vaz           (n_total,)           — viewing azimuth angle (deg)
   /saz           (n_total,)           — solar azimuth angle (deg)
-  /sza           (n_total,)           — solar zenith angle (deg) = 0 here
+  /sza           (n_total,)           — solar zenith angle (deg), parsed from filename
   /wavelengths   (636,)               — HySICS band center wavelengths (nm)
 
   Attributes on the root group:
-    n_mat_files, n_geometries, sza_fixed_deg,
+    n_mat_files, n_geometries,
     re_global_min, re_global_max, tau_global_min, tau_global_max
 
 n_total = n_mat_files by 128
@@ -48,6 +48,7 @@ n_total = n_mat_files by 128
 Author: Andrew J. Buggee, LASP / CU Boulder
 """
 
+import re
 import numpy as np
 import h5py
 import scipy.io
@@ -67,7 +68,14 @@ N_LEVELS      = 10    # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
 N_WAVELENGTHS = 636   # HySICS spectral channels
 
-SZA_FIXED = 0.0       # solar zenith angle is fixed at 0° for this dataset
+_SZA_RE = re.compile(r'_sza_(\d+(?:\.\d+)?)_')
+
+def parse_sza_from_filename(filename: str) -> float:
+    """Extract the SZA value from a filename containing the pattern _sza_<value>_."""
+    m = _SZA_RE.search(filename)
+    if m is None:
+        raise ValueError(f'Cannot parse SZA from filename: {filename}')
+    return float(m.group(1))
 
 
 # ============================================================
@@ -246,10 +254,12 @@ with h5py.File(OUT_PATH, 'w') as f:
         ds_z_raw[row_start:row_end,    :n_lev]  = z_raw.astype(np.float32)[np.newaxis, :]
         ds_n_levels[row_start:row_end]           = n_lev
 
+        sza = parse_sza_from_filename(path.name)
+
         ds_vza[row_start:row_end]    = vza
         ds_vaz[row_start:row_end]    = vaz
         ds_saz[row_start:row_end]    = saz
-        ds_sza[row_start:row_end]    = SZA_FIXED
+        ds_sza[row_start:row_end]    = sza
 
         if (i + 1) % 10 == 0 or i == n_files - 1:
             print(f'  {i+1}/{n_files}  ({row_end} samples written)')
@@ -260,7 +270,6 @@ with h5py.File(OUT_PATH, 'w') as f:
     # Root-level metadata
     f.attrs['n_mat_files']     = n_files
     f.attrs['n_geometries']    = N_GEOMETRIES
-    f.attrs['sza_fixed_deg']   = SZA_FIXED
     f.attrs['re_global_min']   = re_global_min
     f.attrs['re_global_max']   = re_global_max
     f.attrs['tau_global_min']  = tau_global_min
