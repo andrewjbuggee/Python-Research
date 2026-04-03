@@ -40,10 +40,10 @@ class RetrievalConfig:
     dropout: float = 0.1
     activation: str = "gelu"
     # Physical bounds (used in output layer)
-    re_min: float = 0.5             # μm
-    re_max: float = 55.0            # μm
-    tau_min: float = 0
-    tau_max: float = 60.0
+    re_min: float = 1.25             # μm
+    re_max: float = 50.0            # μm
+    tau_min: float = 1.5
+    tau_max: float = 40.0
 
     @property
     def input_dim(self):
