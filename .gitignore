@@ -21,7 +21,7 @@
 *.xml
 *.cdf
 *.csv
-
+*.h5
 
 # weird hitran files
 hitran_ri/ascii/*
