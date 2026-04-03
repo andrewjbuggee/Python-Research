@@ -42,7 +42,7 @@ class RetrievalConfig:
     # Physical bounds (used in output layer)
     re_min: float = 0.5             # μm
     re_max: float = 55.0            # μm
-    tau_min: float = 0.5
+    tau_min: float = 0
     tau_max: float = 60.0
 
     @property
