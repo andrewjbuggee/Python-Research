@@ -52,6 +52,7 @@ import re
 import numpy as np
 import h5py
 import scipy.io
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 
@@ -139,17 +140,19 @@ re_global_max   = -np.inf
 tau_global_min  =  np.inf
 tau_global_max  = -np.inf
 max_raw_levels  = 0
+tau_c_all       = []
 
 for i, path in enumerate(mat_files):
     d     = scipy.io.loadmat(path, squeeze_me=True)
     re    = d['re']
-    tau_c = float(d['tau'][-1])
+    tau_c = float(d['tau'].max())
 
     re_global_min  = min(re_global_min,  float(re.min()))
     re_global_max  = max(re_global_max,  float(re.max()))
     tau_global_min = min(tau_global_min, tau_c)
     tau_global_max = max(tau_global_max, tau_c)
     max_raw_levels = max(max_raw_levels, len(re))
+    tau_c_all.append(tau_c)
 
     if (i + 1) % 10 == 0 or i == n_files - 1:
         print(f'  {i+1}/{n_files}', end='\r')
@@ -167,6 +170,14 @@ print(f'  RE_MIN  = {re_global_min:.1f}')
 print(f'  RE_MAX  = {re_max_suggested:.0f}')
 print(f'  TAU_MIN = {tau_global_min:.1f}')
 print(f'  TAU_MAX = {tau_max_suggested:.0f}')
+
+fig, ax = plt.subplots()
+ax.hist(tau_c_all, bins=30)
+ax.set_xlabel('tau_c')
+ax.set_ylabel('Count')
+ax.set_title('Distribution of tau_c across all files')
+plt.tight_layout()
+plt.show()
 
 
 # ============================================================
@@ -228,7 +239,7 @@ with h5py.File(OUT_PATH, 'w') as f:
         profile_fixed = interpolate_profile(re_raw, z_raw, N_LEVELS)  # (N_LEVELS,)
 
         # Total optical depth
-        tau_c = float(d['tau'][-1])
+        tau_c = float(d['tau'].max())
 
         # Geometry: extract one row per geometry block (every 636 rows)
         # Columns: [VZA, VAZ, SAZ]
