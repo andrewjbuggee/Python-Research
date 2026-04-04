@@ -214,3 +214,6 @@ cython_debug/
 .pypirc
 
 daac_data_download_python
+
+# Claude Code working directories
+.claude/worktrees/
