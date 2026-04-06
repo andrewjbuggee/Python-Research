@@ -19,14 +19,14 @@
 #SBATCH --mail-user=anbu8374@colorado.edu
 #SBATCH --mail-type=ALL
 
-output_file="memory_efficiency_data_$(date +%Y-%m-%d)_1.txt"
+output_file="memory_efficiency_data_$(date +%Y-%m-%d)_2.txt"
 > "$output_file"  # Clear file
 
 echo "Collecting memory efficiency data from seff..."
 echo "Job_ID,Memory_Efficiency_Percent" > "$output_file"
 
-for i in {101..173}; do
-    job_id="25173796_$i"
+for i in {201..273}; do
+    job_id="25173797_$i"
     # Extract memory efficiency line and parse the percentage
     mem_eff=$(seff $job_id 2>/dev/null | grep "Memory Efficiency" | awk '{print $3}' | sed 's/%//')
     
