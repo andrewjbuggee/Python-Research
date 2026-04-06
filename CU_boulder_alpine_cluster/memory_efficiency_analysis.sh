@@ -19,7 +19,7 @@
 #SBATCH --mail-user=anbu8374@colorado.edu
 #SBATCH --mail-type=ALL
 
-output_file="memory_efficiency_data_$(date +%Y-%m-%d)_2.txt"
+output_file="memory_efficiency_data_$(date +%Y-%m-%d)_4.txt"
 > "$output_file"  # Clear file
 
 echo "Collecting memory efficiency data from seff..."
