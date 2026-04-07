@@ -60,14 +60,21 @@ from pathlib import Path
 # Configuration
 # ============================================================
 
-MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/'
-                'Combined_data_from_13_March_and_30_March_2026_sza0_23_33_and_41/')
+MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/partial_dataSet_created_on_31_March_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'training_data_VR_sza_0_23_33_41_2.h5')
+                'training_data_VR_31_March_2026_partial.h5')
 
 N_LEVELS      = 10    # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
 N_WAVELENGTHS = 636   # HySICS spectral channels
+
+# Keys that must be present in every .mat file to be included in Pass 2
+REQUIRED_KEYS = {
+    'Refl_model_with_noise_allStateVectors',
+    'Refl_model_uncert_allStateVectors',
+    'changing_variables_allStateVectors',
+    're', 'z', 'tau',
+}
 
 _SZA_RE = re.compile(r'_sza_(\d+(?:\.\d+)?)_')
 
@@ -141,9 +148,19 @@ tau_global_min  =  np.inf
 tau_global_max  = -np.inf
 max_raw_levels  = 0
 tau_c_all       = []
+valid_mat_files = []
+skipped_files   = []
 
 for i, path in enumerate(mat_files):
-    d     = scipy.io.loadmat(path, squeeze_me=True)
+    d = scipy.io.loadmat(path, squeeze_me=True)
+
+    # Validate that all required keys are present before doing anything else
+    missing = REQUIRED_KEYS - set(d.keys())
+    if missing:
+        print(f'\n  SKIPPING {path.name} — missing keys: {missing}')
+        skipped_files.append((path, missing))
+        continue
+
     re    = d['re']
     tau_c = float(d['tau'].max())
 
@@ -153,11 +170,22 @@ for i, path in enumerate(mat_files):
     tau_global_max = max(tau_global_max, tau_c)
     max_raw_levels = max(max_raw_levels, len(re))
     tau_c_all.append(tau_c)
+    valid_mat_files.append(path)
 
     if (i + 1) % 10 == 0 or i == n_files - 1:
         print(f'  {i+1}/{n_files}', end='\r')
 
 print(f'\n')
+if skipped_files:
+    print(f'Skipped {len(skipped_files)} file(s) due to missing keys:')
+    for p, missing in skipped_files:
+        print(f'  {p.name}: {missing}')
+    print()
+
+# Update counts to reflect only valid files
+n_files = len(valid_mat_files)
+n_total = n_files * N_GEOMETRIES
+print(f'Valid files for Pass 2: {n_files} → {n_total} total training samples')
 print(f'r_e  bounds:      [{re_global_min:.2f}, {re_global_max:.2f}] μm')
 print(f'tau_c bounds:     [{tau_global_min:.2f}, {tau_global_max:.2f}]')
 print(f'max profile levels: {max_raw_levels}')
@@ -185,7 +213,7 @@ plt.show()
 # (band center = mean of lower and upper bound in columns 3 and 4)
 # ============================================================
 
-d_ref = scipy.io.loadmat(mat_files[0], squeeze_me=True)
+d_ref = scipy.io.loadmat(valid_mat_files[0], squeeze_me=True)
 cv_ref = d_ref['changing_variables_allStateVectors']
 wavelengths = ((cv_ref[:N_WAVELENGTHS, 3] + cv_ref[:N_WAVELENGTHS, 4]) / 2
                ).astype(np.float32)
@@ -224,7 +252,7 @@ with h5py.File(OUT_PATH, 'w') as f:
     ds_saz  = f.create_dataset('saz',   shape=(n_total,), dtype='f4')
     ds_sza  = f.create_dataset('sza',   shape=(n_total,), dtype='f4')
 
-    for i, path in enumerate(mat_files):
+    for i, path in enumerate(valid_mat_files):
         d = scipy.io.loadmat(path, squeeze_me=True)
 
         # Reflectances: (636, 128) → transpose → (128, 636)
