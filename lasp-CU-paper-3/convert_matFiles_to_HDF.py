@@ -70,8 +70,8 @@ N_WAVELENGTHS = 636   # HySICS spectral channels
 
 # Keys that must be present in every .mat file to be included in Pass 2
 REQUIRED_KEYS = {
-    'Refl_model_with_noise_allStateVectors',
-    'Refl_model_uncert_allStateVectors',
+    'Refl_model_with_noise_allStateVectors_hysics',
+    'Refl_model_uncert_allStateVectors_hysics',
     'changing_variables_allStateVectors',
     're', 'z', 'tau',
 }
@@ -123,6 +123,82 @@ def interpolate_profile(re_raw: np.ndarray,
     return re_interp_asc[::-1].astype(np.float32)
 
 
+def interpolate_profile_tau_weighted(
+    re_raw:   np.ndarray,
+    tau_raw:  np.ndarray,
+    z_raw:    np.ndarray | None = None,
+    n_top:    int   = 6,
+    n_bot:    int   = 4,
+    split_tau: float = 0.4,
+) -> tuple:
+    """
+    Interpolate an in-situ r_e profile onto a non-uniformly spaced
+    optical-depth grid that places more levels near cloud top, where
+    reflected radiance sensitivity is highest.
+
+    The normalized optical depth τ̃ = τ / τ_c runs from 0 (cloud top)
+    to 1 (cloud base).  n_top points are placed evenly over [0, split_tau]
+    and n_bot points over (split_tau, 1], giving n_top + n_bot levels total.
+
+    Default parameters (n_top=6, n_bot=4, split_tau=0.4) produce a 10-level
+    grid that matches N_LEVELS while concentrating half the levels in the
+    top 40 % of optical depth.
+
+    Parameters
+    ----------
+    re_raw    : (n,) float  — effective radius, cloud top → base (μm)
+    tau_raw   : (n,) float  — cumulative optical depth; may be ascending
+                              (descending flight) or descending (ascending
+                              flight) — handled automatically via min/max norm
+    z_raw     : (n,) float or None  — altitude in km, cloud top → base
+                              (decreasing).  When supplied, z at each
+                              sampled τ̃ point is also returned.
+    n_top     : int   — levels in [0, split_tau]       (default 6)
+    n_bot     : int   — levels in (split_tau, 1]        (default 4)
+    split_tau : float — normalized τ split point        (default 0.4)
+
+    Returns
+    -------
+    re_interp : (n_top + n_bot,) float32
+        Effective radius at each sampled level (cloud top → base order).
+    tau_grid  : (n_top + n_bot,) float64
+        Normalized optical depth τ̃ ∈ [0, 1] at each level.
+        Use as the y-axis when plotting in τ-space (invert axis so 0 is at top).
+    z_interp  : (n_top + n_bot,) float64  or  None
+        Altitude in km at each sampled τ̃ level.
+        Use as the y-axis when plotting in z-space.
+    """
+    # Coerce inputs to 1-D float64 arrays so indexing always works.
+    tau_raw = np.atleast_1d(np.asarray(tau_raw, dtype=np.float64))
+    re_raw  = np.atleast_1d(np.asarray(re_raw,  dtype=np.float64))
+
+    # Normalize to [0, 1] using global min/max so the result is correct
+    # regardless of whether tau was stored cloud-top→base (ascending) or
+    # cloud-base→top (descending), and robust to slight non-monotonicities
+    # that can appear in processed data.
+    tau_min, tau_max = tau_raw.min(), tau_raw.max()
+    tau_norm = (tau_raw - tau_min) / (tau_max - tau_min)
+
+    # Sort everything by ascending τ̃ so np.interp receives a valid xp array.
+    # For profiles already in top→base (ascending τ) order this is a no-op.
+    order      = np.argsort(tau_norm)
+    tau_sorted = tau_norm[order]
+    re_sorted  = re_raw[order]
+    z_sorted   = np.asarray(z_raw, dtype=np.float64)[order] if z_raw is not None else None
+
+    # Build the non-uniform τ̃ sampling grid:
+    #   n_top evenly-spaced points over [0, split_tau]  — denser near cloud top
+    #   n_bot evenly-spaced points over (split_tau, 1]  — sparser toward base
+    tau_top  = np.linspace(0.0, split_tau, n_top)
+    tau_bot  = np.linspace(split_tau, 1.0, n_bot + 1)[1:]   # drop shared endpoint
+    tau_grid = np.concatenate([tau_top, tau_bot])            # (n_top + n_bot,)
+
+    re_interp = np.interp(tau_grid, tau_sorted, re_sorted).astype(np.float32)
+    z_interp  = np.interp(tau_grid, tau_sorted, z_sorted) if z_sorted is not None else None
+
+    return re_interp, tau_grid, z_interp
+
+
 # ============================================================
 # Collect .mat files (exclude macOS metadata files starting with ._)
 # ============================================================
@@ -161,8 +237,10 @@ for i, path in enumerate(mat_files):
         skipped_files.append((path, missing))
         continue
 
-    re    = d['re']
-    tau_c = float(d['tau'].max())
+    # re, z, tau are stored as 1x1 cell arrays; squeeze_me=True gives a 0-d
+    # object array, so use [()] to extract the inner numpy array.
+    re    = d['re'][()]
+    tau_c = float(d['tau'][()].max())
 
     re_global_min  = min(re_global_min,  float(re.min()))
     re_global_max  = max(re_global_max,  float(re.max()))
@@ -256,18 +334,19 @@ with h5py.File(OUT_PATH, 'w') as f:
         d = scipy.io.loadmat(path, squeeze_me=True)
 
         # Reflectances: (636, 128) → transpose → (128, 636)
-        refl   = d['Refl_model_with_noise_allStateVectors'].astype(np.float32).T
-        uncert = d['Refl_model_uncert_allStateVectors'].astype(np.float32).T
+        refl   = d['Refl_model_with_noise_allStateVectors_hysics'].astype(np.float32).T
+        uncert = d['Refl_model_uncert_allStateVectors_hysics'].astype(np.float32).T
 
-        re_raw = d['re'].astype(np.float64)
-        z_raw  = d['z'].astype(np.float64)
+        # re, z, tau are 1x1 cell arrays; use [()] to extract the inner array
+        re_raw = d['re'][()].astype(np.float64)
+        z_raw  = d['z'][()].astype(np.float64)
         n_lev  = len(re_raw)
 
         # Training target: interpolate to N_LEVELS
         profile_fixed = interpolate_profile(re_raw, z_raw, N_LEVELS)  # (N_LEVELS,)
 
         # Total optical depth
-        tau_c = float(d['tau'].max())
+        tau_c = float(d['tau'][()].max())
 
         # Geometry: extract one row per geometry block (every 636 rows)
         # Columns: [VZA, VAZ, SAZ]
