@@ -6,11 +6,19 @@ HDF5 training file compatible with LibRadtranDataset in data.py.
 
 Structure of each .MAT file
 ----------------------------
-  Refl_model_with_noise_allStateVectors : (636, 128) float64
+  Refl_model_with_noise_allStateVectors_hysics : (636, 128) float64
       TOA reflectance with 0.3% Gaussian noise added; one spectrum per
       viewing geometry (columns). This is what the network is trained on.
+      
+  Refl_model_with_noise_allStateVectors_emit : (636, 128) float64
+      TOA reflectance with 4% Gaussian noise added; one spectrum per
+      viewing geometry (columns). This is what the network is trained on.
 
-  Refl_model_uncert_allStateVectors : (636, 128) float64
+  Refl_model_uncert_allStateVectors_hysics : (636, 128) float64
+      Per-channel 1-sigma measurement uncertainty (same shape). Stored in
+      the HDF5 for potential use in the Stage 2 emulator data-fidelity loss.
+      
+  Refl_model_uncert_allStateVectors_emit : (636, 128) float64
       Per-channel 1-sigma measurement uncertainty (same shape). Stored in
       the HDF5 for potential use in the Stage 2 emulator data-fidelity loss.
 
@@ -60,7 +68,7 @@ from pathlib import Path
 # Configuration
 # ============================================================
 
-MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/partial_dataSet_created_on_31_March_2026/')
+MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/partial_dataSet_2_created_on_31_March_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
                 'training_data_VR_31_March_2026_partial.h5')
 
@@ -71,7 +79,9 @@ N_WAVELENGTHS = 636   # HySICS spectral channels
 # Keys that must be present in every .mat file to be included in Pass 2
 REQUIRED_KEYS = {
     'Refl_model_with_noise_allStateVectors_hysics',
+    'Refl_model_with_noise_allStateVectors_emit',
     'Refl_model_uncert_allStateVectors_hysics',
+    'Refl_model_uncert_allStateVectors_emit',
     'changing_variables_allStateVectors',
     're', 'z', 'tau',
 }
@@ -307,10 +317,14 @@ print(f'\nWavelength grid: {N_WAVELENGTHS} bands, '
 print(f'\nPass 2: writing HDF5 → {OUT_PATH}')
 
 with h5py.File(OUT_PATH, 'w') as f:
-    ds_refl   = f.create_dataset('reflectances',
-                                 shape=(n_total, N_WAVELENGTHS), dtype='f4')
-    ds_uncert = f.create_dataset('reflectances_uncertainty',
-                                 shape=(n_total, N_WAVELENGTHS), dtype='f4')
+    ds_refl_hysics   = f.create_dataset('reflectances_hysics',
+                                        shape=(n_total, N_WAVELENGTHS), dtype='f4')
+    ds_refl_emit     = f.create_dataset('reflectances_emit',
+                                        shape=(n_total, N_WAVELENGTHS), dtype='f4')
+    ds_uncert_hysics = f.create_dataset('reflectances_uncertainty_hysics',
+                                        shape=(n_total, N_WAVELENGTHS), dtype='f4')
+    ds_uncert_emit   = f.create_dataset('reflectances_uncertainty_emit',
+                                        shape=(n_total, N_WAVELENGTHS), dtype='f4')
 
     # Training target: r_e interpolated to N_LEVELS evenly-spaced altitude levels
     ds_prof   = f.create_dataset('profiles',
@@ -334,8 +348,10 @@ with h5py.File(OUT_PATH, 'w') as f:
         d = scipy.io.loadmat(path, squeeze_me=True)
 
         # Reflectances: (636, 128) → transpose → (128, 636)
-        refl   = d['Refl_model_with_noise_allStateVectors_hysics'].astype(np.float32).T
-        uncert = d['Refl_model_uncert_allStateVectors_hysics'].astype(np.float32).T
+        refl_hysics   = d['Refl_model_with_noise_allStateVectors_hysics'].astype(np.float32).T
+        refl_emit     = d['Refl_model_with_noise_allStateVectors_emit'].astype(np.float32).T
+        uncert_hysics = d['Refl_model_uncert_allStateVectors_hysics'].astype(np.float32).T
+        uncert_emit   = d['Refl_model_uncert_allStateVectors_emit'].astype(np.float32).T
 
         # re, z, tau are 1x1 cell arrays; use [()] to extract the inner array
         re_raw = d['re'][()].astype(np.float64)
@@ -360,8 +376,10 @@ with h5py.File(OUT_PATH, 'w') as f:
         row_start = i * N_GEOMETRIES
         row_end   = row_start + N_GEOMETRIES
 
-        ds_refl[row_start:row_end]   = refl
-        ds_uncert[row_start:row_end] = uncert
+        ds_refl_hysics[row_start:row_end]   = refl_hysics
+        ds_refl_emit[row_start:row_end]     = refl_emit
+        ds_uncert_hysics[row_start:row_end] = uncert_hysics
+        ds_uncert_emit[row_start:row_end]   = uncert_emit
 
         # Same profile and tau_c broadcast to all 128 geometry samples
         ds_prof[row_start:row_end]     = profile_fixed[np.newaxis, :]

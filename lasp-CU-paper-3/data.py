@@ -177,7 +177,8 @@ class LibRadtranDataset(Dataset):
     Create this HDF5 file by running convert_matFiles_to_HDF.py.
     """
 
-    def __init__(self, h5_path: str, normalize: bool = True):
+    def __init__(self, h5_path: str, normalize: bool = True,
+                 instrument: str = 'hysics'):
         """
         Parameters
         ----------
@@ -185,14 +186,33 @@ class LibRadtranDataset(Dataset):
             Path to HDF5 file containing libRadtran data.
         normalize : bool
             If True, normalize inputs and targets to [0, 1] range.
+        instrument : str
+            Which instrument's simulated reflectance to use as model input.
+            'hysics' (default) — 0.3 % Gaussian noise (HySICS noise level)
+            'emit'             — 4 % Gaussian noise (EMIT noise level)
+            The underlying RT simulation is identical; only the noise differs.
         """
-        self.h5_path = Path(h5_path)
+        if instrument not in ('hysics', 'emit'):
+            raise ValueError(f"instrument must be 'hysics' or 'emit', got {instrument!r}")
+
+        self.h5_path   = Path(h5_path)
         self.normalize = normalize
+        self.instrument = instrument
+
+        # Determine which HDF5 keys to load based on instrument selection.
+        # New files store per-instrument datasets; fall back to the legacy
+        # 'reflectances' key for HDF5 files created before this change.
+        refl_key   = f'reflectances_{instrument}'
+        uncert_key = f'reflectances_uncertainty_{instrument}'
 
         # Load data into memory (for datasets that fit in RAM)
         # For very large datasets, consider lazy loading with __getitem__
         with h5py.File(self.h5_path, 'r') as f:
-            self.reflectances = f['reflectances'][:].astype(np.float32)
+            if refl_key in f:
+                self.reflectances = f[refl_key][:].astype(np.float32)
+            else:
+                # Legacy HDF5 file — single reflectance dataset
+                self.reflectances = f['reflectances'][:].astype(np.float32)
             self.profiles = f['profiles'][:].astype(np.float32)
             self.tau_c = f['tau_c'][:].astype(np.float32)
 
@@ -297,6 +317,7 @@ def create_dataloaders(h5_path: str,
                        val_frac: float = 0.1,
                        num_workers: int = 4,
                        seed: int = 42,
+                       instrument: str = 'hysics',
                        ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train/val/test DataLoaders from an HDF5 file.
@@ -313,12 +334,15 @@ def create_dataloaders(h5_path: str,
         Number of data loading workers.
     seed : int
         Random seed for reproducible splits.
+    instrument : str
+        Which instrument's reflectance to use: 'hysics' or 'emit'.
+        See LibRadtranDataset for details.
 
     Returns
     -------
     train_loader, val_loader, test_loader : DataLoader
     """
-    dataset = LibRadtranDataset(h5_path, normalize=True)
+    dataset = LibRadtranDataset(h5_path, normalize=True, instrument=instrument)
 
     n = len(dataset)
     n_train = int(n * train_frac)
