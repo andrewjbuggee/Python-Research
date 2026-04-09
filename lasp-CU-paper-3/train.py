@@ -27,7 +27,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -103,6 +103,51 @@ def validate(model, loader, criterion, device):
     return {k: v / n_batches for k, v in running_losses.items()}
 
 
+@torch.no_grad()
+def compute_level_rmse(model, loader, device):
+    """
+    Compute per-level r_e RMSE in physical units (μm) over the entire loader.
+
+    Returns
+    -------
+    rmse : np.ndarray, shape (n_levels,)
+    tau_rmse : float
+    """
+    model.eval()
+    sq_err_sum = None
+    tau_sq_err_sum = 0.0
+    n_samples = 0
+
+    re_min_v  = model.re_min.item()
+    re_range  = model.re_max.item() - re_min_v
+    tau_min_v = model.tau_min.item()
+    tau_range = model.tau_max.item() - tau_min_v
+
+    for x, profile_true, tau_true in loader:
+        x            = x.to(device)
+        profile_true = profile_true.to(device)
+        tau_true     = tau_true.to(device)
+
+        output = model(x)
+
+        # output['profile'] is already in physical units (μm)
+        pred_profile = output['profile']                                  # (batch, n_levels)
+        true_profile = profile_true * re_range + re_min_v                # denormalize
+
+        # output['tau_c'] is already in physical units
+        pred_tau = output['tau_c'].squeeze(-1)                           # (batch,)
+        true_tau = tau_true * tau_range + tau_min_v                      # denormalize
+
+        sq = (pred_profile - true_profile).pow(2)
+        sq_err_sum = sq.sum(dim=0) if sq_err_sum is None else sq_err_sum + sq.sum(dim=0)
+        tau_sq_err_sum += (pred_tau - true_tau).pow(2).sum().item()
+        n_samples += x.shape[0]
+
+    rmse     = (sq_err_sum / n_samples).sqrt().cpu().numpy()
+    tau_rmse = (tau_sq_err_sum / n_samples) ** 0.5
+    return rmse, tau_rmse
+
+
 def save_checkpoint(model, optimizer, scheduler, epoch, val_loss, config, path):
     """Save training checkpoint."""
     torch.save({
@@ -171,12 +216,17 @@ def main():
     print(f"\nModel: {n_params:,} trainable parameters")
 
     # Loss
+    level_weights_list = config['loss'].get('level_weights', None)
+    level_weights = (torch.tensor(level_weights_list, dtype=torch.float32)
+                     if level_weights_list is not None else None)
+
     criterion = CombinedLoss(
         config=model_config,
         lambda_physics=config['loss']['lambda_physics'],
         lambda_monotonicity=config['loss'].get('lambda_monotonicity', 1.0),
-        lambda_adiabatic=config['loss'].get('lambda_adiabatic', 0.5),
+        lambda_adiabatic=config['loss'].get('lambda_adiabatic', 0.0),
         lambda_smoothness=config['loss'].get('lambda_smoothness', 0.1),
+        level_weights=level_weights,
     ).to(device)
 
     # Optimizer
@@ -184,10 +234,14 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=lr,
                             weight_decay=config['training'].get('weight_decay', 1e-4))
 
-    # Scheduler
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5,
-                                   patience=config['training'].get('scheduler_patience', 10),
-                                   verbose=True)
+    # Scheduler: CosineAnnealingWarmRestarts
+    # T_0: epochs until first restart; T_mult: restart interval multiplier each cycle
+    scheduler = CosineAnnealingWarmRestarts(
+        optimizer,
+        T_0=config['training'].get('scheduler_T0', 50),
+        T_mult=config['training'].get('scheduler_T_mult', 2),
+        eta_min=config['training'].get('scheduler_eta_min', 1e-6),
+    )
 
     # Resume from checkpoint if provided
     start_epoch = 0
@@ -214,7 +268,7 @@ def main():
         train_losses = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_losses = validate(model, val_loader, criterion, device)
 
-        scheduler.step(val_losses['total'])
+        scheduler.step(epoch)
 
         elapsed = time.time() - t0
         current_lr = optimizer.param_groups[0]['lr']
@@ -235,6 +289,20 @@ def main():
                   f"Phys: {val_losses['physics_total']:.6f} | "
                   f"LR: {current_lr:.2e} | "
                   f"{elapsed:.1f}s")
+
+        rmse_interval = config['training'].get('rmse_log_interval', 20)
+        if epoch % rmse_interval == 0 or epoch == n_epochs - 1:
+            train_rmse, train_tau_rmse = compute_level_rmse(model, train_loader, device)
+            val_rmse,   val_tau_rmse   = compute_level_rmse(model, val_loader,   device)
+            n = len(train_rmse)
+            print(f"  Per-level r_e RMSE (μm) [train / val]:")
+            cols = 5
+            for row_start in range(0, n, cols):
+                row_end = min(row_start + cols, n)
+                parts = [f"L{i+1:2d}: {train_rmse[i]:5.3f}/{val_rmse[i]:5.3f}"
+                         for i in range(row_start, row_end)]
+                print("    " + "   ".join(parts))
+            print(f"  Tau RMSE: {train_tau_rmse:.3f} / {val_tau_rmse:.3f}")
 
         # Early stopping
         if val_losses['total'] < best_val_loss:
@@ -263,13 +331,20 @@ def main():
     print(f"\nTraining complete. Best val loss: {best_val_loss:.6f}")
     print(f"Checkpoints saved to {output_dir}")
 
-    # Quick test evaluation
+    # Test evaluation
     print("\nEvaluating on test set...")
     test_losses = validate(model, test_loader, criterion, device)
     print(f"  Test loss: {test_losses['total']:.6f}")
     print(f"  Profile loss: {test_losses['supervised_profile']:.6f}")
     print(f"  Tau loss: {test_losses['supervised_tau']:.6f}")
     print(f"  Physics loss: {test_losses['physics_total']:.6f}")
+
+    test_rmse, test_tau_rmse = compute_level_rmse(model, test_loader, device)
+    n = len(test_rmse)
+    print(f"\n  Per-level r_e RMSE on test set (μm):")
+    for i, rmse in enumerate(test_rmse):
+        print(f"    r_e RMSE  - Level {i+1:2d}: {rmse:.3f} μm")
+    print(f"    Tau RMSE:       {test_tau_rmse:.3f}")
 
 
 if __name__ == "__main__":

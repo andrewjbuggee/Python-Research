@@ -270,11 +270,24 @@ class SupervisedLoss(nn.Module):
     This lets the network learn calibrated uncertainty for both outputs.
     All quantities are in normalized [0, 1] space so the two loss terms
     remain on comparable scales.
+
+    level_weights : optional (n_levels,) tensor. Weights are normalized
+        to mean=1.0 at construction time so the overall loss magnitude
+        is preserved regardless of the raw weight values passed in.
+        Use higher weights at levels where RMSE is large (e.g. cloud top).
     """
 
-    def __init__(self, tau_weight: float = 1.0):
+    def __init__(self, tau_weight: float = 1.0,
+                 level_weights: Optional[torch.Tensor] = None):
         super().__init__()
         self.tau_weight = tau_weight
+        if level_weights is not None:
+            # Normalize so mean == 1.0, preserving overall loss scale
+            w = level_weights.float()
+            w = w / w.mean()
+            self.register_buffer('level_weights', w)
+        else:
+            self.level_weights = None
 
     def forward(self, output: dict,
                 profile_true: torch.Tensor,
@@ -294,7 +307,11 @@ class SupervisedLoss(nn.Module):
         sigma = output['profile_std_normalized']    # (batch, n_levels), positive by construction
 
         # Gaussian NLL (constant 0.5*log(2π) dropped — doesn't affect gradients)
-        profile_loss = (torch.log(sigma) + 0.5 * ((profile_true - mu) / sigma).pow(2)).mean()
+        nll = torch.log(sigma) + 0.5 * ((profile_true - mu) / sigma).pow(2)  # (batch, n_levels)
+        if self.level_weights is not None:
+            profile_loss = (nll * self.level_weights).mean()
+        else:
+            profile_loss = nll.mean()
 
         tau_mu = output['tau_normalized'].squeeze(-1)       # (batch,)
         tau_sigma = output['tau_std_normalized'].squeeze(-1)  # (batch,), positive by construction
@@ -332,9 +349,11 @@ class PhysicsLoss(nn.Module):
 
     def __init__(self,
                  lambda_monotonicity: float = 0.01,
+                 lambda_adiabatic: float = 0.0,
                  lambda_smoothness: float = 0.1):
         super().__init__()
         self.lambda_mono = lambda_monotonicity
+        self.lambda_adiabatic = lambda_adiabatic
         self.lambda_smooth = lambda_smoothness
 
     def monotonicity_loss(self, profile: torch.Tensor) -> torch.Tensor:
@@ -398,14 +417,17 @@ class PhysicsLoss(nn.Module):
         -------
         losses : dict with individual terms and weighted total.
         """
-        mono = self.monotonicity_loss(profile)
+        mono   = self.monotonicity_loss(profile)
+        adiab  = self.adiabatic_loss(profile)
         smooth = self.smoothness_loss(profile)
 
-        total = (self.lambda_mono * mono +
-                 self.lambda_smooth * smooth)
+        total = (self.lambda_mono     * mono   +
+                 self.lambda_adiabatic * adiab  +
+                 self.lambda_smooth   * smooth)
 
         return {
             'monotonicity': mono,
+            'adiabatic': adiab,
             'smoothness': smooth,
             'physics_total': total,
         }
@@ -487,16 +509,19 @@ class CombinedLoss(nn.Module):
                  config: RetrievalConfig,
                  lambda_physics: float = 0.1,
                  lambda_monotonicity: float = 0.01,
+                 lambda_adiabatic: float = 0.0,
                  lambda_smoothness: float = 0.1,
                  lambda_emulator_data: float = 0.0,
                  emulator: Optional[ForwardModelEmulator] = None,
                  measurement_uncertainty: Optional[torch.Tensor] = None,
+                 level_weights: Optional[torch.Tensor] = None,
                  ):
         super().__init__()
 
-        self.supervised = SupervisedLoss(tau_weight=1.0)
+        self.supervised = SupervisedLoss(tau_weight=1.0, level_weights=level_weights)
         self.physics = PhysicsLoss(
             lambda_monotonicity=lambda_monotonicity,
+            lambda_adiabatic=lambda_adiabatic,
             lambda_smoothness=lambda_smoothness,
         )
         self.lambda_physics = lambda_physics
@@ -537,6 +562,7 @@ class CombinedLoss(nn.Module):
             'supervised_profile': sup_losses['profile_loss'],
             'supervised_tau': sup_losses['tau_loss'],
             'physics_monotonicity': phys_losses['monotonicity'],
+            'physics_adiabatic': phys_losses['adiabatic'],
             'physics_smoothness': phys_losses['smoothness'],
             'physics_total': phys_losses['physics_total'],
             'emulator_data': emulator_data_loss,
