@@ -17,10 +17,10 @@ data:
   num_workers: 4
 
 model:
-  n_wavelengths: 7          # MODIS first 7 bands
+  n_wavelengths: 636        # HySICS spectral channels
   n_geometry_inputs: 4      # SZA, VZA, relative azimuth, wind speed
   n_levels: 10              # Vertical levels in retrieved profile
-  hidden_dims: [256, 256, 256, 256]
+  hidden_dims: [512, 512, 256, 256]   # wider first two layers to accommodate 636-channel input
   dropout: 0.1
   activation: "gelu"
 
@@ -30,7 +30,13 @@ training:
   learning_rate: 0.001
   weight_decay: 0.0001
   early_stopping_patience: 25
-  scheduler_patience: 10
+  # CosineAnnealingWarmRestarts parameters
+  # First restart at T_0 epochs; interval doubles each cycle (T_mult=2)
+  scheduler_T0: 50
+  scheduler_T_mult: 2
+  scheduler_eta_min: 0.000001
+  # Print per-level RMSE every N epochs (also printed at end of training)
+  rmse_log_interval: 20
 
 loss:
   # Physics loss weight (relative to supervised loss)
@@ -38,5 +44,10 @@ loss:
   lambda_physics: 0.1
   # Individual physics term weights
   lambda_monotonicity: 1.0    # Penalize non-increasing profiles
-  lambda_adiabatic: 0.5       # Penalize deviation from adiabatic shape
+  lambda_adiabatic: 0.1       # Penalize deviation from adiabatic shape (start small)
   lambda_smoothness: 0.1      # Penalize noisy profiles
+  # Per-level weights for the profile NLL loss.
+  # Weights are normalized to mean=1.0 internally so the overall loss
+  # magnitude is preserved. Increase weight at levels where RMSE is high.
+  # Order: Level 1 (cloud top) ... Level 10 (cloud base)
+  level_weights: [4.0, 1.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 3.0]
