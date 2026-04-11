@@ -68,9 +68,9 @@ from pathlib import Path
 # Configuration
 # ============================================================
 
-MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/partial_dataSet_2_created_on_31_March_2026/')
+MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/vocalsRex_training_data_created_on_31_March_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'training_data_VR_31_March_2026_partial.h5')
+                'vocalsRex_training_data_created_on_31_March_2026.h5')
 
 N_LEVELS      = 10    # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
