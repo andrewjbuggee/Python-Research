@@ -1,0 +1,77 @@
+# ============================================================
+# ForwardModelEmulator Training Configuration
+# ============================================================
+# Paper 3: PINN for Cloud Droplet Profile Retrieval
+# Andrew J. Buggee, LASP / CU Boulder
+#
+# Train the emulator INDEPENDENTLY before Stage 2:
+#   python train_emulator.py --config emulator.yaml
+#
+# The emulator maps (r_e profile, tau_c, geometry) -> R(lambda).
+# It is trained here, then frozen and plugged into the PINN loss.
+#
+# Accuracy gate
+# -------------
+# Training writes 'emulator_ready.pt' when val MRE < mre_target_pct.
+# DO NOT use the emulator in Stage 2 until this file exists.
+#
+# Profile-held-out split
+# ----------------------
+# All 73K spectra come from only 73 unique droplet profiles.
+# profile_holdout: true reserves entire profiles for val/test so the
+# test set contains cloud structures the model has NEVER seen.
+# ============================================================
+
+data:
+  h5_path: "/Volumes/My Passport/neural_network_training_data/vocalsRex_training_data_created_on_31_March_2026.h5"
+  instrument: "hysics"       # 'hysics' or 'emit'
+  num_workers: 4
+  seed: 42                   # must match retrieval network seed
+
+  # --- Profile-held-out split (strongly recommended) ---
+  profile_holdout: true
+  n_val_profiles: 7          # profiles reserved for validation only
+  n_test_profiles: 8         # profiles reserved for test (never seen in training)
+
+  # --- Fallback sample-level split (only if profile_holdout: false) ---
+  train_frac: 0.8
+  val_frac: 0.1
+
+  # --- Latin Hypercube augmentation (optional) ---
+  # Leave as null until you have run libRadtran on LHC parameters.
+  # To generate LHC parameters:
+  #   from data import generate_lhc_parameters
+  #   generate_lhc_parameters(n_samples=2000, output_path="lhc_params.h5")
+  # Then run those parameters through libRadtran, add reflectances to the file,
+  # and set lhc_h5_path to that file path.
+  lhc_h5_path: null
+
+model:
+  n_levels: 10
+  n_geometry_inputs: 4
+  n_wavelengths_out: 636
+  # The emulator maps 15 inputs -> 636 outputs (harder than the retrieval network's
+  # 640 -> 11).  If MRE stays above target after 400 epochs, increase to
+  # [512, 512, 512, 512, 512] or add a 6th layer.
+  hidden_dims: [256, 256, 256, 256, 256]
+  dropout: 0.05
+  activation: "gelu"
+
+training:
+  batch_size: 256
+  n_epochs: 400
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  early_stopping_patience: 30
+  scheduler_T0: 50
+  scheduler_T_mult: 2
+  scheduler_eta_min: 0.000001
+
+  # Mean Relative Error target (%).
+  # emulator_ready.pt is written when val MRE drops below this threshold.
+  # 1.0% is the recommended minimum before using in Stage 2.
+  mre_target_pct: 1.0
+
+  # How often to compute full-dataset MRE (more expensive than MSE alone).
+  # MRE is always computed at the final epoch regardless of this interval.
+  mre_log_interval: 10

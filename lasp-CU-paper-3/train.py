@@ -196,6 +196,7 @@ def main():
         train_frac=config['data'].get('train_frac', 0.8),
         val_frac=config['data'].get('val_frac', 0.1),
         num_workers=config['data'].get('num_workers', 4),
+        instrument=config['data'].get('instrument', 'hysics'),
     )
     print(f"  Train: {len(train_loader.dataset)} samples")
     print(f"  Val:   {len(val_loader.dataset)} samples")
