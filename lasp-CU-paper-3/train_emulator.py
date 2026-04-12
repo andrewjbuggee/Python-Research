@@ -12,11 +12,12 @@ in Stage 2 PINN training after this checkpoint exists.
 
 Profile-held-out evaluation
 ---------------------------
-All 73 K spectra in the dataset come from only 73 unique in-situ droplet
-profiles (varied over many solar/viewing geometries).  A random sample-level
-split is therefore invalid for assessing generalisation — every profile leaks
-into every split.  This script uses a profile-held-out split by default:
-the test set contains profiles that were *never* seen during training.
+Each spectrum in the dataset is one of many geometries computed from a unique
+in-situ droplet profile (73 from VOCALS-REx + 63 from ORACLES as of Apr 2026).
+A random sample-level split is therefore invalid for assessing generalisation —
+every profile would leak into every split.  This script uses a profile-held-out
+split by default: the test set contains profiles *never* seen during training.
+The total profile count is discovered automatically from the HDF5 file.
 
 Usage
 -----
@@ -315,8 +316,8 @@ def main():
         seed            = config['data'].get('seed', 42),
         instrument      = config['data'].get('instrument', 'hysics'),
         profile_holdout = profile_holdout,
-        n_val_profiles  = config['data'].get('n_val_profiles', 7),
-        n_test_profiles = config['data'].get('n_test_profiles', 8),
+        n_val_profiles  = config['data'].get('n_val_profiles', 10),
+        n_test_profiles = config['data'].get('n_test_profiles', 10),
         train_frac      = config['data'].get('train_frac', 0.8),
         val_frac        = config['data'].get('val_frac', 0.1),
         lhc_h5_path     = config['data'].get('lhc_h5_path', None),
@@ -330,8 +331,8 @@ def main():
     print(f"  Test:  {n_test:,} samples")
 
     if profile_holdout:
-        n_val_prof  = config['data'].get('n_val_profiles', 7)
-        n_test_prof = config['data'].get('n_test_profiles', 8)
+        n_val_prof  = config['data'].get('n_val_profiles', 10)
+        n_test_prof = config['data'].get('n_test_profiles', 10)
         print(f"  Val profiles (never in train):  {n_val_prof}")
         print(f"  Test profiles (never in train): {n_test_prof}")
 

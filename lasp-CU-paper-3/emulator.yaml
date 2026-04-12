@@ -21,21 +21,22 @@
 #
 # Profile-held-out split
 # ----------------------
-# All 73K spectra come from only 73 unique droplet profiles.
+# As of 12 April 2026, there are 91,648 spectra that come from only
+# 73 droplet profiles from VOCALS-REx and 63 droplet profiles from ORACLES.
 # profile_holdout: true reserves entire profiles for val/test so the
 # test set contains cloud structures the model has NEVER seen.
 # ============================================================
 
 data:
-  h5_path: "/Volumes/My Passport/neural_network_training_data/vocalsRex_training_data_created_on_31_March_2026.h5"
+  h5_path: "/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_12_April_2026.h5"
   instrument: "hysics"       # 'hysics' (0.3% noise) or 'emit' (4.0% noise)
   num_workers: 0             # must be 0 on MPS/Mac; safe to increase on Linux/CUDA
   seed: 42                   # must match retrieval network seed
 
   # --- Profile-held-out split (strongly recommended) ---
   profile_holdout: true
-  n_val_profiles: 7          # profiles reserved for validation only
-  n_test_profiles: 8         # profiles reserved for test (never seen in training)
+  n_val_profiles: 10          # profiles reserved for validation only
+  n_test_profiles: 10         # profiles reserved for test (never seen in training)
 
   # --- Fallback sample-level split (only if profile_holdout: false) ---
   train_frac: 0.8

@@ -426,10 +426,12 @@ def compute_profile_ids(h5_path: str) -> np.ndarray:
     Assign an integer profile ID (0..N_unique-1) to every sample by
     fingerprinting the raw in-situ profiles stored in the HDF5 file.
 
-    The VOCALS-REx dataset was generated from 73 unique measured vertical
-    profiles, each simulated under many solar/viewing geometries.  This
-    function identifies which of the 73 profiles each sample came from,
-    enabling profile-held-out train/val/test splits.
+    The training dataset is generated from a set of unique measured vertical
+    profiles (73 from VOCALS-REx, 63 from ORACLES as of April 2026), each
+    simulated under many solar/viewing geometries.  This function identifies
+    which unique profile each sample came from, enabling profile-held-out
+    train/val/test splits.  The total profile count is inferred automatically
+    from the data — no hardcoded value needed.
 
     Returns
     -------
@@ -440,7 +442,7 @@ def compute_profile_ids(h5_path: str) -> np.ndarray:
         profiles_raw = f['profiles_raw'][:].astype(np.float32)
 
     # Fingerprint by rounding the first 5 raw-profile values to 4 decimal places.
-    # Sufficient to distinguish all 73 unique VOCALS-REx profiles.
+    # Sufficient to distinguish all unique profiles across VOCALS-REx and ORACLES.
     fingerprints = np.round(profiles_raw[:, :5], 4)
     _, inverse = np.unique(fingerprints, axis=0, return_inverse=True)
     return inverse.astype(np.int32)
@@ -448,25 +450,26 @@ def compute_profile_ids(h5_path: str) -> np.ndarray:
 
 def create_profile_aware_splits(
         h5_path: str,
-        n_val_profiles: int = 7,
-        n_test_profiles: int = 8,
+        n_val_profiles: int = 10,
+        n_test_profiles: int = 10,
         seed: int = 42,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Split sample indices so that held-out profiles NEVER appear in training.
 
-    With 73 unique profiles and default settings (n_val=7, n_test=8):
-        Train : 58 profiles  (~79% of samples)
-        Val   :  7 profiles  (~10% of samples)
-        Test  :  8 profiles  (~11% of samples)
+    Example with ~136 unique profiles and n_val=10, n_test=10:
+        Train : ~116 profiles  (~85% of samples)
+        Val   :   10 profiles  (~ 7% of samples)
+        Test  :   10 profiles  (~ 7% of samples)
+    Profile counts are inferred from the HDF5 data at runtime.
 
     Why this matters
     ----------------
-    All 73 K spectra come from only 73 unique droplet profiles, varied over
-    many solar/viewing geometries.  A random sample-level split would put
-    every profile into every split — the model effectively sees every cloud
-    structure during training.  A profile-aware split gives a true measure
-    of generalisation to unseen cloud vertical structures.
+    Each spectrum is one of many geometries run on the same in-situ droplet
+    profile.  A random sample-level split puts every profile into every split —
+    the model effectively sees every cloud structure during training.  A
+    profile-aware split gives a true measure of generalisation to unseen cloud
+    vertical structures.
 
     Parameters
     ----------
@@ -683,8 +686,8 @@ def create_emulator_dataloaders(
         seed: int = 42,
         instrument: str = 'hysics',
         profile_holdout: bool = True,
-        n_val_profiles: int = 7,
-        n_test_profiles: int = 8,
+        n_val_profiles: int = 10,
+        n_test_profiles: int = 10,
         train_frac: float = 0.8,
         val_frac: float = 0.1,
         lhc_h5_path: Optional[str] = None,
