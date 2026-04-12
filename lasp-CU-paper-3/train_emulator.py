@@ -30,6 +30,7 @@ Author: Andrew J. Buggee, LASP / CU Boulder
 import argparse
 import json
 import time
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -151,13 +152,13 @@ def compute_mre(model, loader, device,
 
         MRE = 100 × mean( |R̂(λ) - R(λ)| / (R(λ) + ε) )
 
-    When log_reflectance=True the model outputs log10(R̂) and the loader
-    yields log10(R) as targets.  Both are exponentiated back to linear space
-    before the relative error is computed so the MRE is always interpretable
-    as a percentage of the true physical reflectance.
+    Handles three output modes:
+      - PCA scores  (model.pca_components is not None): reconstruct via model.reconstruct()
+      - log10(R̂)   (log_reflectance=True, no PCA):     exponentiate 10^output
+      - raw R̂      (log_reflectance=False, no PCA):    use output directly
 
-    A small epsilon (1e-4) guards against division by near-zero values in
-    deep absorption bands.
+    MRE is always reported in *linear* reflectance space so it is physically
+    interpretable as a percentage of the true signal.
 
     Returns
     -------
@@ -167,6 +168,7 @@ def compute_mre(model, loader, device,
     total_rel_err = 0.0
     n_elements    = 0
     eps           = 1e-4
+    use_pca       = (model.pca_components is not None)
 
     for x, y in loader:
         x = x.to(device)
@@ -175,8 +177,10 @@ def compute_mre(model, loader, device,
             x, model.config.n_levels, model.config.n_atm_inputs)
         pred = model(profile, tau_c, geometry, atm)
 
-        if log_reflectance:
-            # Convert log10 outputs back to linear reflectance for the MRE
+        if use_pca:
+            R_pred = model.reconstruct(pred)
+            R_true = model.reconstruct(y)
+        elif log_reflectance:
             R_pred = torch.pow(10.0, pred)
             R_true = torch.pow(10.0, y)
         else:
@@ -185,7 +189,7 @@ def compute_mre(model, loader, device,
 
         rel_err        = (R_pred - R_true).abs() / (R_true.abs() + eps)
         total_rel_err += rel_err.sum().item()
-        n_elements    += y.numel()
+        n_elements    += R_true.numel()
 
     return 100.0 * total_rel_err / n_elements
 
@@ -218,10 +222,13 @@ def compute_spectral_residuals(model, loader, device,
         y = y.to(device)
         profile, tau_c, geometry, atm = _split_input(
             x, model.config.n_levels, model.config.n_atm_inputs)
-        pred = model(profile, tau_c, geometry, atm)
+        pred     = model(profile, tau_c, geometry, atm)
+        use_pca  = (model.pca_components is not None)
 
-        if log_reflectance:
-            # Compute residuals in linear reflectance space
+        if use_pca:
+            R_pred = model.reconstruct(pred)
+            R_true = model.reconstruct(y)
+        elif log_reflectance:
             R_pred = torch.pow(10.0, pred)
             R_true = torch.pow(10.0, y)
         else:
@@ -355,6 +362,7 @@ def main():
     log_reflectance  = config['data'].get('log_reflectance', True)
     log_eps          = float(config['data'].get('log_eps', 1e-6))
     use_era5_profile = config['data'].get('use_era5_profile', True)
+    n_pca_components = config['data'].get('n_pca_components', 0)
 
     train_loader, val_loader, test_loader = create_emulator_dataloaders(
         h5_path         = h5_path,
@@ -371,6 +379,7 @@ def main():
         log_reflectance  = log_reflectance,
         log_eps          = log_eps,
         use_era5_profile = use_era5_profile,
+        n_pca_components = n_pca_components,
     )
 
     n_train = len(train_loader.dataset)
@@ -394,15 +403,32 @@ def main():
         n_geometry_inputs = config['model'].get('n_geometry_inputs', 4),
         n_atm_inputs      = config['model'].get('n_atm_inputs', 37),
         n_wavelengths_out = config['model'].get('n_wavelengths_out', 636),
+        n_pca_components  = config['model'].get('n_pca_components', 0),
         hidden_dims       = tuple(config['model']['hidden_dims']),
         dropout           = config['model'].get('dropout', 0.05),
         activation        = config['model'].get('activation', 'gelu'),
     )
     model    = ForwardModelEmulator(emulator_config).to(device)
+
+    # Register PCA decoder on model (carries to GPU and into checkpoints)
+    if n_pca_components > 0:
+        _train_ds = train_loader.dataset
+        # Unwrap Subset if using random split
+        if hasattr(_train_ds, 'dataset'):
+            _train_ds = _train_ds.dataset
+        if hasattr(_train_ds, 'pca_mean') and _train_ds.pca_mean is not None:
+            model.register_pca(_train_ds.pca_mean, _train_ds.pca_components)
+            print(f"  PCA decoder registered: {n_pca_components} components → 636 channels")
+        else:
+            warnings.warn("n_pca_components > 0 but no PCA found on training dataset.")
+
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"\nForwardModelEmulator: {n_params:,} trainable parameters")
+    out_dim_str = (f"{emulator_config.output_dim} PCA scores → 636 channels"
+                   if emulator_config.n_pca_components > 0
+                   else f"{emulator_config.n_wavelengths_out}")
     print(f"  Architecture: {emulator_config.input_dim} → "
-          f"{list(emulator_config.hidden_dims)} → {emulator_config.n_wavelengths_out}")
+          f"{list(emulator_config.hidden_dims)} → {out_dim_str}")
 
     # ------------------------------------------------------------------
     # Loss

@@ -57,6 +57,7 @@ class EmulatorConfig:
     n_geometry_inputs: int = 4           # SZA, VZA, SAZ, VAZ
     n_atm_inputs: int = 2                # ERA5 water vapour: wv_above_cloud, wv_in_cloud
     n_wavelengths_out: int = 636         # 636 HySICS channels, ~352–2297 nm
+    n_pca_components: int = 0            # 0 = predict raw channels; >0 = predict PCA scores
     hidden_dims: tuple = (256, 256, 256, 256, 256)
     dropout: float = 0.05
     activation: str = "gelu"
@@ -65,6 +66,11 @@ class EmulatorConfig:
     def input_dim(self):
         # profile + tau_c + geometry + atmospheric (water vapour) inputs
         return self.n_levels + 1 + self.n_geometry_inputs + self.n_atm_inputs
+
+    @property
+    def output_dim(self):
+        """Number of values the output head produces."""
+        return self.n_pca_components if self.n_pca_components > 0 else self.n_wavelengths_out
 
 
 # =============================================================================
@@ -271,10 +277,15 @@ class ForwardModelEmulator(nn.Module):
             h_in = h_out
         self.blocks = nn.ModuleList(blocks)
 
-        # Output head: LayerNorm → linear → raw reflectances
-        # No final activation — reflectances are positive but unbounded above
+        # Output head: LayerNorm → linear → PCA scores or raw reflectances
+        # No final activation — PCA scores are real-valued and unbounded
         self.output_norm = nn.LayerNorm(h_in)
-        self.output_head = nn.Linear(h_in, c.n_wavelengths_out)
+        self.output_head = nn.Linear(h_in, c.output_dim)
+
+        # PCA decoder buffers (registered after __init__ via register_pca)
+        # None until register_pca() is called; carried with model to GPU/checkpoint
+        self.register_buffer('pca_mean',       None)
+        self.register_buffer('pca_components', None)
 
     def forward(self, profile: torch.Tensor, tau_c: torch.Tensor,
                 geometry: torch.Tensor,
@@ -295,7 +306,10 @@ class ForwardModelEmulator(nn.Module):
 
         Returns
         -------
-        reflectances : (batch, n_wavelengths) — predicted TOA reflectance
+        output : (batch, output_dim) — predicted PCA scores when n_pca_components > 0,
+                 or predicted log10-reflectances (log_reflectance mode) or raw
+                 reflectances otherwise.  Call model.reconstruct(output) to
+                 obtain linear reflectances for Stage 2 data fidelity.
         """
         parts = [profile, tau_c, geometry]
         if atm is not None:
@@ -305,6 +319,49 @@ class ForwardModelEmulator(nn.Module):
         for block in self.blocks:
             x = block(x)
         return self.output_head(self.output_norm(x))
+
+    def register_pca(self, pca_mean: np.ndarray,
+                     pca_components: np.ndarray) -> None:
+        """
+        Register PCA decoder parameters as model buffers.
+
+        Must be called once after model creation when n_pca_components > 0,
+        before any forward pass or checkpoint saving.  The buffers move to
+        the model's device automatically and are included in state_dict().
+
+        Parameters
+        ----------
+        pca_mean : (n_wavelengths,) float32
+            Per-channel log-reflectance mean from the training-set PCA.
+        pca_components : (n_pca_components, n_wavelengths) float32
+            PCA loading matrix from the training set.
+        """
+        self.pca_mean       = torch.tensor(pca_mean,       dtype=torch.float32)
+        self.pca_components = torch.tensor(pca_components, dtype=torch.float32)
+
+    def reconstruct(self, scores: torch.Tensor) -> torch.Tensor:
+        """
+        Reconstruct linear reflectances from model output.
+
+        If PCA is registered:
+            log10(R̂) = scores @ components + mean
+            R̂        = 10^(log10(R̂))
+        If no PCA (n_pca_components == 0):
+            Assumes output is already log10(R̂); just exponentiates.
+
+        Parameters
+        ----------
+        scores : (batch, output_dim)
+
+        Returns
+        -------
+        reflectances : (batch, n_wavelengths) — linear TOA reflectance
+        """
+        if self.pca_components is not None:
+            log_refl = scores @ self.pca_components + self.pca_mean
+        else:
+            log_refl = scores
+        return torch.pow(10.0, log_refl)
 
 
 # =============================================================================

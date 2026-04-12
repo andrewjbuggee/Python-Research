@@ -50,14 +50,20 @@ data:
   log_eps: 1.0e-6
 
   # --- ERA5 atmospheric input mode ---
-  # true  (default): use full 37-level vapor concentration profile as inputs.
-  #   Gives the model the vertical WV distribution needed to predict spectral
-  #   shape within H2O absorption bands (1.38 um, 1.9 um).
-  #   Requires era5_vapor_concentration in the HDF5 (written by convert_matFiles_to_HDF.py).
-  #   Set n_atm_inputs: 37 in the model section.
-  # false (legacy):  use 2-scalar (wv_above_cloud, wv_in_cloud) approach.
+  # false (default): use 2-scalar (wv_above_cloud, wv_in_cloud) approach.
   #   Set n_atm_inputs: 2 in the model section.
-  use_era5_profile: true
+  # true: use full 37-level vapor concentration profile (n_atm_inputs: 37).
+  #   Only helps if the dataset has sufficient vapor-profile diversity;
+  #   with ~136 unique profiles it causes overfitting.
+  use_era5_profile: false
+
+  # --- PCA output decomposition ---
+  # Predict N_PCA principal-component scores instead of 636 raw channels.
+  # PCA is fit on training-set log10-reflectances at dataset load time.
+  # Set n_pca_components in the model section to match.
+  # 0  = disabled (predict all 636 channels directly)
+  # 64 = captures >99% of log-reflectance variance, recommended
+  n_pca_components: 64
 
   # --- Latin Hypercube augmentation (optional) ---
   # Leave as null until you have run libRadtran on LHC parameters.
@@ -71,10 +77,10 @@ data:
 model:
   n_levels: 10
   n_geometry_inputs: 4
-  n_atm_inputs: 37         # full ERA5 37-level vapor profile (use_era5_profile: true)
-                            # set to 2 if use_era5_profile: false (legacy 2-scalar mode)
+  n_atm_inputs: 2           # 2-scalar ERA5 WV (use_era5_profile: false)
   n_wavelengths_out: 636
-  # 512-wide residual MLP.  Input dim = 10 + 1 + 4 + 37 = 52.
+  n_pca_components: 64      # must match data.n_pca_components; 0 to disable
+  # 512-wide residual MLP.  Input dim = 10 + 1 + 4 + 2 = 17.
   hidden_dims: [512, 512, 512, 512, 512]
   dropout: 0.05
   activation: "gelu"

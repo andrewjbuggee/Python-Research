@@ -524,6 +524,41 @@ def create_profile_aware_splits(
             np.where(test_mask)[0])
 
 
+def _fit_pca(log_refl: np.ndarray, n_components: int) -> tuple:
+    """
+    Fit PCA on log-reflectances using covariance eigendecomposition.
+
+    Operates on the (n_samples, n_wavelengths) log-reflectance matrix.
+    Uses the covariance matrix approach (n_wavelengths × n_wavelengths = 636×636)
+    rather than full SVD on the n_samples × n_wavelengths matrix — much faster
+    for large datasets and gives the same components.
+
+    Parameters
+    ----------
+    log_refl : (n_samples, n_wavelengths) float32
+        Log10-transformed reflectances: log10(R + log_eps).
+    n_components : int
+        Number of principal components to retain.
+
+    Returns
+    -------
+    mean       : (n_wavelengths,) float32 — per-channel mean of log-reflectances
+    components : (n_components, n_wavelengths) float32 — PCA loading vectors
+    explained  : (n_components,) float64 — fraction of variance explained by each PC
+    """
+    mean = log_refl.mean(axis=0).astype(np.float32)               # (n_wl,)
+    X_c  = (log_refl - mean).astype(np.float64)                    # centred
+    cov  = (X_c.T @ X_c) / max(len(X_c) - 1, 1)                  # (n_wl, n_wl)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)               # ascending order
+    idx  = np.argsort(eigenvalues)[::-1]                           # descending
+    eigenvalues  = eigenvalues[idx]
+    eigenvectors = eigenvectors[:, idx]                            # columns = PCs
+    components   = eigenvectors[:, :n_components].T.astype(np.float32)  # (K, n_wl)
+    total_var    = eigenvalues.sum()
+    explained    = eigenvalues[:n_components] / total_var if total_var > 0 else np.zeros(n_components)
+    return mean, components, explained
+
+
 # =============================================================================
 # Emulator Dataset
 # =============================================================================
@@ -532,11 +567,10 @@ class EmulatorDataset(Dataset):
     """
     Dataset for training the ForwardModelEmulator.
 
-    Inputs  (x): normalized (r_e profile | τ_c | geometry | ERA5 vapor profile)
-                 — 52 features (15 cloud+geometry + 37 ERA5 vapor levels)
-                   when use_era5_profile=True (default); or 17 features with
-                   the legacy 2-scalar WV mode when use_era5_profile=False
-    Outputs (y): reflectance spectrum — 636 values, optionally log10-transformed
+    Inputs  (x): normalized (r_e profile | τ_c | geometry | wv_above | wv_in)
+                 — 17 features (15 cloud+geometry + 2 ERA5 water vapour scalars)
+    Outputs (y): either log-reflectance spectrum (636 values) or PCA scores
+                 (n_pca_components values) when n_pca_components > 0
 
     This uses the same HDF5 file as LibRadtranDataset but flips the role of
     inputs and outputs: the spectral measurements are the *target* to predict,
@@ -568,22 +602,24 @@ class EmulatorDataset(Dataset):
         R̂ = 10^(pred)
         R  = 10^(target)
 
-    For Stage 2 PINN use, invert the emulator output before computing the
-    spectral data fidelity loss:
-        R̂_linear = 10^(emulator_output)
+    For Stage 2 PINN use, call model.reconstruct(pred) to invert PCA and
+    exponentiate back to linear reflectance space before computing the
+    spectral data fidelity loss.
 
-    Full ERA5 vapor-profile mode (use_era5_profile=True, default)
+    PCA output decomposition (n_pca_components > 0, recommended)
     -------------------------------------------------------------
-    The 1.9 μm and 1.38 μm H₂O absorption bands are extremely sensitive to
-    the *vertical distribution* of water vapor, not just the total column.
-    The legacy 2-scalar approach (wv_above, wv_in) loses all vertical structure
-    and is the primary reason those bands have MRE > 20% in training.
-
-    Setting use_era5_profile=True replaces the 2 scalars with all 37 ERA5
-    pressure-level vapor concentrations (molecules/cm³), log10-normalized to
-    [0, 1].  The HDF5 file must contain the 'era5_vapor_concentration' dataset
-    (shape n_total × 37), written by convert_matFiles_to_HDF.py.
-    This changes n_atm_inputs from 2 → 37 (total input dim 15 + 37 = 52).
+    Instead of predicting all 636 reflectance channels independently, the
+    model predicts N_PCA principal-component scores.  PCA is fit on the
+    training-set log10-reflectances (log10(R + log_eps)), and targets are
+    transformed to scores before the loss:
+        y_pca = (log10(R + log_eps) - mean) @ components.T   (N_PCA,)
+    The loss (MSE on scores) is well-conditioned because all scores have
+    similar variance.  Reconstruction at inference:
+        log10(R̂) = scores @ components + mean
+        R̂        = 10^(log10(R̂))
+    PCA forces the model to predict spectrally coherent, smooth outputs
+    (high-frequency channel-to-channel noise cannot be fit) and reduces
+    the output dimensionality from 636 → N_PCA, making training easier.
 
     Profile-held-out splits
     -----------------------
@@ -616,11 +652,6 @@ class EmulatorDataset(Dataset):
     _WV_IN_LOG10_MIN    = WV_IN_LOG10_MIN
     _WV_IN_LOG10_MAX    = WV_IN_LOG10_MAX
 
-    # ERA5 full 37-level vapor-concentration normalization (molec/cm³, log10)
-    # log10(v + 1.0) maps the physical range to [0, ~17.5]; dividing by this
-    # constant normalises each level to approximately [0, 1].
-    _ERA5_VAP_LOG10_MAX = ERA5_VAP_LOG10_MAX
-
     def __init__(self,
                  h5_path: str,
                  indices: Optional[np.ndarray] = None,
@@ -628,7 +659,10 @@ class EmulatorDataset(Dataset):
                  lhc_h5_path: Optional[str] = None,
                  log_reflectance: bool = True,
                  log_eps: float = 1e-6,
-                 use_era5_profile: bool = True):
+                 use_era5_profile: bool = False,
+                 n_pca_components: int = 0,
+                 pca_mean: Optional[np.ndarray] = None,
+                 pca_components: Optional[np.ndarray] = None):
         """
         Parameters
         ----------
@@ -652,11 +686,19 @@ class EmulatorDataset(Dataset):
             (well below any physical reflectance, so it barely affects bright
             channels while stabilising deep absorption-band values near zero).
         use_era5_profile : bool
-            If True (default), use the full 37-level ERA5 vapor concentration
-            profile (era5_vapor_concentration in HDF5) as atmospheric inputs.
-            n_atm_inputs must be set to 37 in EmulatorConfig / emulator.yaml.
-            If False, fall back to the 2-scalar (wv_above_cloud, wv_in_cloud)
-            approach; set n_atm_inputs=2 accordingly.
+            If True, use the full 37-level ERA5 vapor concentration profile.
+            If False (default), use 2-scalar (wv_above_cloud, wv_in_cloud).
+        n_pca_components : int
+            If > 0, fit PCA on this dataset's log-reflectances and return
+            PCA scores as targets.  Must be 0 for val/test if training set
+            has n_pca_components > 0 (pass pca_mean and pca_components instead).
+        pca_mean : (n_wavelengths,) float32 or None
+            Per-channel log-reflectance mean from training set PCA.
+            If provided (together with pca_components), uses these stats
+            rather than computing new ones — use for val/test datasets.
+        pca_components : (n_pca_components, n_wavelengths) float32 or None
+            PCA loading matrix from training set. If provided, n_pca_components
+            is inferred from the shape.
         """
         if instrument not in ('hysics', 'emit'):
             raise ValueError(f"instrument must be 'hysics' or 'emit', got {instrument!r}")
@@ -806,8 +848,30 @@ class EmulatorDataset(Dataset):
 
         self.log_reflectance = log_reflectance
         self.log_eps         = log_eps
-        self.n_samples       = self.reflectances.shape[0]
-        self.n_wavelengths   = self.reflectances.shape[1]
+
+        # --- PCA output decomposition ---
+        if pca_mean is not None and pca_components is not None:
+            # Val/test: use training-set PCA parameters directly
+            self.pca_mean       = pca_mean.astype(np.float32)
+            self.pca_components = pca_components.astype(np.float32)
+            self.n_pca_components = int(pca_components.shape[0])
+        elif n_pca_components > 0 and log_reflectance:
+            # Training set: fit PCA on this dataset's log-reflectances
+            log_refl = np.log10(np.maximum(all_refl, self.log_eps))
+            mean, comps, explained = _fit_pca(log_refl, n_pca_components)
+            self.pca_mean         = mean
+            self.pca_components   = comps
+            self.n_pca_components = n_pca_components
+            cum_var = np.cumsum(explained)
+            print(f"  PCA: {n_pca_components} components explain "
+                  f"{100*cum_var[-1]:.2f}% of log-reflectance variance")
+        else:
+            self.pca_mean         = None
+            self.pca_components   = None
+            self.n_pca_components = 0
+
+        self.n_samples     = self.reflectances.shape[0]
+        self.n_wavelengths = self.reflectances.shape[1]
 
     def _normalize_inputs(self, profile, tau_c, sza, vza, saz, vaz,
                           era5_vapor=None,
@@ -899,6 +963,9 @@ class EmulatorDataset(Dataset):
         y = self.reflectances[idx]   # raw reflectances
         if self.log_reflectance:
             y = np.log10(np.maximum(y, self.log_eps))
+            if self.pca_components is not None:
+                # Project to PCA score space: (n_wavelengths,) → (n_pca,)
+                y = (y - self.pca_mean) @ self.pca_components.T
         return torch.from_numpy(x), torch.from_numpy(y)
 
 
@@ -916,7 +983,8 @@ def create_emulator_dataloaders(
         lhc_h5_path: Optional[str] = None,
         log_reflectance: bool = True,
         log_eps: float = 1e-6,
-        use_era5_profile: bool = True,
+        use_era5_profile: bool = False,
+        n_pca_components: int = 0,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train/val/test DataLoaders for ForwardModelEmulator training.
@@ -960,13 +1028,19 @@ def create_emulator_dataloaders(
         train_ds = EmulatorDataset(h5_path, indices=train_idx,
                                    instrument=instrument, lhc_h5_path=lhc_h5_path,
                                    log_reflectance=log_reflectance, log_eps=log_eps,
-                                   use_era5_profile=use_era5_profile)
+                                   use_era5_profile=use_era5_profile,
+                                   n_pca_components=n_pca_components)
+        # Val/test reuse training-set PCA components — never refit on held-out data
         val_ds   = EmulatorDataset(h5_path, indices=val_idx,  instrument=instrument,
                                    log_reflectance=log_reflectance, log_eps=log_eps,
-                                   use_era5_profile=use_era5_profile)
+                                   use_era5_profile=use_era5_profile,
+                                   pca_mean=train_ds.pca_mean,
+                                   pca_components=train_ds.pca_components)
         test_ds  = EmulatorDataset(h5_path, indices=test_idx, instrument=instrument,
                                    log_reflectance=log_reflectance, log_eps=log_eps,
-                                   use_era5_profile=use_era5_profile)
+                                   use_era5_profile=use_era5_profile,
+                                   pca_mean=train_ds.pca_mean,
+                                   pca_components=train_ds.pca_components)
     else:
         if lhc_h5_path is not None:
             warnings.warn(
@@ -975,7 +1049,8 @@ def create_emulator_dataloaders(
             )
         full_ds = EmulatorDataset(h5_path, instrument=instrument,
                                   log_reflectance=log_reflectance, log_eps=log_eps,
-                                  use_era5_profile=use_era5_profile)
+                                  use_era5_profile=use_era5_profile,
+                                  n_pca_components=n_pca_components)
         n       = len(full_ds)
         n_train = int(n * train_frac)
         n_val   = int(n * val_frac)
