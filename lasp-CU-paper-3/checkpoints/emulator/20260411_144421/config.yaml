@@ -1,0 +1,34 @@
+data:
+  h5_path: /Volumes/My Passport/neural_network_training_data/vocalsRex_training_data_created_on_31_March_2026.h5
+  instrument: hysics
+  lhc_h5_path: null
+  n_test_profiles: 8
+  n_val_profiles: 7
+  num_workers: 4
+  profile_holdout: true
+  seed: 42
+  train_frac: 0.8
+  val_frac: 0.1
+model:
+  activation: gelu
+  dropout: 0.05
+  hidden_dims:
+  - 256
+  - 256
+  - 256
+  - 256
+  - 256
+  n_geometry_inputs: 4
+  n_levels: 10
+  n_wavelengths_out: 636
+training:
+  batch_size: 256
+  early_stopping_patience: 30
+  learning_rate: 0.001
+  mre_log_interval: 10
+  mre_target_pct: 1.0
+  n_epochs: 400
+  scheduler_T0: 50
+  scheduler_T_mult: 2
+  scheduler_eta_min: 1.0e-06
+  weight_decay: 0.0001

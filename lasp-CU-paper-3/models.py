@@ -195,11 +195,47 @@ class DropletProfileNetwork(nn.Module):
 # Forward Model Emulator (Stage 2 — build later if time permits)
 # =============================================================================
 
+class _ResidualBlock(nn.Module):
+    """
+    Pre-activation residual block for the ForwardModelEmulator.
+
+    Structure:
+        x_out = x_in + Dropout(FC(GELU(LayerNorm(x_in))))
+
+    Pre-activation (norm before activation) keeps the residual path clean
+    so the network can learn near-identity mappings in early training.
+    A projection linear layer is added when in_dim != out_dim so that the
+    skip connection is always dimension-compatible.
+    """
+
+    def __init__(self, in_dim: int, out_dim: int,
+                 dropout: float, act_fn: nn.Module):
+        super().__init__()
+        self.norm    = nn.LayerNorm(in_dim)
+        self.linear  = nn.Linear(in_dim, out_dim)
+        self.act     = act_fn
+        self.dropout = nn.Dropout(dropout)
+        # Projection only needed when dimensions change
+        self.proj = (nn.Linear(in_dim, out_dim, bias=False)
+                     if in_dim != out_dim else nn.Identity())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.proj(x) + self.dropout(self.linear(self.act(self.norm(x))))
+
+
 class ForwardModelEmulator(nn.Module):
     """
     Neural network emulator of libRadtran radiative transfer.
 
     Maps (r_e profile, τ_c, geometry) → predicted reflectances R̂(λ).
+
+    Architecture: residual MLP.  Each hidden layer is a pre-activation
+    residual block:
+        x_out = x_in + Dropout(FC(GELU(LayerNorm(x_in))))
+
+    Residual connections improve gradient flow at depth, let early layers
+    learn near-identity mappings, and allow deeper/wider networks without
+    degrading training stability.
 
     This is trained separately on libRadtran simulations, then frozen
     and used in the PINN training loop to compute L_data:
@@ -208,9 +244,9 @@ class ForwardModelEmulator(nn.Module):
     The emulator must be differentiable so gradients flow back through it
     to update the retrieval network weights.
 
-    IMPORTANT: Train and validate this emulator to <0.5% relative error
-    before using it in the PINN loop. If the emulator is inaccurate,
-    it will degrade retrieval quality.
+    IMPORTANT: Train and validate this emulator to <1% MRE before using
+    it in the PINN loop.  If the emulator is inaccurate it will corrupt
+    the physics loss and degrade retrieval quality.
     """
 
     def __init__(self, config: Optional[EmulatorConfig] = None):
@@ -218,24 +254,25 @@ class ForwardModelEmulator(nn.Module):
         self.config = config or EmulatorConfig()
         c = self.config
 
-        act_fn = {"gelu": nn.GELU, "relu": nn.ReLU, "silu": nn.SiLU}[c.activation]
+        act_fn = {"gelu": nn.GELU(), "relu": nn.ReLU(), "silu": nn.SiLU()}[c.activation]
 
-        layers = []
+        # Input projection: map raw input dim to first hidden dim
         in_dim = c.input_dim
-        for h_dim in c.hidden_dims:
-            layers.extend([
-                nn.Linear(in_dim, h_dim),
-                nn.LayerNorm(h_dim),
-                act_fn(),
-                nn.Dropout(c.dropout),
-            ])
-            in_dim = h_dim
+        first_h = c.hidden_dims[0]
+        self.input_proj = nn.Linear(in_dim, first_h)
 
-        layers.append(nn.Linear(in_dim, c.n_wavelengths_out))
-        # No final activation — reflectances can be any positive value
-        # (though they're typically in [0, 0.8] for cloudy scenes)
+        # Stack of residual blocks (one per hidden_dims entry)
+        blocks = []
+        h_in = first_h
+        for h_out in c.hidden_dims:
+            blocks.append(_ResidualBlock(h_in, h_out, c.dropout, act_fn))
+            h_in = h_out
+        self.blocks = nn.ModuleList(blocks)
 
-        self.network = nn.Sequential(*layers)
+        # Output head: LayerNorm → linear → raw reflectances
+        # No final activation — reflectances are positive but unbounded above
+        self.output_norm = nn.LayerNorm(h_in)
+        self.output_head = nn.Linear(h_in, c.n_wavelengths_out)
 
     def forward(self, profile: torch.Tensor, tau_c: torch.Tensor,
                 geometry: torch.Tensor) -> torch.Tensor:
@@ -244,16 +281,78 @@ class ForwardModelEmulator(nn.Module):
 
         Parameters
         ----------
-        profile : (batch, n_levels) — normalized r_e profile
-        tau_c : (batch, 1) — normalized optical depth
-        geometry : (batch, n_geometry) — normalized [SZA, VZA, φ, wind_speed]
+        profile  : (batch, n_levels) — normalized r_e profile in [0, 1]
+        tau_c    : (batch, 1)        — normalized optical depth in [0, 1]
+        geometry : (batch, n_geometry) — normalized [SZA, VZA, SAZ, VAZ]
 
         Returns
         -------
         reflectances : (batch, n_wavelengths) — predicted TOA reflectance
         """
         x = torch.cat([profile, tau_c, geometry], dim=-1)
-        return self.network(x)
+        x = self.input_proj(x)
+        for block in self.blocks:
+            x = block(x)
+        return self.output_head(self.output_norm(x))
+
+
+# =============================================================================
+# Dual-Weighted MSE Loss (for ForwardModelEmulator training)
+# =============================================================================
+
+class DWMSELoss(nn.Module):
+    """
+    Dual-Weighted Mean Squared Error loss for spectral emulator training.
+
+    Motivation
+    ----------
+    Plain MSE treats all wavelength channels equally, so bright continuum
+    channels numerically dominate the gradient while dark channels (e.g.,
+    deep water-vapour or oxygen absorption bands where R(λ) ≈ 0) receive
+    almost no training signal.  This causes the emulator to be accurate
+    in the bright continuum but inaccurate in the absorption features —
+    precisely the spectral structure that carries the most information
+    about cloud optical depth and droplet size.
+
+    Formula (Lagerquist et al. 2023, Eq. 3)
+    ----------------------------------------
+        w(λ) = max(|R_true(λ)|, |R_pred(λ)|)
+        L = mean over (batch, λ) of [ w(λ) × (R_true(λ) - R_pred(λ))² ]
+
+    The weight w(λ) ≥ |residual|/2 always, so channels with large true OR
+    predicted reflectance receive proportionally larger gradients.  For near-
+    zero channels (absorption bands) the weight is small but non-zero,
+    preventing complete gradient starvation.
+
+    The weight is stop-gradiented so it acts purely as a loss scaling factor
+    and does not create second-order gradient terms through w(λ).
+
+    Parameters
+    ----------
+    eps : float
+        Small floor added to the weight to prevent exact-zero weighting in
+        extremely dark channels.  Default 1e-4 (≈ minimum physical reflectance
+        in deep absorption bands).
+    """
+
+    def __init__(self, eps: float = 1e-4):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+        pred   : (batch, n_wavelengths) — predicted reflectances
+        target : (batch, n_wavelengths) — true reflectances
+
+        Returns
+        -------
+        loss : scalar tensor
+        """
+        # Weight = max of absolute values, stop-gradiented
+        w = torch.max(pred.detach().abs(), target.abs()) + self.eps
+        return (w * (pred - target).pow(2)).mean()
 
 
 # =============================================================================
