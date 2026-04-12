@@ -6,21 +6,10 @@ HDF5 training file compatible with LibRadtranDataset in data.py.
 
 Structure of each .MAT file
 ----------------------------
-  Refl_model_with_noise_allStateVectors_hysics : (636, 128) float64
-      TOA reflectance with 0.3% Gaussian noise added; one spectrum per
-      viewing geometry (columns). This is what the network is trained on.
-      
-  Refl_model_with_noise_allStateVectors_emit : (636, 128) float64
-      TOA reflectance with 4% Gaussian noise added; one spectrum per
-      viewing geometry (columns). This is what the network is trained on.
-
-  Refl_model_uncert_allStateVectors_hysics : (636, 128) float64
-      Per-channel 1-sigma measurement uncertainty (same shape). Stored in
-      the HDF5 for potential use in the Stage 2 emulator data-fidelity loss.
-      
-  Refl_model_uncert_allStateVectors_emit : (636, 128) float64
-      Per-channel 1-sigma measurement uncertainty (same shape). Stored in
-      the HDF5 for potential use in the Stage 2 emulator data-fidelity loss.
+  Refl_model_allStateVectors : (636, 128) float64
+      Raw TOA reflectance without noise. Noise is added programmatically:
+      - HySICS: 0.3% Gaussian noise
+      - EMIT: 4.0% Gaussian noise
 
   changing_variables_allStateVectors : (636 * 128, 6) float64
       One row per (wavelength by geometry) RT simulation.
@@ -37,8 +26,10 @@ SZA varies per .mat file and is parsed from the filename (pattern: _sza_<value>_
 
 Output HDF5 structure (matches LibRadtranDataset in data.py)
 --------------------------------------------------------------
-  /reflectances  (n_total, 636)       — noisy TOA reflectance
-  /reflectances_uncertainty (n_total, 636) — per-channel 1-sigma uncertainty
+  /reflectances_hysics  (n_total, 636)       — noisy TOA reflectance (0.3% noise)
+  /reflectances_emit    (n_total, 636)       — noisy TOA reflectance (4% noise)
+  /reflectances_uncertainty_hysics (n_total, 636) — per-channel 1-sigma uncertainty
+  /reflectances_uncertainty_emit   (n_total, 636) — per-channel 1-sigma uncertainty
   /profiles      (n_total, N_LEVELS)  — r_e interpolated to fixed grid (top→base)
   /tau_c         (n_total,)           — cloud optical depth
   /vza           (n_total,)           — viewing zenith angle (deg)
@@ -68,23 +59,25 @@ from pathlib import Path
 # Configuration
 # ============================================================
 
-MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/vocalsRex_training_data_created_on_31_March_2026/')
+MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_12_April_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'vocalsRex_training_data_created_on_31_March_2026.h5')
+                'combined_vocals_oracles_training_data_12_April_2026.h5')
 
 N_LEVELS      = 10    # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
 N_WAVELENGTHS = 636   # HySICS spectral channels
 
-# Keys that must be present in every .mat file to be included in Pass 2
+# Keys that must be present in every .mat file to be included
+# Now we generate noise from the raw reflectances, so we only need raw data
 REQUIRED_KEYS = {
-    'Refl_model_with_noise_allStateVectors_hysics',
-    'Refl_model_with_noise_allStateVectors_emit',
-    'Refl_model_uncert_allStateVectors_hysics',
-    'Refl_model_uncert_allStateVectors_emit',
+    'Refl_model_allStateVectors',
     'changing_variables_allStateVectors',
     're', 'z', 'tau',
 }
+
+# Noise levels for each instrument (fraction of signal, applied as Gaussian)
+NOISE_HYSICS = 0.003  # 0.3% Gaussian noise
+NOISE_EMIT   = 0.04   # 4.0% Gaussian noise
 
 _SZA_RE = re.compile(r'_sza_(\d+(?:\.\d+)?)_')
 
@@ -94,6 +87,36 @@ def parse_sza_from_filename(filename: str) -> float:
     if m is None:
         raise ValueError(f'Cannot parse SZA from filename: {filename}')
     return float(m.group(1))
+
+
+def add_gaussian_noise(refl: np.ndarray, noise_level: float) -> tuple:
+    """
+    Add Gaussian noise to reflectance data.
+
+    Parameters
+    ----------
+    refl : (n_wavelengths, n_geometries) float64
+        Raw reflectance without noise.
+    noise_level : float
+        Noise as a fraction of signal (e.g., 0.003 for 0.3%).
+
+    Returns
+    -------
+    refl_noisy : (n_wavelengths, n_geometries) float32
+        Reflectance with added noise.
+    uncert : (n_wavelengths, n_geometries) float32
+        Per-channel 1-sigma measurement uncertainty.
+    """
+    # Generate random noise: same shape, mean=0, std=1
+    random_noise = np.random.randn(*refl.shape)
+
+    # Add noise: noisy = raw + (noise_level * raw) * randn
+    refl_noisy = refl + (noise_level * refl) * random_noise
+
+    # Uncertainty is the standard deviation of the noise: sigma = noise_level * raw
+    uncert = np.abs(noise_level * refl)
+
+    return refl_noisy.astype(np.float32), uncert.astype(np.float32)
 
 
 # ============================================================
@@ -347,11 +370,18 @@ with h5py.File(OUT_PATH, 'w') as f:
     for i, path in enumerate(valid_mat_files):
         d = scipy.io.loadmat(path, squeeze_me=True)
 
-        # Reflectances: (636, 128) → transpose → (128, 636)
-        refl_hysics   = d['Refl_model_with_noise_allStateVectors_hysics'].astype(np.float32).T
-        refl_emit     = d['Refl_model_with_noise_allStateVectors_emit'].astype(np.float32).T
-        uncert_hysics = d['Refl_model_uncert_allStateVectors_hysics'].astype(np.float32).T
-        uncert_emit   = d['Refl_model_uncert_allStateVectors_emit'].astype(np.float32).T
+        # Load raw reflectances and generate noisy versions
+        refl_raw = d['Refl_model_allStateVectors'].astype(np.float64)  # (636, 128)
+
+        # Generate HySICS (0.3% noise) and EMIT (4% noise)
+        refl_hysics, uncert_hysics = add_gaussian_noise(refl_raw, NOISE_HYSICS)
+        refl_emit, uncert_emit     = add_gaussian_noise(refl_raw, NOISE_EMIT)
+
+        # Transpose: (636, 128) → (128, 636)
+        refl_hysics   = refl_hysics.T
+        refl_emit     = refl_emit.T
+        uncert_hysics = uncert_hysics.T
+        uncert_emit   = uncert_emit.T
 
         # re, z, tau are 1x1 cell arrays; use [()] to extract the inner array
         re_raw = d['re'][()].astype(np.float64)
