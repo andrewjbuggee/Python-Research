@@ -54,7 +54,8 @@ class RetrievalConfig:
 class EmulatorConfig:
     """Configuration for the forward model emulator (Stage 2)."""
     n_levels: int = 10
-    n_geometry_inputs: int = 4           # Solar zenith, viewing zenith, solar azimuth, viewing azimuth
+    n_geometry_inputs: int = 4           # SZA, VZA, SAZ, VAZ
+    n_atm_inputs: int = 2                # ERA5 water vapour: wv_above_cloud, wv_in_cloud
     n_wavelengths_out: int = 636         # 636 HySICS channels, ~352–2297 nm
     hidden_dims: tuple = (256, 256, 256, 256, 256)
     dropout: float = 0.05
@@ -62,7 +63,8 @@ class EmulatorConfig:
 
     @property
     def input_dim(self):
-        return self.n_levels + 1 + self.n_geometry_inputs  # profile + tau_c + geometry
+        # profile + tau_c + geometry + atmospheric (water vapour) inputs
+        return self.n_levels + 1 + self.n_geometry_inputs + self.n_atm_inputs
 
 
 # =============================================================================
@@ -275,21 +277,30 @@ class ForwardModelEmulator(nn.Module):
         self.output_head = nn.Linear(h_in, c.n_wavelengths_out)
 
     def forward(self, profile: torch.Tensor, tau_c: torch.Tensor,
-                geometry: torch.Tensor) -> torch.Tensor:
+                geometry: torch.Tensor,
+                atm: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Predict reflectances from cloud state and geometry.
+        Predict reflectances from cloud state, geometry, and atmosphere.
 
         Parameters
         ----------
-        profile  : (batch, n_levels) — normalized r_e profile in [0, 1]
-        tau_c    : (batch, 1)        — normalized optical depth in [0, 1]
-        geometry : (batch, n_geometry) — normalized [SZA, VZA, SAZ, VAZ]
+        profile  : (batch, n_levels)   — normalized r_e profile in [0, 1]
+        tau_c    : (batch, 1)          — normalized optical depth in [0, 1]
+        geometry : (batch, 4)          — normalized [SZA, VZA, SAZ, VAZ]
+        atm      : (batch, n_atm) or None
+            Normalized atmospheric inputs.  When n_atm_inputs > 0 (default 2),
+            this must be provided and contains:
+                atm[:, 0] — log10-normalized above-cloud water vapour column
+                atm[:, 1] — log10-normalized in-cloud water vapour column
 
         Returns
         -------
         reflectances : (batch, n_wavelengths) — predicted TOA reflectance
         """
-        x = torch.cat([profile, tau_c, geometry], dim=-1)
+        parts = [profile, tau_c, geometry]
+        if atm is not None:
+            parts.append(atm)
+        x = torch.cat(parts, dim=-1)
         x = self.input_proj(x)
         for block in self.blocks:
             x = block(x)

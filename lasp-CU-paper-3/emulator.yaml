@@ -7,7 +7,7 @@
 # Train the emulator INDEPENDENTLY before Stage 2:
 #   python train_emulator.py --config emulator.yaml
 #
-# The emulator maps (r_e profile, tau_c, geometry) -> R(lambda).
+# The emulator maps (r_e profile, tau_c, geometry, wv_above_cloud, wv_in_cloud) -> R(lambda).
 # It is trained here, then frozen and plugged into the PINN loss.
 #
 # HySICS spectral range in this dataset: ~352 – 2297 nm, 636 channels
@@ -54,10 +54,9 @@ data:
 model:
   n_levels: 10
   n_geometry_inputs: 4
+  n_atm_inputs: 2          # ERA5 water vapour: [wv_above_cloud, wv_in_cloud]
   n_wavelengths_out: 636
-  # 512-wide residual MLP — increased from 256 after first training run showed
-  # the 499K-param network underfitting a hard 15->636 nonlinear RT mapping.
-  # H2O absorption bands (910-940 nm) require significant model capacity.
+  # 512-wide residual MLP.  Input dim = 10 + 1 + 4 + 2 = 17.
   hidden_dims: [512, 512, 512, 512, 512]
   dropout: 0.05
   activation: "gelu"

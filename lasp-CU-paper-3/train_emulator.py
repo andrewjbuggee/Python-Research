@@ -72,12 +72,26 @@ def load_config(path: str) -> dict:
 # Training and evaluation helpers
 # =============================================================================
 
-def _split_input(x: torch.Tensor, n_levels: int):
-    """Split concatenated input tensor into (profile, tau_c, geometry)."""
+def _split_input(x: torch.Tensor, n_levels: int, n_atm: int = 0):
+    """
+    Split concatenated input tensor into (profile, tau_c, geometry, atm).
+
+    Layout (all normalized to [0, 1]):
+        x[:, :n_levels]          — r_e profile (cloud top → base)
+        x[:, n_levels]           — τ_c  (cloud optical depth)
+        x[:, n_levels+1:n_levels+5] — geometry [SZA, VZA, SAZ, VAZ]
+        x[:, n_levels+5:]        — atmospheric inputs (water vapour, if n_atm > 0)
+
+    Returns
+    -------
+    profile, tau_c, geometry : tensors as above
+    atm : (batch, n_atm) tensor, or None when n_atm == 0
+    """
     profile  = x[:, :n_levels]
     tau_c    = x[:, n_levels:n_levels + 1]
-    geometry = x[:, n_levels + 1:]
-    return profile, tau_c, geometry
+    geometry = x[:, n_levels + 1:n_levels + 5]
+    atm      = x[:, n_levels + 5:n_levels + 5 + n_atm] if n_atm > 0 else None
+    return profile, tau_c, geometry, atm
 
 
 def train_one_epoch(model, loader, criterion, optimizer, device) -> dict:
@@ -91,8 +105,9 @@ def train_one_epoch(model, loader, criterion, optimizer, device) -> dict:
         y = y.to(device)
 
         optimizer.zero_grad()
-        profile, tau_c, geometry = _split_input(x, model.config.n_levels)
-        pred = model(profile, tau_c, geometry)
+        profile, tau_c, geometry, atm = _split_input(
+            x, model.config.n_levels, model.config.n_atm_inputs)
+        pred = model(profile, tau_c, geometry, atm)
         loss = criterion(pred, y)
         loss.backward()
 
@@ -117,8 +132,9 @@ def validate(model, loader, criterion, device) -> dict:
     for x, y in loader:
         x = x.to(device)
         y = y.to(device)
-        profile, tau_c, geometry = _split_input(x, model.config.n_levels)
-        pred           = model(profile, tau_c, geometry)
+        profile, tau_c, geometry, atm = _split_input(
+            x, model.config.n_levels, model.config.n_atm_inputs)
+        pred           = model(profile, tau_c, geometry, atm)
         total_dwmse   += criterion(pred, y).item()
         total_mse     += mse_fn(pred, y).item()
         n_batches     += 1
@@ -149,8 +165,9 @@ def compute_mre(model, loader, device) -> float:
     for x, y in loader:
         x = x.to(device)
         y = y.to(device)
-        profile, tau_c, geometry = _split_input(x, model.config.n_levels)
-        pred      = model(profile, tau_c, geometry)
+        profile, tau_c, geometry, atm = _split_input(
+            x, model.config.n_levels, model.config.n_atm_inputs)
+        pred      = model(profile, tau_c, geometry, atm)
         rel_err   = (pred - y).abs() / (y.abs() + eps)
         total_rel_err += rel_err.sum().item()
         n_elements    += y.numel()
@@ -183,8 +200,9 @@ def compute_spectral_residuals(model, loader, device,
     for x, y in loader:
         x = x.to(device)
         y = y.to(device)
-        profile, tau_c, geometry = _split_input(x, model.config.n_levels)
-        pred     = model(profile, tau_c, geometry)
+        profile, tau_c, geometry, atm = _split_input(
+            x, model.config.n_levels, model.config.n_atm_inputs)
+        pred     = model(profile, tau_c, geometry, atm)
         residual = pred - y
 
         b_abs = residual.abs().sum(dim=0).cpu().numpy()

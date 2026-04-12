@@ -77,7 +77,7 @@ N_WAVELENGTHS = 636   # HySICS spectral channels
 REQUIRED_KEYS = {
     'Refl_model_allStateVectors',
     'changing_variables_allStateVectors',
-    're', 'z', 'tau',
+    're', 'z', 'tau', 'era5',
 }
 
 # Noise levels for each instrument (fraction of signal, applied as Gaussian)
@@ -238,6 +238,102 @@ def interpolate_profile_tau_weighted(
 
 
 # ============================================================
+# ERA5 water vapour extraction
+# ============================================================
+
+def _era5_datprofiles(d: dict) -> tuple:
+    """
+    Return the (gp_height_m, vapor_conc) arrays from a loaded .mat dict.
+
+    Access path (scipy.io structured arrays):
+        d['era5'].item()[6]  →  datProfiles void array
+        .item()              →  tuple with dtype fields:
+            0: GP_height          (37,) float  metres, surface→TOA
+            1: T                  (37,) float  K
+            2: p                  (37,) uint16 hPa  (1000 → 1)
+            3: q                  (37,) float  specific humidity (kg/kg)
+            4: vapor_concentration (37,) float  molecules/cm³
+            5: vapor_massDensity  (37,) float  kg/m³
+    """
+    dp = d['era5'].item()[6].item()
+    gph = np.asarray(dp[0], dtype=np.float64)   # metres
+    vap = np.asarray(dp[4], dtype=np.float64)   # molecules/cm³
+    return gph, vap
+
+
+def extract_era5_vapor(d: dict, z_raw: np.ndarray) -> tuple:
+    """
+    Compute above-cloud and in-cloud water vapour column densities.
+
+    Cloud top and bottom are derived from the in-situ altitude array ``z_raw``
+    stored in each .mat file as max(z_raw) and min(z_raw) respectively.
+    Using max/min rather than index 0/-1 is robust to files where the altitude
+    vector is not stored in a guaranteed top-to-bottom order.
+
+    Because ``z_raw`` is the actual flight-segment altitude measured by the
+    aircraft, these are the exact boundaries used in the libRadtran RT
+    calculations.  The cloud-top/base altitudes are interpolated onto the
+    ERA5 geopotential-height grid (37 standard pressure levels, surface→TOA)
+    so the trapezoidal integrals use physically consistent altitude nodes.
+
+    Integration:
+        wv_above_cloud = ∫[z_top → TOA]    n(z) dz     (molec/cm²)
+        wv_in_cloud    = ∫[z_base → z_top] n(z) dz     (molec/cm²)
+    where n(z) is vapor_concentration (molec/cm³) and dz is in cm.
+
+    Parameters
+    ----------
+    d : dict
+        Output of scipy.io.loadmat(..., squeeze_me=True) for one .mat file.
+    z_raw : (n,) float
+        In-situ cloud altitude in km, ordered cloud top → cloud base
+        (z_raw[0] is the highest altitude).
+
+    Returns
+    -------
+    wv_above_cloud       : float   — column above cloud top  (molec/cm²)
+    wv_in_cloud          : float   — column within cloud     (molec/cm²)
+    vapor_conc_profile   : (37,) float32 — full ERA5 profile (molec/cm³)
+    """
+    gph, vap = _era5_datprofiles(d)
+
+    # Cloud boundaries: km → metres.
+    # Use max/min rather than index 0/-1 — the altitude array is not guaranteed
+    # to be stored in any particular order across all .mat files.
+    z_top_m  = float(z_raw.max()) * 1000.0
+    z_base_m = float(z_raw.min()) * 1000.0
+
+    # Guard: ERA5 must span at least from cloud base to above cloud top.
+    # In practice this is always satisfied for low marine clouds.
+    z_top_m  = np.clip(z_top_m,  gph[0], gph[-1])
+    z_base_m = np.clip(z_base_m, gph[0], z_top_m)
+
+    # Interpolate vapour concentration at the exact cloud boundaries.
+    vap_at_top  = float(np.interp(z_top_m,  gph, vap))
+    vap_at_base = float(np.interp(z_base_m, gph, vap))
+
+    # ---- Above-cloud column ----------------------------------------
+    # ERA5 levels strictly above cloud top, prepended with cloud-top node.
+    above_mask = gph > z_top_m
+    gph_above  = np.concatenate([[z_top_m],    gph[above_mask]])
+    vap_above  = np.concatenate([[vap_at_top], vap[above_mask]])
+    # Integrate: metres → cm (×100), result in molec/cm²
+    wv_above = float(np.trapz(vap_above, gph_above * 100.0))
+
+    # ---- In-cloud column -------------------------------------------
+    # ERA5 levels strictly between cloud base and cloud top, bracketed by
+    # the interpolated boundary values.  The sort guard handles the rare
+    # case where cloud base coincides exactly with an ERA5 level.
+    in_mask = (gph > z_base_m) & (gph < z_top_m)
+    gph_in  = np.concatenate([[z_base_m],    gph[in_mask],  [z_top_m]])
+    vap_in  = np.concatenate([[vap_at_base], vap[in_mask],  [vap_at_top]])
+    sort_i  = np.argsort(gph_in)
+    wv_in   = float(np.trapz(vap_in[sort_i], gph_in[sort_i] * 100.0))
+
+    return wv_above, wv_in, vap.astype(np.float32)
+
+
+# ============================================================
 # Collect .mat files (exclude macOS metadata files starting with ._)
 # ============================================================
 
@@ -325,6 +421,19 @@ plt.show()
 
 
 # ============================================================
+# Extract ERA5 pressure levels from the first file
+# (standard 37-level grid: 1000 → 1 hPa — identical across all files)
+# ============================================================
+
+d_era5_ref = scipy.io.loadmat(valid_mat_files[0], squeeze_me=True)
+dp_ref     = d_era5_ref['era5'].item()[6].item()
+era5_pressure_levels = np.asarray(dp_ref[2], dtype=np.float32)   # hPa, (37,)
+N_ERA5_LEVELS        = len(era5_pressure_levels)
+print(f'ERA5 pressure levels: {N_ERA5_LEVELS} levels  '
+      f'({era5_pressure_levels[0]:.0f}–{era5_pressure_levels[-1]:.0f} hPa)')
+
+
+# ============================================================
 # Extract wavelength grid from the first file
 # Band center = mean of lower and upper bounds.
 # These are always in the 3rd-to-last (-3) and 2nd-to-last (-2) columns,
@@ -375,6 +484,20 @@ with h5py.File(OUT_PATH, 'w') as f:
     ds_vaz  = f.create_dataset('vaz',   shape=(n_total,), dtype='f4')
     ds_saz  = f.create_dataset('saz',   shape=(n_total,), dtype='f4')
     ds_sza  = f.create_dataset('sza',   shape=(n_total,), dtype='f4')
+
+    # ERA5 water vapour datasets
+    # wv_above_cloud / wv_in_cloud: integrated column densities (molec/cm²)
+    # era5_vapor_concentration: full 37-level profile (molec/cm³)
+    ds_wv_above = f.create_dataset('wv_above_cloud',
+                                   shape=(n_total,), dtype='f8')
+    ds_wv_in    = f.create_dataset('wv_in_cloud',
+                                   shape=(n_total,), dtype='f8')
+    ds_era5_vap = f.create_dataset('era5_vapor_concentration',
+                                   shape=(n_total, N_ERA5_LEVELS), dtype='f4')
+    # Pressure levels are the same for every file — store once
+    f.create_dataset('era5_pressure_levels', data=era5_pressure_levels)
+
+    wv_above_all = []   # collect one value per file for the summary plot
 
     for i, path in enumerate(valid_mat_files):
         d = scipy.io.loadmat(path, squeeze_me=True)
@@ -436,6 +559,13 @@ with h5py.File(OUT_PATH, 'w') as f:
         ds_saz[row_start:row_end]    = saz
         ds_sza[row_start:row_end]    = sza
 
+        # ERA5 water vapour — same profile for all 128 geometries in this file
+        wv_above, wv_in, vap_profile = extract_era5_vapor(d, z_raw)
+        ds_wv_above[row_start:row_end] = wv_above
+        ds_wv_in[row_start:row_end]    = wv_in
+        ds_era5_vap[row_start:row_end] = vap_profile[np.newaxis, :]
+        wv_above_all.append(wv_above)
+
         if (i + 1) % 10 == 0 or i == n_files - 1:
             print(f'  {i+1}/{n_files}  ({row_end} samples written)')
 
@@ -454,3 +584,38 @@ with h5py.File(OUT_PATH, 'w') as f:
 print(f'\nDone.')
 print(f'  Output: {OUT_PATH}')
 print(f'  Total samples: {n_total}  ({n_files} profiles × {N_GEOMETRIES} geometries)')
+
+
+# ============================================================
+# Above-cloud water vapour histogram
+# ============================================================
+
+AVOGADRO = 6.02214076e23   # molecules / mol
+M_H2O    = 18.015e-3       # kg / mol
+MOLEC_CM2_TO_KG_M2 = M_H2O / AVOGADRO * 1e4   # ≈ 2.99e-22
+
+wv_above_arr   = np.array(wv_above_all)
+wv_above_kg_m2 = wv_above_arr * MOLEC_CM2_TO_KG_M2
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+axes[0].hist(wv_above_kg_m2, bins=30, color='steelblue', edgecolor='white',
+             linewidth=0.5)
+axes[0].set_xlabel('Above-cloud WV column  (kg m⁻²)', fontsize=11)
+axes[0].set_ylabel('Number of profiles', fontsize=11)
+axes[0].set_title('Above-cloud water vapour — linear scale', fontsize=12)
+
+log_above_kg = np.log10(wv_above_kg_m2)
+axes[1].hist(log_above_kg, bins=30, color='steelblue', edgecolor='white',
+             linewidth=0.5)
+axes[1].set_xlabel('log₁₀  [above-cloud WV column  (kg m⁻²)]', fontsize=11)
+axes[1].set_ylabel('Number of profiles', fontsize=11)
+axes[1].set_title('Above-cloud water vapour — log₁₀ scale', fontsize=12)
+
+plt.suptitle(
+    f'ERA5 above-cloud water vapour  ({n_files} unique profiles)\n'
+    f'Range: {wv_above_kg_m2.min():.2f} – {wv_above_kg_m2.max():.2f}  kg m⁻²',
+    fontsize=11,
+)
+plt.tight_layout()
+plt.show()

@@ -38,6 +38,20 @@ HYSICS_WAV_MAX = 2297.0   # nm  (band 636 center: ~2297.05 nm)
 # Start with N=10; increase later if information content supports it
 DEFAULT_N_LEVELS = 10
 
+# ERA5 water vapour column normalization bounds (log10 scale, molec/cm²)
+# Applied to wv_above_cloud and wv_in_cloud before feeding to the emulator.
+# Log10 transform is essential: these columns span ~3–5 orders of magnitude
+# across VOCALS-REx / ORACLES conditions.
+#
+# Run patch_hdf5_era5.py and read the printed summary to validate these bounds
+# against your actual dataset.  Conservative defaults are set here; if
+# observed log10 values fall outside [MIN, MAX] the normalized input will
+# lie outside [0, 1], which will trigger a runtime warning in EmulatorDataset.
+WV_ABOVE_LOG10_MIN = 21.0   # log10(molec/cm²) — very dry above-cloud column
+WV_ABOVE_LOG10_MAX = 23.5   # log10(molec/cm²) — very moist above-cloud column
+WV_IN_LOG10_MIN    = 17.0   # log10(molec/cm²) — very thin / dry in-cloud layer
+WV_IN_LOG10_MAX    = 23.0   # log10(molec/cm²) — thick / moist in-cloud layer
+
 # Physical bounds on effective radius (μm)
 # Update RE_MAX after running convert_matFiles_to_HDF.py — the scan pass
 # will print the observed max across all in-situ profiles.
@@ -515,8 +529,9 @@ class EmulatorDataset(Dataset):
     """
     Dataset for training the ForwardModelEmulator.
 
-    Inputs  (x): normalized (r_e profile | τ_c | geometry)  — 15 features
-    Outputs (y): raw reflectance spectrum                    — 636 values
+    Inputs  (x): normalized (r_e profile | τ_c | geometry | wv_above | wv_in)
+                 — 17 features (15 cloud+geometry + 2 ERA5 water vapour)
+    Outputs (y): raw reflectance spectrum  — 636 values
 
     This uses the same HDF5 file as LibRadtranDataset but flips the role of
     inputs and outputs: the spectral measurements are the *target* to predict,
@@ -559,6 +574,12 @@ class EmulatorDataset(Dataset):
     _SAZ_RANGE = (0.0, 180.0)
     _VAZ_RANGE = (0.0, 180.0)
 
+    # ERA5 water vapour normalization (log10 space, molec/cm²)
+    _WV_ABOVE_LOG10_MIN = WV_ABOVE_LOG10_MIN
+    _WV_ABOVE_LOG10_MAX = WV_ABOVE_LOG10_MAX
+    _WV_IN_LOG10_MIN    = WV_IN_LOG10_MIN
+    _WV_IN_LOG10_MAX    = WV_IN_LOG10_MAX
+
     def __init__(self,
                  h5_path: str,
                  indices: Optional[np.ndarray] = None,
@@ -587,23 +608,36 @@ class EmulatorDataset(Dataset):
         with h5py.File(h5_path, 'r') as f:
             all_refl = (f[refl_key][:] if refl_key in f
                         else f['reflectances'][:]).astype(np.float32)
-            all_profiles = f['profiles'][:].astype(np.float32)
-            all_tau_c    = f['tau_c'][:].astype(np.float32)
-            all_sza      = f['sza'][:].astype(np.float32)
-            all_vza      = f['vza'][:].astype(np.float32)
-            all_saz      = f['saz'][:].astype(np.float32)
-            all_vaz      = f['vaz'][:].astype(np.float32)
+            all_profiles  = f['profiles'][:].astype(np.float32)
+            all_tau_c     = f['tau_c'][:].astype(np.float32)
+            all_sza       = f['sza'][:].astype(np.float32)
+            all_vza       = f['vza'][:].astype(np.float32)
+            all_saz       = f['saz'][:].astype(np.float32)
+            all_vaz       = f['vaz'][:].astype(np.float32)
             self.wavelengths = (f['wavelengths'][:].astype(np.float32)
                                 if 'wavelengths' in f else None)
 
+            # ERA5 water vapour columns — required for correct absorption-band
+            # prediction.  Raise clearly if the HDF5 predates the ERA5 patch.
+            if 'wv_above_cloud' not in f or 'wv_in_cloud' not in f:
+                raise KeyError(
+                    "HDF5 file is missing ERA5 water vapour datasets "
+                    "('wv_above_cloud', 'wv_in_cloud'). "
+                    "Run patch_hdf5_era5.py to add them."
+                )
+            all_wv_above = f['wv_above_cloud'][:].astype(np.float64)
+            all_wv_in    = f['wv_in_cloud'][:].astype(np.float64)
+
         if indices is not None:
-            all_refl     = all_refl[indices]
-            all_profiles = all_profiles[indices]
-            all_tau_c    = all_tau_c[indices]
-            all_sza      = all_sza[indices]
-            all_vza      = all_vza[indices]
-            all_saz      = all_saz[indices]
-            all_vaz      = all_vaz[indices]
+            all_refl      = all_refl[indices]
+            all_profiles  = all_profiles[indices]
+            all_tau_c     = all_tau_c[indices]
+            all_sza       = all_sza[indices]
+            all_vza       = all_vza[indices]
+            all_saz       = all_saz[indices]
+            all_vaz       = all_vaz[indices]
+            all_wv_above  = all_wv_above[indices]
+            all_wv_in     = all_wv_in[indices]
 
         # Optional LHC augmentation — training split only
         if lhc_h5_path is not None:
@@ -613,14 +647,26 @@ class EmulatorDataset(Dataset):
                         f"LHC file {lhc_h5_path!r} has no reflectance key '{refl_key}'. "
                         "Run libRadtran on the LHC parameters first, then add reflectances."
                     )
-                lhc_refl = (f[refl_key][:] if refl_key in f
-                            else f['reflectances'][:]).astype(np.float32)
+                lhc_refl     = (f[refl_key][:] if refl_key in f
+                                else f['reflectances'][:]).astype(np.float32)
                 lhc_profiles = f['profiles'][:].astype(np.float32)
                 lhc_tau_c    = f['tau_c'][:].astype(np.float32)
                 lhc_sza      = f['sza'][:].astype(np.float32)
                 lhc_vza      = f['vza'][:].astype(np.float32)
                 lhc_saz      = f['saz'][:].astype(np.float32)
                 lhc_vaz      = f['vaz'][:].astype(np.float32)
+                if 'wv_above_cloud' in f:
+                    lhc_wv_above = f['wv_above_cloud'][:].astype(np.float64)
+                    lhc_wv_in    = f['wv_in_cloud'][:].astype(np.float64)
+                else:
+                    # LHC file predates ERA5 patch — fill with training-set means
+                    warnings.warn(
+                        "LHC file has no ERA5 water vapour data. "
+                        "Filling wv_above_cloud / wv_in_cloud with training-set means. "
+                        "Run patch_hdf5_era5.py on the LHC file for correct values."
+                    )
+                    lhc_wv_above = np.full(len(lhc_refl), all_wv_above.mean())
+                    lhc_wv_in    = np.full(len(lhc_refl), all_wv_in.mean())
 
             all_refl     = np.concatenate([all_refl,     lhc_refl],     axis=0)
             all_profiles = np.concatenate([all_profiles, lhc_profiles], axis=0)
@@ -629,6 +675,8 @@ class EmulatorDataset(Dataset):
             all_vza      = np.concatenate([all_vza,      lhc_vza],      axis=0)
             all_saz      = np.concatenate([all_saz,      lhc_saz],      axis=0)
             all_vaz      = np.concatenate([all_vaz,      lhc_vaz],      axis=0)
+            all_wv_above = np.concatenate([all_wv_above, lhc_wv_above], axis=0)
+            all_wv_in    = np.concatenate([all_wv_in,    lhc_wv_in],    axis=0)
 
         # Store arrays
         self.reflectances = all_refl       # targets — raw, not normalized
@@ -638,29 +686,75 @@ class EmulatorDataset(Dataset):
         self.vza          = all_vza
         self.saz          = all_saz
         self.vaz          = all_vaz
+        self.wv_above     = all_wv_above   # above-cloud WV column (molec/cm²)
+        self.wv_in        = all_wv_in      # in-cloud WV column    (molec/cm²)
+
+        # Warn if any WV values fall outside the normalization bounds after
+        # log10-transform — indicates the constants in data.py need updating.
+        log_above = np.log10(np.maximum(all_wv_above, 1e10))
+        log_in    = np.log10(np.maximum(all_wv_in,    1e10))
+        if log_above.min() < self._WV_ABOVE_LOG10_MIN or \
+           log_above.max() > self._WV_ABOVE_LOG10_MAX:
+            warnings.warn(
+                f"wv_above_cloud log10 range [{log_above.min():.2f}, "
+                f"{log_above.max():.2f}] exceeds normalization bounds "
+                f"[{self._WV_ABOVE_LOG10_MIN}, {self._WV_ABOVE_LOG10_MAX}]. "
+                "Update WV_ABOVE_LOG10_MIN/MAX in data.py."
+            )
+        if log_in.min() < self._WV_IN_LOG10_MIN or \
+           log_in.max() > self._WV_IN_LOG10_MAX:
+            warnings.warn(
+                f"wv_in_cloud log10 range [{log_in.min():.2f}, "
+                f"{log_in.max():.2f}] exceeds normalization bounds "
+                f"[{self._WV_IN_LOG10_MIN}, {self._WV_IN_LOG10_MAX}]. "
+                "Update WV_IN_LOG10_MIN/MAX in data.py."
+            )
 
         self.n_samples     = self.reflectances.shape[0]
         self.n_wavelengths = self.reflectances.shape[1]
 
-    def _normalize_inputs(self, profile, tau_c, sza, vza, saz, vaz) -> np.ndarray:
+    def _normalize_inputs(self, profile, tau_c, sza, vza, saz, vaz,
+                          wv_above, wv_in) -> np.ndarray:
         """
-        Normalize inputs to [0, 1] using fixed physical bounds.
+        Normalize all 17 inputs to [0, 1] using fixed physical bounds.
 
-        The normalization is identical to LibRadtranDataset so that emulator
-        inputs are numerically consistent with the retrieval network's outputs.
+        Cloud + geometry (15 values): same linear bounds as LibRadtranDataset
+        so emulator inputs match the retrieval network's output numerically.
+
+        Water vapour (2 values): log10-transformed before normalization because
+        column densities span ~5 orders of magnitude.  The log10 bounds are
+        defined by WV_ABOVE_LOG10_MIN/MAX and WV_IN_LOG10_MIN/MAX in data.py.
         """
         profile_norm = ((profile - self._RE_MIN)
                         / (self._RE_MAX - self._RE_MIN)).astype(np.float32)
-        tau_norm     = np.float32((tau_c - self._TAU_MIN) / (self._TAU_MAX - self._TAU_MIN))
-        sza_norm     = np.float32((sza - self._SZA_RANGE[0]) / (self._SZA_RANGE[1] - self._SZA_RANGE[0]))
-        vza_norm     = np.float32((vza - self._VZA_RANGE[0]) / (self._VZA_RANGE[1] - self._VZA_RANGE[0]))
-        saz_norm     = np.float32((saz - self._SAZ_RANGE[0]) / (self._SAZ_RANGE[1] - self._SAZ_RANGE[0]))
-        vaz_norm     = np.float32((vaz - self._VAZ_RANGE[0]) / (self._VAZ_RANGE[1] - self._VAZ_RANGE[0]))
+        tau_norm = np.float32((tau_c - self._TAU_MIN)
+                              / (self._TAU_MAX - self._TAU_MIN))
+        sza_norm = np.float32((sza - self._SZA_RANGE[0])
+                              / (self._SZA_RANGE[1] - self._SZA_RANGE[0]))
+        vza_norm = np.float32((vza - self._VZA_RANGE[0])
+                              / (self._VZA_RANGE[1] - self._VZA_RANGE[0]))
+        saz_norm = np.float32((saz - self._SAZ_RANGE[0])
+                              / (self._SAZ_RANGE[1] - self._SAZ_RANGE[0]))
+        vaz_norm = np.float32((vaz - self._VAZ_RANGE[0])
+                              / (self._VAZ_RANGE[1] - self._VAZ_RANGE[0]))
+
+        # Log10-normalize water vapour columns
+        log_above = np.log10(max(float(wv_above), 1e10))
+        log_in    = np.log10(max(float(wv_in),    1e10))
+        wv_above_norm = np.float32(
+            (log_above - self._WV_ABOVE_LOG10_MIN)
+            / (self._WV_ABOVE_LOG10_MAX - self._WV_ABOVE_LOG10_MIN)
+        )
+        wv_in_norm = np.float32(
+            (log_in - self._WV_IN_LOG10_MIN)
+            / (self._WV_IN_LOG10_MAX - self._WV_IN_LOG10_MIN)
+        )
 
         return np.concatenate([
             profile_norm,
             np.array([tau_norm], dtype=np.float32),
             np.array([sza_norm, vza_norm, saz_norm, vaz_norm], dtype=np.float32),
+            np.array([wv_above_norm, wv_in_norm], dtype=np.float32),
         ])
 
     def __len__(self):
@@ -674,6 +768,8 @@ class EmulatorDataset(Dataset):
             self.vza[idx],
             self.saz[idx],
             self.vaz[idx],
+            self.wv_above[idx],
+            self.wv_in[idx],
         )
         y = self.reflectances[idx]   # raw reflectances
         return torch.from_numpy(x), torch.from_numpy(y)
