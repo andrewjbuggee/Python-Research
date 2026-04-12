@@ -1,0 +1,35 @@
+data:
+  h5_path: /Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_12_April_2026.h5
+  instrument: hysics
+  lhc_h5_path: null
+  n_test_profiles: 10
+  n_val_profiles: 10
+  num_workers: 0
+  profile_holdout: true
+  seed: 42
+  train_frac: 0.8
+  val_frac: 0.1
+model:
+  activation: gelu
+  dropout: 0.05
+  hidden_dims:
+  - 512
+  - 512
+  - 512
+  - 512
+  - 512
+  n_geometry_inputs: 4
+  n_levels: 10
+  n_wavelengths_out: 636
+training:
+  batch_size: 256
+  dwmse_eps: 0.0001
+  early_stopping_patience: 50
+  learning_rate: 0.001
+  mre_log_interval: 10
+  mre_target_pct: 1.0
+  n_epochs: 600
+  scheduler_T0: 50
+  scheduler_T_mult: 2
+  scheduler_eta_min: 1.0e-06
+  weight_decay: 0.0001
