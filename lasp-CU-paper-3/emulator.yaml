@@ -10,6 +10,10 @@
 # The emulator maps (r_e profile, tau_c, geometry) -> R(lambda).
 # It is trained here, then frozen and plugged into the PINN loss.
 #
+# HySICS spectral range in this dataset: 166 – 1138.6 nm, 636 channels
+#   Best channels (easiest):  UV 166–200 nm — bright, smooth Rayleigh regime
+#   Worst channels (hardest): H2O absorption 910–940 nm — near-zero reflectance
+#
 # Accuracy gate
 # -------------
 # Training writes 'emulator_ready.pt' when val MRE < mre_target_pct.
@@ -24,8 +28,8 @@
 
 data:
   h5_path: "/Volumes/My Passport/neural_network_training_data/vocalsRex_training_data_created_on_31_March_2026.h5"
-  instrument: "hysics"       # 'hysics' or 'emit'
-  num_workers: 4
+  instrument: "hysics"       # 'hysics' (0.3% noise) or 'emit' (4.0% noise)
+  num_workers: 0             # must be 0 on MPS/Mac; safe to increase on Linux/CUDA
   seed: 42                   # must match retrieval network seed
 
   # --- Profile-held-out split (strongly recommended) ---
@@ -50,26 +54,28 @@ model:
   n_levels: 10
   n_geometry_inputs: 4
   n_wavelengths_out: 636
-  # The emulator maps 15 inputs -> 636 outputs (harder than the retrieval network's
-  # 640 -> 11).  If MRE stays above target after 400 epochs, increase to
-  # [512, 512, 512, 512, 512] or add a 6th layer.
-  hidden_dims: [256, 256, 256, 256, 256]
+  # 512-wide residual MLP — increased from 256 after first training run showed
+  # the 499K-param network underfitting a hard 15->636 nonlinear RT mapping.
+  # H2O absorption bands (910-940 nm) require significant model capacity.
+  hidden_dims: [512, 512, 512, 512, 512]
   dropout: 0.05
   activation: "gelu"
 
 training:
   batch_size: 256
-  n_epochs: 400
+  n_epochs: 600
   learning_rate: 0.001
   weight_decay: 0.0001
-  early_stopping_patience: 30
+  # Increased from 30 — DWMSE loss changes the convergence dynamics and needs
+  # more room to find the optimum, especially for hard absorption-band channels.
+  early_stopping_patience: 50
   scheduler_T0: 50
   scheduler_T_mult: 2
   scheduler_eta_min: 0.000001
 
   # Dual-Weighted MSE epsilon — floor added to per-channel weight to prevent
   # exact-zero weighting in very dark absorption channels.
-  # 1e-4 ≈ minimum physical reflectance in deep absorption bands.
+  # 1e-4 ≈ minimum physical reflectance in the deepest H2O absorption cores.
   dwmse_eps: 0.0001
 
   # Mean Relative Error target (%).

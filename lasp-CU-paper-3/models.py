@@ -31,7 +31,7 @@ from typing import Optional, Tuple
 class RetrievalConfig:
     """Configuration for the retrieval network."""
     # Input dimensions
-    n_wavelengths: int = 636         # HySICS bands; use all 636 spectral channels
+    n_wavelengths: int = 636         # 636 HySICS channels, 166–1138.6 nm at ~1.53 nm spacing
     n_geometry_inputs: int = 4      # Solar zenith, viewing zenith, solar azimuth, viewing azimuth
     # Output dimensions
     n_levels: int = 10              # Vertical levels in profile
@@ -55,7 +55,7 @@ class EmulatorConfig:
     """Configuration for the forward model emulator (Stage 2)."""
     n_levels: int = 10
     n_geometry_inputs: int = 4           # Solar zenith, viewing zenith, solar azimuth, viewing azimuth
-    n_wavelengths_out: int = 636         # output reflectance channels;HySICS bands; use all 636 spectral channels
+    n_wavelengths_out: int = 636         # 636 HySICS channels, 166–1138.6 nm at ~1.53 nm spacing
     hidden_dims: tuple = (256, 256, 256, 256, 256)
     dropout: float = 0.05
     activation: str = "gelu"

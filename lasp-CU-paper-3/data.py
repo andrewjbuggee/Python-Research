@@ -26,6 +26,13 @@ import warnings
 # MODIS first 7 spectral channels (nm) — used in Papers 1 & 2
 MODIS_WAVELENGTHS = np.array([645, 858.5, 469, 555, 1240, 1640, 2130])
 
+# HySICS spectral range in the VOCALS-REx training dataset
+# 636 channels from 166.0 to 1138.6 nm at ~1.53 nm spacing
+# (not 350-2300 nm as the original instrument design; this is the simulated
+#  range used in the libRadtran RT calculations for Paper 3)
+HYSICS_WAV_MIN = 166.0    # nm
+HYSICS_WAV_MAX = 1138.6   # nm
+
 # Number of vertical levels for profile retrieval
 # Start with N=10; increase later if information content supports it
 DEFAULT_N_LEVELS = 10
@@ -355,12 +362,15 @@ def create_dataloaders(h5_path: str,
         generator=torch.Generator().manual_seed(seed)
     )
 
+    # pin_memory speeds up CPU→GPU transfers but is not supported on MPS
+    pin = torch.cuda.is_available()
+
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=True)
+                              num_workers=num_workers, pin_memory=pin)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
-                            num_workers=num_workers, pin_memory=True)
+                            num_workers=num_workers, pin_memory=pin)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False,
-                             num_workers=num_workers, pin_memory=True)
+                             num_workers=num_workers, pin_memory=pin)
 
     return train_loader, val_loader, test_loader
 
@@ -737,12 +747,15 @@ def create_emulator_dataloaders(
             generator=torch.Generator().manual_seed(seed),
         )
 
+    # pin_memory speeds up CPU→GPU transfers but is not supported on MPS
+    pin = torch.cuda.is_available()
+
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=True)
+                              num_workers=num_workers, pin_memory=pin)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
-                              num_workers=num_workers, pin_memory=True)
+                              num_workers=num_workers, pin_memory=pin)
     test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False,
-                              num_workers=num_workers, pin_memory=True)
+                              num_workers=num_workers, pin_memory=pin)
 
     return train_loader, val_loader, test_loader
 
