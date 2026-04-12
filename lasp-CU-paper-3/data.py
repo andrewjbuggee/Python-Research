@@ -531,7 +531,7 @@ class EmulatorDataset(Dataset):
 
     Inputs  (x): normalized (r_e profile | τ_c | geometry | wv_above | wv_in)
                  — 17 features (15 cloud+geometry + 2 ERA5 water vapour)
-    Outputs (y): raw reflectance spectrum  — 636 values
+    Outputs (y): reflectance spectrum — 636 values, optionally log10-transformed
 
     This uses the same HDF5 file as LibRadtranDataset but flips the role of
     inputs and outputs: the spectral measurements are the *target* to predict,
@@ -545,9 +545,27 @@ class EmulatorDataset(Dataset):
     critical for Stage 2: the emulator receives the retrieval network's
     normalized outputs directly.
 
-    Outputs (reflectances) are returned in raw physical units [0, ~0.8].
-    No output normalization is applied — the emulator loss and MRE metrics
-    operate in reflectance space.
+    Log-reflectance mode (log_reflectance=True, default)
+    -----------------------------------------------------
+    TOA reflectances span ~4 orders of magnitude: bright continuum channels
+    reach ~0.8 while deep H₂O / O₂ absorption channels can be < 1e-4.  Plain
+    MSE in linear space is numerically dominated by the bright channels, leaving
+    absorption-band channels undertrained.
+
+    Setting log_reflectance=True transforms each target channel before the loss:
+        y = log10(R + log_eps)
+    where log_eps is a small floor (default 1e-6) to stabilise log(0).  The
+    model then predicts log10(R̂ + log_eps) and plain MSE is used as the loss.
+    In log-space MSE treats bright and dark channels on equal footing.
+
+    MRE and per-channel diagnostics are always reported in *linear* reflectance
+    space so results are physically interpretable:
+        R̂ = 10^(pred)
+        R  = 10^(target)
+
+    For Stage 2 PINN use, invert the emulator output before computing the
+    spectral data fidelity loss:
+        R̂_linear = 10^(emulator_output)
 
     Profile-held-out splits
     -----------------------
@@ -584,7 +602,9 @@ class EmulatorDataset(Dataset):
                  h5_path: str,
                  indices: Optional[np.ndarray] = None,
                  instrument: str = 'hysics',
-                 lhc_h5_path: Optional[str] = None):
+                 lhc_h5_path: Optional[str] = None,
+                 log_reflectance: bool = True,
+                 log_eps: float = 1e-6):
         """
         Parameters
         ----------
@@ -599,6 +619,14 @@ class EmulatorDataset(Dataset):
             Path to a libRadtran-completed LHC augmentation HDF5 file.
             Must contain the same keys as the main file including reflectances.
             Only use for training split — do not augment val/test.
+        log_reflectance : bool
+            If True (default), targets are returned as log10(R + log_eps).
+            Use plain nn.MSELoss() with this mode; do NOT use DWMSELoss
+            (DWMSE weights by magnitude, which is counterproductive in log space).
+        log_eps : float
+            Small floor added before log10 to avoid log(0).  Default 1e-6
+            (well below any physical reflectance, so it barely affects bright
+            channels while stabilising deep absorption-band values near zero).
         """
         if instrument not in ('hysics', 'emit'):
             raise ValueError(f"instrument must be 'hysics' or 'emit', got {instrument!r}")
@@ -710,8 +738,10 @@ class EmulatorDataset(Dataset):
                 "Update WV_IN_LOG10_MIN/MAX in data.py."
             )
 
-        self.n_samples     = self.reflectances.shape[0]
-        self.n_wavelengths = self.reflectances.shape[1]
+        self.log_reflectance = log_reflectance
+        self.log_eps         = log_eps
+        self.n_samples       = self.reflectances.shape[0]
+        self.n_wavelengths   = self.reflectances.shape[1]
 
     def _normalize_inputs(self, profile, tau_c, sza, vza, saz, vaz,
                           wv_above, wv_in) -> np.ndarray:
@@ -772,6 +802,8 @@ class EmulatorDataset(Dataset):
             self.wv_in[idx],
         )
         y = self.reflectances[idx]   # raw reflectances
+        if self.log_reflectance:
+            y = np.log10(np.maximum(y, self.log_eps))
         return torch.from_numpy(x), torch.from_numpy(y)
 
 
@@ -787,6 +819,8 @@ def create_emulator_dataloaders(
         train_frac: float = 0.8,
         val_frac: float = 0.1,
         lhc_h5_path: Optional[str] = None,
+        log_reflectance: bool = True,
+        log_eps: float = 1e-6,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train/val/test DataLoaders for ForwardModelEmulator training.
@@ -828,16 +862,20 @@ def create_emulator_dataloaders(
             seed=seed,
         )
         train_ds = EmulatorDataset(h5_path, indices=train_idx,
-                                   instrument=instrument, lhc_h5_path=lhc_h5_path)
-        val_ds   = EmulatorDataset(h5_path, indices=val_idx,  instrument=instrument)
-        test_ds  = EmulatorDataset(h5_path, indices=test_idx, instrument=instrument)
+                                   instrument=instrument, lhc_h5_path=lhc_h5_path,
+                                   log_reflectance=log_reflectance, log_eps=log_eps)
+        val_ds   = EmulatorDataset(h5_path, indices=val_idx,  instrument=instrument,
+                                   log_reflectance=log_reflectance, log_eps=log_eps)
+        test_ds  = EmulatorDataset(h5_path, indices=test_idx, instrument=instrument,
+                                   log_reflectance=log_reflectance, log_eps=log_eps)
     else:
         if lhc_h5_path is not None:
             warnings.warn(
                 "lhc_h5_path is ignored when profile_holdout=False. "
                 "Enable profile_holdout=True to use LHC augmentation."
             )
-        full_ds = EmulatorDataset(h5_path, instrument=instrument)
+        full_ds = EmulatorDataset(h5_path, instrument=instrument,
+                                  log_reflectance=log_reflectance, log_eps=log_eps)
         n       = len(full_ds)
         n_train = int(n * train_frac)
         n_val   = int(n * val_frac)
