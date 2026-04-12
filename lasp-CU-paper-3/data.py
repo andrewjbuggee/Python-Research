@@ -39,10 +39,7 @@ HYSICS_WAV_MAX = 2297.0   # nm  (band 636 center: ~2297.05 nm)
 DEFAULT_N_LEVELS = 10
 
 # ERA5 water vapour column normalization bounds (log10 scale, molec/cm²)
-# Applied to wv_above_cloud and wv_in_cloud before feeding to the emulator.
-# Log10 transform is essential: these columns span ~3–5 orders of magnitude
-# across VOCALS-REx / ORACLES conditions.
-#
+# Only used when use_era5_profile=False (legacy 2-scalar mode).
 # Run patch_hdf5_era5.py and read the printed summary to validate these bounds
 # against your actual dataset.  Conservative defaults are set here; if
 # observed log10 values fall outside [MIN, MAX] the normalized input will
@@ -51,6 +48,12 @@ WV_ABOVE_LOG10_MIN = 21.0   # log10(molec/cm²) — very dry above-cloud column
 WV_ABOVE_LOG10_MAX = 23.0   # log10(molec/cm²) — very moist above-cloud column
 WV_IN_LOG10_MIN    = 19.0   # log10(molec/cm²) — very thin / dry in-cloud layer
 WV_IN_LOG10_MAX    = 23.0   # log10(molec/cm²) — thick / moist in-cloud layer
+
+# ERA5 full vapor-concentration profile normalization (molecules/cm³, log10 scale).
+# Surface values reach ~3–5 × 10^17 molec/cm³; upper troposphere/stratosphere
+# values approach zero.  log10(v + 1.0) maps the range to [0, ~17.5]; dividing
+# by ERA5_VAP_LOG10_MAX normalises to [0, 1].
+ERA5_VAP_LOG10_MAX = 18.0   # log10(molec/cm³) — conservative upper bound
 
 # Physical bounds on effective radius (μm)
 # Update RE_MAX after running convert_matFiles_to_HDF.py — the scan pass
@@ -529,8 +532,10 @@ class EmulatorDataset(Dataset):
     """
     Dataset for training the ForwardModelEmulator.
 
-    Inputs  (x): normalized (r_e profile | τ_c | geometry | wv_above | wv_in)
-                 — 17 features (15 cloud+geometry + 2 ERA5 water vapour)
+    Inputs  (x): normalized (r_e profile | τ_c | geometry | ERA5 vapor profile)
+                 — 52 features (15 cloud+geometry + 37 ERA5 vapor levels)
+                   when use_era5_profile=True (default); or 17 features with
+                   the legacy 2-scalar WV mode when use_era5_profile=False
     Outputs (y): reflectance spectrum — 636 values, optionally log10-transformed
 
     This uses the same HDF5 file as LibRadtranDataset but flips the role of
@@ -567,6 +572,19 @@ class EmulatorDataset(Dataset):
     spectral data fidelity loss:
         R̂_linear = 10^(emulator_output)
 
+    Full ERA5 vapor-profile mode (use_era5_profile=True, default)
+    -------------------------------------------------------------
+    The 1.9 μm and 1.38 μm H₂O absorption bands are extremely sensitive to
+    the *vertical distribution* of water vapor, not just the total column.
+    The legacy 2-scalar approach (wv_above, wv_in) loses all vertical structure
+    and is the primary reason those bands have MRE > 20% in training.
+
+    Setting use_era5_profile=True replaces the 2 scalars with all 37 ERA5
+    pressure-level vapor concentrations (molecules/cm³), log10-normalized to
+    [0, 1].  The HDF5 file must contain the 'era5_vapor_concentration' dataset
+    (shape n_total × 37), written by convert_matFiles_to_HDF.py.
+    This changes n_atm_inputs from 2 → 37 (total input dim 15 + 37 = 52).
+
     Profile-held-out splits
     -----------------------
     Pass a pre-computed index array from create_profile_aware_splits() so
@@ -592,11 +610,16 @@ class EmulatorDataset(Dataset):
     _SAZ_RANGE = (0.0, 180.0)
     _VAZ_RANGE = (0.0, 180.0)
 
-    # ERA5 water vapour normalization (log10 space, molec/cm²)
+    # ERA5 water vapour normalization (log10 space, molec/cm²) — legacy 2-scalar mode
     _WV_ABOVE_LOG10_MIN = WV_ABOVE_LOG10_MIN
     _WV_ABOVE_LOG10_MAX = WV_ABOVE_LOG10_MAX
     _WV_IN_LOG10_MIN    = WV_IN_LOG10_MIN
     _WV_IN_LOG10_MAX    = WV_IN_LOG10_MAX
+
+    # ERA5 full 37-level vapor-concentration normalization (molec/cm³, log10)
+    # log10(v + 1.0) maps the physical range to [0, ~17.5]; dividing by this
+    # constant normalises each level to approximately [0, 1].
+    _ERA5_VAP_LOG10_MAX = ERA5_VAP_LOG10_MAX
 
     def __init__(self,
                  h5_path: str,
@@ -604,7 +627,8 @@ class EmulatorDataset(Dataset):
                  instrument: str = 'hysics',
                  lhc_h5_path: Optional[str] = None,
                  log_reflectance: bool = True,
-                 log_eps: float = 1e-6):
+                 log_eps: float = 1e-6,
+                 use_era5_profile: bool = True):
         """
         Parameters
         ----------
@@ -627,6 +651,12 @@ class EmulatorDataset(Dataset):
             Small floor added before log10 to avoid log(0).  Default 1e-6
             (well below any physical reflectance, so it barely affects bright
             channels while stabilising deep absorption-band values near zero).
+        use_era5_profile : bool
+            If True (default), use the full 37-level ERA5 vapor concentration
+            profile (era5_vapor_concentration in HDF5) as atmospheric inputs.
+            n_atm_inputs must be set to 37 in EmulatorConfig / emulator.yaml.
+            If False, fall back to the 2-scalar (wv_above_cloud, wv_in_cloud)
+            approach; set n_atm_inputs=2 accordingly.
         """
         if instrument not in ('hysics', 'emit'):
             raise ValueError(f"instrument must be 'hysics' or 'emit', got {instrument!r}")
@@ -645,27 +675,43 @@ class EmulatorDataset(Dataset):
             self.wavelengths = (f['wavelengths'][:].astype(np.float32)
                                 if 'wavelengths' in f else None)
 
-            # ERA5 water vapour columns — required for correct absorption-band
-            # prediction.  Raise clearly if the HDF5 predates the ERA5 patch.
-            if 'wv_above_cloud' not in f or 'wv_in_cloud' not in f:
-                raise KeyError(
-                    "HDF5 file is missing ERA5 water vapour datasets "
-                    "('wv_above_cloud', 'wv_in_cloud'). "
-                    "Run patch_hdf5_era5.py to add them."
-                )
-            all_wv_above = f['wv_above_cloud'][:].astype(np.float64)
-            all_wv_in    = f['wv_in_cloud'][:].astype(np.float64)
+            if use_era5_profile:
+                # Full 37-level vapor concentration profile.
+                # Directly encodes the vertical WV distribution needed to
+                # predict absorption-band (1.38 μm, 1.9 μm) reflectances.
+                if 'era5_vapor_concentration' not in f:
+                    raise KeyError(
+                        "HDF5 file is missing 'era5_vapor_concentration'. "
+                        "Re-run convert_matFiles_to_HDF.py to generate it."
+                    )
+                all_era5_vap = f['era5_vapor_concentration'][:].astype(np.float32)
+                all_wv_above = None
+                all_wv_in    = None
+            else:
+                # Legacy 2-scalar mode — integrated WV columns only.
+                if 'wv_above_cloud' not in f or 'wv_in_cloud' not in f:
+                    raise KeyError(
+                        "HDF5 file is missing ERA5 water vapour datasets "
+                        "('wv_above_cloud', 'wv_in_cloud'). "
+                        "Run patch_hdf5_era5.py to add them."
+                    )
+                all_wv_above = f['wv_above_cloud'][:].astype(np.float64)
+                all_wv_in    = f['wv_in_cloud'][:].astype(np.float64)
+                all_era5_vap = None
 
         if indices is not None:
-            all_refl      = all_refl[indices]
-            all_profiles  = all_profiles[indices]
-            all_tau_c     = all_tau_c[indices]
-            all_sza       = all_sza[indices]
-            all_vza       = all_vza[indices]
-            all_saz       = all_saz[indices]
-            all_vaz       = all_vaz[indices]
-            all_wv_above  = all_wv_above[indices]
-            all_wv_in     = all_wv_in[indices]
+            all_refl     = all_refl[indices]
+            all_profiles = all_profiles[indices]
+            all_tau_c    = all_tau_c[indices]
+            all_sza      = all_sza[indices]
+            all_vza      = all_vza[indices]
+            all_saz      = all_saz[indices]
+            all_vaz      = all_vaz[indices]
+            if all_era5_vap is not None:
+                all_era5_vap = all_era5_vap[indices]
+            if all_wv_above is not None:
+                all_wv_above = all_wv_above[indices]
+                all_wv_in    = all_wv_in[indices]
 
         # Optional LHC augmentation — training split only
         if lhc_h5_path is not None:
@@ -683,18 +729,33 @@ class EmulatorDataset(Dataset):
                 lhc_vza      = f['vza'][:].astype(np.float32)
                 lhc_saz      = f['saz'][:].astype(np.float32)
                 lhc_vaz      = f['vaz'][:].astype(np.float32)
-                if 'wv_above_cloud' in f:
-                    lhc_wv_above = f['wv_above_cloud'][:].astype(np.float64)
-                    lhc_wv_in    = f['wv_in_cloud'][:].astype(np.float64)
+
+                if use_era5_profile:
+                    if 'era5_vapor_concentration' in f:
+                        lhc_era5_vap = f['era5_vapor_concentration'][:].astype(np.float32)
+                    else:
+                        warnings.warn(
+                            "LHC file has no era5_vapor_concentration. "
+                            "Filling with training-set column means per level. "
+                            "Re-run convert_matFiles_to_HDF.py on the LHC data for best results."
+                        )
+                        lhc_era5_vap = np.tile(all_era5_vap.mean(axis=0),
+                                               (len(lhc_refl), 1))
+                    lhc_wv_above = None
+                    lhc_wv_in    = None
                 else:
-                    # LHC file predates ERA5 patch — fill with training-set means
-                    warnings.warn(
-                        "LHC file has no ERA5 water vapour data. "
-                        "Filling wv_above_cloud / wv_in_cloud with training-set means. "
-                        "Run patch_hdf5_era5.py on the LHC file for correct values."
-                    )
-                    lhc_wv_above = np.full(len(lhc_refl), all_wv_above.mean())
-                    lhc_wv_in    = np.full(len(lhc_refl), all_wv_in.mean())
+                    if 'wv_above_cloud' in f:
+                        lhc_wv_above = f['wv_above_cloud'][:].astype(np.float64)
+                        lhc_wv_in    = f['wv_in_cloud'][:].astype(np.float64)
+                    else:
+                        warnings.warn(
+                            "LHC file has no ERA5 water vapour data. "
+                            "Filling wv_above_cloud / wv_in_cloud with training-set means. "
+                            "Run patch_hdf5_era5.py on the LHC file for correct values."
+                        )
+                        lhc_wv_above = np.full(len(lhc_refl), all_wv_above.mean())
+                        lhc_wv_in    = np.full(len(lhc_refl), all_wv_in.mean())
+                    lhc_era5_vap = None
 
             all_refl     = np.concatenate([all_refl,     lhc_refl],     axis=0)
             all_profiles = np.concatenate([all_profiles, lhc_profiles], axis=0)
@@ -703,40 +764,45 @@ class EmulatorDataset(Dataset):
             all_vza      = np.concatenate([all_vza,      lhc_vza],      axis=0)
             all_saz      = np.concatenate([all_saz,      lhc_saz],      axis=0)
             all_vaz      = np.concatenate([all_vaz,      lhc_vaz],      axis=0)
-            all_wv_above = np.concatenate([all_wv_above, lhc_wv_above], axis=0)
-            all_wv_in    = np.concatenate([all_wv_in,    lhc_wv_in],    axis=0)
+            if use_era5_profile:
+                all_era5_vap = np.concatenate([all_era5_vap, lhc_era5_vap], axis=0)
+            else:
+                all_wv_above = np.concatenate([all_wv_above, lhc_wv_above], axis=0)
+                all_wv_in    = np.concatenate([all_wv_in,    lhc_wv_in],    axis=0)
 
         # Store arrays
-        self.reflectances = all_refl       # targets — raw, not normalized
-        self.profiles     = all_profiles
-        self.tau_c        = all_tau_c
-        self.sza          = all_sza
-        self.vza          = all_vza
-        self.saz          = all_saz
-        self.vaz          = all_vaz
-        self.wv_above     = all_wv_above   # above-cloud WV column (molec/cm²)
-        self.wv_in        = all_wv_in      # in-cloud WV column    (molec/cm²)
+        self.reflectances    = all_refl       # targets — raw, not normalized
+        self.profiles        = all_profiles
+        self.tau_c           = all_tau_c
+        self.sza             = all_sza
+        self.vza             = all_vza
+        self.saz             = all_saz
+        self.vaz             = all_vaz
+        self.use_era5_profile = use_era5_profile
+        self.era5_vapor      = all_era5_vap   # (n, 37) float32 or None
+        self.wv_above        = all_wv_above   # above-cloud WV column (molec/cm²) or None
+        self.wv_in           = all_wv_in      # in-cloud WV column (molec/cm²) or None
 
-        # Warn if any WV values fall outside the normalization bounds after
-        # log10-transform — indicates the constants in data.py need updating.
-        log_above = np.log10(np.maximum(all_wv_above, 1e10))
-        log_in    = np.log10(np.maximum(all_wv_in,    1e10))
-        if log_above.min() < self._WV_ABOVE_LOG10_MIN or \
-           log_above.max() > self._WV_ABOVE_LOG10_MAX:
-            warnings.warn(
-                f"wv_above_cloud log10 range [{log_above.min():.2f}, "
-                f"{log_above.max():.2f}] exceeds normalization bounds "
-                f"[{self._WV_ABOVE_LOG10_MIN}, {self._WV_ABOVE_LOG10_MAX}]. "
-                "Update WV_ABOVE_LOG10_MIN/MAX in data.py."
-            )
-        if log_in.min() < self._WV_IN_LOG10_MIN or \
-           log_in.max() > self._WV_IN_LOG10_MAX:
-            warnings.warn(
-                f"wv_in_cloud log10 range [{log_in.min():.2f}, "
-                f"{log_in.max():.2f}] exceeds normalization bounds "
-                f"[{self._WV_IN_LOG10_MIN}, {self._WV_IN_LOG10_MAX}]. "
-                "Update WV_IN_LOG10_MIN/MAX in data.py."
-            )
+        # Warn if legacy 2-scalar WV values fall outside normalization bounds.
+        if not use_era5_profile:
+            log_above = np.log10(np.maximum(all_wv_above, 1e10))
+            log_in    = np.log10(np.maximum(all_wv_in,    1e10))
+            if log_above.min() < self._WV_ABOVE_LOG10_MIN or \
+               log_above.max() > self._WV_ABOVE_LOG10_MAX:
+                warnings.warn(
+                    f"wv_above_cloud log10 range [{log_above.min():.2f}, "
+                    f"{log_above.max():.2f}] exceeds normalization bounds "
+                    f"[{self._WV_ABOVE_LOG10_MIN}, {self._WV_ABOVE_LOG10_MAX}]. "
+                    "Update WV_ABOVE_LOG10_MIN/MAX in data.py."
+                )
+            if log_in.min() < self._WV_IN_LOG10_MIN or \
+               log_in.max() > self._WV_IN_LOG10_MAX:
+                warnings.warn(
+                    f"wv_in_cloud log10 range [{log_in.min():.2f}, "
+                    f"{log_in.max():.2f}] exceeds normalization bounds "
+                    f"[{self._WV_IN_LOG10_MIN}, {self._WV_IN_LOG10_MAX}]. "
+                    "Update WV_IN_LOG10_MIN/MAX in data.py."
+                )
 
         self.log_reflectance = log_reflectance
         self.log_eps         = log_eps
@@ -744,16 +810,25 @@ class EmulatorDataset(Dataset):
         self.n_wavelengths   = self.reflectances.shape[1]
 
     def _normalize_inputs(self, profile, tau_c, sza, vza, saz, vaz,
-                          wv_above, wv_in) -> np.ndarray:
+                          era5_vapor=None,
+                          wv_above=None, wv_in=None) -> np.ndarray:
         """
-        Normalize all 17 inputs to [0, 1] using fixed physical bounds.
+        Normalize all emulator inputs to [0, 1] using fixed physical bounds.
 
         Cloud + geometry (15 values): same linear bounds as LibRadtranDataset
         so emulator inputs match the retrieval network's output numerically.
 
-        Water vapour (2 values): log10-transformed before normalization because
-        column densities span ~5 orders of magnitude.  The log10 bounds are
-        defined by WV_ABOVE_LOG10_MIN/MAX and WV_IN_LOG10_MIN/MAX in data.py.
+        Atmospheric inputs — two modes:
+
+        use_era5_profile=True (default, 37 values):
+            Full ERA5 vapor concentration profile.  Each level is normalized as
+                log10(v + 1.0) / ERA5_VAP_LOG10_MAX  ∈ [0, 1]
+            This encodes the vertical WV distribution needed to predict spectral
+            shape within H₂O absorption bands (1.38 μm, 1.9 μm).
+
+        use_era5_profile=False (legacy, 2 values):
+            Integrated above-cloud and in-cloud WV column densities,
+            log10-transformed with fixed bounds.
         """
         profile_norm = ((profile - self._RE_MIN)
                         / (self._RE_MAX - self._RE_MIN)).astype(np.float32)
@@ -768,39 +843,59 @@ class EmulatorDataset(Dataset):
         vaz_norm = np.float32((vaz - self._VAZ_RANGE[0])
                               / (self._VAZ_RANGE[1] - self._VAZ_RANGE[0]))
 
-        # Log10-normalize water vapour columns
-        log_above = np.log10(max(float(wv_above), 1e10))
-        log_in    = np.log10(max(float(wv_in),    1e10))
-        wv_above_norm = np.float32(
-            (log_above - self._WV_ABOVE_LOG10_MIN)
-            / (self._WV_ABOVE_LOG10_MAX - self._WV_ABOVE_LOG10_MIN)
-        )
-        wv_in_norm = np.float32(
-            (log_in - self._WV_IN_LOG10_MIN)
-            / (self._WV_IN_LOG10_MAX - self._WV_IN_LOG10_MIN)
-        )
+        if era5_vapor is not None:
+            # Full 37-level profile: log10(v + 1) / LOG10_MAX → [0, 1]
+            # Adding 1 before log10 ensures log10(0) = 0 (not -inf) for
+            # very dry levels near the top of the atmosphere.
+            vap_norm = (np.log10(era5_vapor.astype(np.float64) + 1.0)
+                        / self._ERA5_VAP_LOG10_MAX).clip(0.0, 1.1).astype(np.float32)
+            atm_part = vap_norm  # (37,)
+        else:
+            # Legacy 2-scalar mode
+            log_above = np.log10(max(float(wv_above), 1e10))
+            log_in    = np.log10(max(float(wv_in),    1e10))
+            wv_above_norm = np.float32(
+                (log_above - self._WV_ABOVE_LOG10_MIN)
+                / (self._WV_ABOVE_LOG10_MAX - self._WV_ABOVE_LOG10_MIN)
+            )
+            wv_in_norm = np.float32(
+                (log_in - self._WV_IN_LOG10_MIN)
+                / (self._WV_IN_LOG10_MAX - self._WV_IN_LOG10_MIN)
+            )
+            atm_part = np.array([wv_above_norm, wv_in_norm], dtype=np.float32)
 
         return np.concatenate([
             profile_norm,
             np.array([tau_norm], dtype=np.float32),
             np.array([sza_norm, vza_norm, saz_norm, vaz_norm], dtype=np.float32),
-            np.array([wv_above_norm, wv_in_norm], dtype=np.float32),
+            atm_part,
         ])
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
-        x = self._normalize_inputs(
-            self.profiles[idx],
-            self.tau_c[idx],
-            self.sza[idx],
-            self.vza[idx],
-            self.saz[idx],
-            self.vaz[idx],
-            self.wv_above[idx],
-            self.wv_in[idx],
-        )
+        if self.use_era5_profile:
+            x = self._normalize_inputs(
+                self.profiles[idx],
+                self.tau_c[idx],
+                self.sza[idx],
+                self.vza[idx],
+                self.saz[idx],
+                self.vaz[idx],
+                era5_vapor=self.era5_vapor[idx],
+            )
+        else:
+            x = self._normalize_inputs(
+                self.profiles[idx],
+                self.tau_c[idx],
+                self.sza[idx],
+                self.vza[idx],
+                self.saz[idx],
+                self.vaz[idx],
+                wv_above=self.wv_above[idx],
+                wv_in=self.wv_in[idx],
+            )
         y = self.reflectances[idx]   # raw reflectances
         if self.log_reflectance:
             y = np.log10(np.maximum(y, self.log_eps))
@@ -821,6 +916,7 @@ def create_emulator_dataloaders(
         lhc_h5_path: Optional[str] = None,
         log_reflectance: bool = True,
         log_eps: float = 1e-6,
+        use_era5_profile: bool = True,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train/val/test DataLoaders for ForwardModelEmulator training.
@@ -863,11 +959,14 @@ def create_emulator_dataloaders(
         )
         train_ds = EmulatorDataset(h5_path, indices=train_idx,
                                    instrument=instrument, lhc_h5_path=lhc_h5_path,
-                                   log_reflectance=log_reflectance, log_eps=log_eps)
+                                   log_reflectance=log_reflectance, log_eps=log_eps,
+                                   use_era5_profile=use_era5_profile)
         val_ds   = EmulatorDataset(h5_path, indices=val_idx,  instrument=instrument,
-                                   log_reflectance=log_reflectance, log_eps=log_eps)
+                                   log_reflectance=log_reflectance, log_eps=log_eps,
+                                   use_era5_profile=use_era5_profile)
         test_ds  = EmulatorDataset(h5_path, indices=test_idx, instrument=instrument,
-                                   log_reflectance=log_reflectance, log_eps=log_eps)
+                                   log_reflectance=log_reflectance, log_eps=log_eps,
+                                   use_era5_profile=use_era5_profile)
     else:
         if lhc_h5_path is not None:
             warnings.warn(
@@ -875,7 +974,8 @@ def create_emulator_dataloaders(
                 "Enable profile_holdout=True to use LHC augmentation."
             )
         full_ds = EmulatorDataset(h5_path, instrument=instrument,
-                                  log_reflectance=log_reflectance, log_eps=log_eps)
+                                  log_reflectance=log_reflectance, log_eps=log_eps,
+                                  use_era5_profile=use_era5_profile)
         n       = len(full_ds)
         n_train = int(n * train_frac)
         n_val   = int(n * val_frac)

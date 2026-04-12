@@ -352,8 +352,9 @@ def main():
     split_mode      = "profile-held-out" if profile_holdout else "random sample-level"
     print(f"  Split mode: {split_mode}")
 
-    log_reflectance = config['data'].get('log_reflectance', True)
-    log_eps         = float(config['data'].get('log_eps', 1e-6))
+    log_reflectance  = config['data'].get('log_reflectance', True)
+    log_eps          = float(config['data'].get('log_eps', 1e-6))
+    use_era5_profile = config['data'].get('use_era5_profile', True)
 
     train_loader, val_loader, test_loader = create_emulator_dataloaders(
         h5_path         = h5_path,
@@ -367,8 +368,9 @@ def main():
         train_frac      = config['data'].get('train_frac', 0.8),
         val_frac        = config['data'].get('val_frac', 0.1),
         lhc_h5_path     = config['data'].get('lhc_h5_path', None),
-        log_reflectance = log_reflectance,
-        log_eps         = log_eps,
+        log_reflectance  = log_reflectance,
+        log_eps          = log_eps,
+        use_era5_profile = use_era5_profile,
     )
 
     n_train = len(train_loader.dataset)
@@ -390,6 +392,7 @@ def main():
     emulator_config = EmulatorConfig(
         n_levels          = config['model'].get('n_levels', 10),
         n_geometry_inputs = config['model'].get('n_geometry_inputs', 4),
+        n_atm_inputs      = config['model'].get('n_atm_inputs', 37),
         n_wavelengths_out = config['model'].get('n_wavelengths_out', 636),
         hidden_dims       = tuple(config['model']['hidden_dims']),
         dropout           = config['model'].get('dropout', 0.05),

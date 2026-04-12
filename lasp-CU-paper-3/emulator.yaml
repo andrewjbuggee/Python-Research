@@ -49,6 +49,16 @@ data:
   log_reflectance: true
   log_eps: 1.0e-6
 
+  # --- ERA5 atmospheric input mode ---
+  # true  (default): use full 37-level vapor concentration profile as inputs.
+  #   Gives the model the vertical WV distribution needed to predict spectral
+  #   shape within H2O absorption bands (1.38 um, 1.9 um).
+  #   Requires era5_vapor_concentration in the HDF5 (written by convert_matFiles_to_HDF.py).
+  #   Set n_atm_inputs: 37 in the model section.
+  # false (legacy):  use 2-scalar (wv_above_cloud, wv_in_cloud) approach.
+  #   Set n_atm_inputs: 2 in the model section.
+  use_era5_profile: true
+
   # --- Latin Hypercube augmentation (optional) ---
   # Leave as null until you have run libRadtran on LHC parameters.
   # To generate LHC parameters:
@@ -61,27 +71,30 @@ data:
 model:
   n_levels: 10
   n_geometry_inputs: 4
-  n_atm_inputs: 2          # ERA5 water vapour: [wv_above_cloud, wv_in_cloud]
+  n_atm_inputs: 37         # full ERA5 37-level vapor profile (use_era5_profile: true)
+                            # set to 2 if use_era5_profile: false (legacy 2-scalar mode)
   n_wavelengths_out: 636
-  # 512-wide residual MLP.  Input dim = 10 + 1 + 4 + 2 = 17.
+  # 512-wide residual MLP.  Input dim = 10 + 1 + 4 + 37 = 52.
   hidden_dims: [512, 512, 512, 512, 512]
   dropout: 0.05
   activation: "gelu"
 
 training:
   batch_size: 256
-  n_epochs: 600
+  n_epochs: 1000
   learning_rate: 0.001
   weight_decay: 0.0001
   # Increased from 30 — DWMSE loss changes the convergence dynamics and needs
   # more room to find the optimum, especially for hard absorption-band channels.
-  early_stopping_patience: 50
+  early_stopping_patience: 100
 
   # ReduceLROnPlateau scheduler
   # Halves the LR whenever val loss doesn't improve for scheduler_patience epochs.
   # More stable than cosine warm restarts for this problem.
+  # patience=30 gives the model more room to benefit from each LR level before
+  # dropping further — the previous run dropped 5 times in 134 epochs (too fast).
   scheduler_factor: 0.5
-  scheduler_patience: 15
+  scheduler_patience: 30
   scheduler_eta_min: 0.000001
 
   # Dual-Weighted MSE epsilon — only used when log_reflectance: false.
