@@ -42,6 +42,13 @@ data:
   train_frac: 0.8
   val_frac: 0.1
 
+  # --- Log-reflectance output mode ---
+  # Targets are stored as log10(R + log_eps) before the loss.
+  # Use plain MSELoss (not DWMSELoss) in this mode.
+  # MRE is always reported in linear reflectance space.
+  log_reflectance: true
+  log_eps: 1.0e-6
+
   # --- Latin Hypercube augmentation (optional) ---
   # Leave as null until you have run libRadtran on LHC parameters.
   # To generate LHC parameters:
@@ -69,13 +76,15 @@ training:
   # Increased from 30 — DWMSE loss changes the convergence dynamics and needs
   # more room to find the optimum, especially for hard absorption-band channels.
   early_stopping_patience: 50
-  scheduler_T0: 50
-  scheduler_T_mult: 2
+
+  # ReduceLROnPlateau scheduler
+  # Halves the LR whenever val loss doesn't improve for scheduler_patience epochs.
+  # More stable than cosine warm restarts for this problem.
+  scheduler_factor: 0.5
+  scheduler_patience: 15
   scheduler_eta_min: 0.000001
 
-  # Dual-Weighted MSE epsilon — floor added to per-channel weight to prevent
-  # exact-zero weighting in very dark absorption channels.
-  # 1e-4 ≈ minimum physical reflectance in the deepest H2O absorption cores.
+  # Dual-Weighted MSE epsilon — only used when log_reflectance: false.
   dwmse_eps: 0.0001
 
   # Mean Relative Error target (%).

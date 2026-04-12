@@ -38,7 +38,7 @@ import h5py
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import yaml
 
 import sys
@@ -144,14 +144,20 @@ def validate(model, loader, criterion, device) -> dict:
 
 
 @torch.no_grad()
-def compute_mre(model, loader, device) -> float:
+def compute_mre(model, loader, device,
+                log_reflectance: bool = False) -> float:
     """
-    Compute mean relative error (%) across all samples and wavelengths.
+    Compute mean relative error (%) in *linear* reflectance space.
 
         MRE = 100 × mean( |R̂(λ) - R(λ)| / (R(λ) + ε) )
 
-    A small epsilon (1e-4) avoids division by near-zero values in deep
-    absorption bands where R(λ) ≈ 0.
+    When log_reflectance=True the model outputs log10(R̂) and the loader
+    yields log10(R) as targets.  Both are exponentiated back to linear space
+    before the relative error is computed so the MRE is always interpretable
+    as a percentage of the true physical reflectance.
+
+    A small epsilon (1e-4) guards against division by near-zero values in
+    deep absorption bands.
 
     Returns
     -------
@@ -167,8 +173,17 @@ def compute_mre(model, loader, device) -> float:
         y = y.to(device)
         profile, tau_c, geometry, atm = _split_input(
             x, model.config.n_levels, model.config.n_atm_inputs)
-        pred      = model(profile, tau_c, geometry, atm)
-        rel_err   = (pred - y).abs() / (y.abs() + eps)
+        pred = model(profile, tau_c, geometry, atm)
+
+        if log_reflectance:
+            # Convert log10 outputs back to linear reflectance for the MRE
+            R_pred = torch.pow(10.0, pred)
+            R_true = torch.pow(10.0, y)
+        else:
+            R_pred = pred
+            R_true = y
+
+        rel_err        = (R_pred - R_true).abs() / (R_true.abs() + eps)
         total_rel_err += rel_err.sum().item()
         n_elements    += y.numel()
 
@@ -177,7 +192,8 @@ def compute_mre(model, loader, device) -> float:
 
 @torch.no_grad()
 def compute_spectral_residuals(model, loader, device,
-                                wavelengths=None) -> dict:
+                                wavelengths=None,
+                                log_reflectance: bool = False) -> dict:
     """
     Compute per-channel residual statistics over the full data loader.
 
@@ -202,11 +218,20 @@ def compute_spectral_residuals(model, loader, device,
         y = y.to(device)
         profile, tau_c, geometry, atm = _split_input(
             x, model.config.n_levels, model.config.n_atm_inputs)
-        pred     = model(profile, tau_c, geometry, atm)
-        residual = pred - y
+        pred = model(profile, tau_c, geometry, atm)
+
+        if log_reflectance:
+            # Compute residuals in linear reflectance space
+            R_pred = torch.pow(10.0, pred)
+            R_true = torch.pow(10.0, y)
+        else:
+            R_pred = pred
+            R_true = y
+
+        residual = R_pred - R_true
 
         b_abs = residual.abs().sum(dim=0).cpu().numpy()
-        b_rel = (residual.abs() / (y.abs() + eps)).sum(dim=0).cpu().numpy()
+        b_rel = (residual.abs() / (R_true.abs() + eps)).sum(dim=0).cpu().numpy()
         b_sq  = residual.pow(2).sum(dim=0).cpu().numpy()
         b_sgn = residual.sum(dim=0).cpu().numpy()
 
@@ -327,6 +352,9 @@ def main():
     split_mode      = "profile-held-out" if profile_holdout else "random sample-level"
     print(f"  Split mode: {split_mode}")
 
+    log_reflectance = config['data'].get('log_reflectance', True)
+    log_eps         = float(config['data'].get('log_eps', 1e-6))
+
     train_loader, val_loader, test_loader = create_emulator_dataloaders(
         h5_path         = h5_path,
         batch_size      = config['training']['batch_size'],
@@ -339,6 +367,8 @@ def main():
         train_frac      = config['data'].get('train_frac', 0.8),
         val_frac        = config['data'].get('val_frac', 0.1),
         lhc_h5_path     = config['data'].get('lhc_h5_path', None),
+        log_reflectance = log_reflectance,
+        log_eps         = log_eps,
     )
 
     n_train = len(train_loader.dataset)
@@ -374,8 +404,15 @@ def main():
     # ------------------------------------------------------------------
     # Loss
     # ------------------------------------------------------------------
-    criterion = DWMSELoss(eps=config['training'].get('dwmse_eps', 1e-4)).to(device)
-    print(f"\nLoss: DWMSELoss  (eps={criterion.eps})")
+    # In log-reflectance mode use plain MSE: the log10 transform already
+    # compresses the ~4-order-of-magnitude dynamic range, so DWMSELoss is
+    # unnecessary and would actually upweight dark (more negative) channels.
+    if log_reflectance:
+        criterion = nn.MSELoss().to(device)
+        print(f"\nLoss: MSELoss  (log-reflectance mode, log_eps={log_eps})")
+    else:
+        criterion = DWMSELoss(eps=config['training'].get('dwmse_eps', 1e-4)).to(device)
+        print(f"\nLoss: DWMSELoss  (eps={criterion.eps})")
 
     # ------------------------------------------------------------------
     # Optimizer + scheduler
@@ -385,11 +422,12 @@ def main():
         lr           = config['training']['learning_rate'],
         weight_decay = config['training'].get('weight_decay', 1e-4),
     )
-    scheduler = CosineAnnealingWarmRestarts(
+    scheduler = ReduceLROnPlateau(
         optimizer,
-        T_0     = config['training'].get('scheduler_T0', 50),
-        T_mult  = config['training'].get('scheduler_T_mult', 2),
-        eta_min = config['training'].get('scheduler_eta_min', 1e-6),
+        mode       = 'min',
+        factor     = config['training'].get('scheduler_factor', 0.5),
+        patience   = config['training'].get('scheduler_patience', 15),
+        min_lr     = config['training'].get('scheduler_eta_min', 1e-6),
     )
 
     # ------------------------------------------------------------------
@@ -430,21 +468,25 @@ def main():
 
         train_losses = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_losses   = validate(model, val_loader, criterion, device)
-        scheduler.step(epoch)
 
-        elapsed      = time.time() - t0
-        val_loss     = val_losses['loss']   # DWMSE — used for checkpointing / early stopping
-        val_mse_plain= val_losses['mse']    # plain MSE — logged for interpretability
-        current_lr   = optimizer.param_groups[0]['lr']
+        elapsed       = time.time() - t0
+        val_loss      = val_losses['loss']   # MSE (log mode) or DWMSE (linear mode)
+        val_mse_plain = val_losses['mse']    # plain MSE — logged for interpretability
+        current_lr    = optimizer.param_groups[0]['lr']
+
+        # ReduceLROnPlateau monitors the validation loss
+        scheduler.step(val_loss)
 
         # ---- Compute MRE at intervals (more expensive than MSE alone) ----
         val_mre = None
+        loss_label = 'MSE' if log_reflectance else 'DWMSE'
         if epoch % mre_log_interval == 0 or epoch == n_epochs - 1:
-            val_mre = compute_mre(model, val_loader, device)
+            val_mre = compute_mre(model, val_loader, device,
+                                  log_reflectance=log_reflectance)
 
             print(f"Epoch {epoch:4d} | "
-                  f"Train DWMSE: {train_losses['loss']:.6f} | "
-                  f"Val DWMSE: {val_loss:.6f} | "
+                  f"Train {loss_label}: {train_losses['loss']:.6f} | "
+                  f"Val {loss_label}: {val_loss:.6f} | "
                   f"Val MSE: {val_mse_plain:.6f} | "
                   f"Val MRE: {val_mre:.3f}% | "
                   f"LR: {current_lr:.2e} | "
@@ -465,16 +507,16 @@ def main():
                 print()
         else:
             print(f"Epoch {epoch:4d} | "
-                  f"Train DWMSE: {train_losses['loss']:.6f} | "
-                  f"Val DWMSE: {val_loss:.6f} | "
+                  f"Train {loss_label}: {train_losses['loss']:.6f} | "
+                  f"Val {loss_label}: {val_loss:.6f} | "
                   f"Val MSE: {val_mse_plain:.6f} | "
                   f"LR: {current_lr:.2e} | "
                   f"{elapsed:.1f}s")
 
         history.append({
             'epoch':       epoch,
-            'train_dwmse': train_losses['loss'],
-            'val_dwmse':   val_loss,
+            'train_loss':  train_losses['loss'],
+            'val_loss':    val_loss,
             'val_mse':     val_mse_plain,
             'val_mre':     val_mre,
             'lr':          current_lr,
@@ -543,13 +585,15 @@ def main():
             wavelengths = f['wavelengths'][:].astype(np.float32)
 
     test_mse = validate(model, test_loader, criterion, device)['mse']
-    test_mre = compute_mre(model, test_loader, device)
+    test_mre = compute_mre(model, test_loader, device,
+                           log_reflectance=log_reflectance)
     print(f"\n  Test MSE: {test_mse:.6f}")
     print(f"  Test MRE: {test_mre:.3f}%")
 
     print("\n  Per-channel spectral residuals:")
     test_residuals = compute_spectral_residuals(
-        model, test_loader, device, wavelengths
+        model, test_loader, device, wavelengths,
+        log_reflectance=log_reflectance,
     )
     print_spectral_summary(test_residuals)
 
