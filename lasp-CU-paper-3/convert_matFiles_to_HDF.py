@@ -11,10 +11,15 @@ Structure of each .MAT file
       - HySICS: 0.3% Gaussian noise
       - EMIT: 4.0% Gaussian noise
 
-  changing_variables_allStateVectors : (636 * 128, 6) float64
+  changing_variables_allStateVectors : (636 * 128, N_cols) float64
       One row per (wavelength by geometry) RT simulation.
-      Column 0 = VZA (deg), Column 1 = VAZ (deg), Column 2 = SAZ (deg).
-      Columns 3, 4, 5 = band lower bound (nm), upper bound (nm), band index.
+      N_cols is 6 or 7 depending on which .mat file version generated the data.
+      Column  0     = VZA (deg), Column 1 = VAZ (deg), Column 2 = SAZ (deg).
+      Column -3     = band lower bound (nm)   (3rd from last)
+      Column -2     = band upper bound (nm)   (2nd from last)
+      Column -1     = band index (1-based)    (last column)
+      Some 7-column files have an unused zero placeholder at column 3.
+      Band center wavelength = mean(col -3, col -2).
       Extract geometry for each of the 128 viewing configs with [::636, :3].
 
   re  : (n_insitu,) float64   — in-situ r_e profile, cloud top → base (μm)
@@ -321,12 +326,16 @@ plt.show()
 
 # ============================================================
 # Extract wavelength grid from the first file
-# (band center = mean of lower and upper bound in columns 3 and 4)
+# Band center = mean of lower and upper bounds.
+# These are always in the 3rd-to-last (-3) and 2nd-to-last (-2) columns,
+# with the last column (-1) always being the band index.
+# (Some .mat files have 6 columns, others 7 — using relative indices
+#  makes this robust to both layouts.)
 # ============================================================
 
 d_ref = scipy.io.loadmat(valid_mat_files[0], squeeze_me=True)
 cv_ref = d_ref['changing_variables_allStateVectors']
-wavelengths = ((cv_ref[:N_WAVELENGTHS, 3] + cv_ref[:N_WAVELENGTHS, 4]) / 2
+wavelengths = ((cv_ref[:N_WAVELENGTHS, -3] + cv_ref[:N_WAVELENGTHS, -2]) / 2
                ).astype(np.float32)
 assert len(wavelengths) == N_WAVELENGTHS
 print(f'\nWavelength grid: {N_WAVELENGTHS} bands, '

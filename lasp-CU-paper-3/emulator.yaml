@@ -10,9 +10,9 @@
 # The emulator maps (r_e profile, tau_c, geometry) -> R(lambda).
 # It is trained here, then frozen and plugged into the PINN loss.
 #
-# HySICS spectral range in this dataset: 166 – 1138.6 nm, 636 channels
-#   Best channels (easiest):  UV 166–200 nm — bright, smooth Rayleigh regime
-#   Worst channels (hardest): H2O absorption 910–940 nm — near-zero reflectance
+# HySICS spectral range in this dataset: ~352 – 2297 nm, 636 channels
+#   Best channels (easiest):  vis/NIR 500–800 nm — bright, smooth continuum
+#   Worst channels (hardest): H2O absorption ~1380 nm & ~1900 nm — near-zero reflectance
 #
 # Accuracy gate
 # -------------

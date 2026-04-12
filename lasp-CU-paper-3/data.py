@@ -27,11 +27,12 @@ import warnings
 MODIS_WAVELENGTHS = np.array([645, 858.5, 469, 555, 1240, 1640, 2130])
 
 # HySICS spectral range in the VOCALS-REx training dataset
-# 636 channels from 166.0 to 1138.6 nm at ~1.53 nm spacing
-# (not 350-2300 nm as the original instrument design; this is the simulated
-#  range used in the libRadtran RT calculations for Paper 3)
-HYSICS_WAV_MIN = 166.0    # nm
-HYSICS_WAV_MAX = 1138.6   # nm
+# 636 channels spanning ~352–2297 nm (band center = mean of lower/upper bounds
+# stored in columns 4 & 5 of changing_variables_allStateVectors in each .mat file).
+# NOTE: The HDF5 file created before 12-Apr-2026 used wrong columns [3,4] and
+#       stored 166–1138 nm; patch_hdf5_wavelengths.py corrects that in-place.
+HYSICS_WAV_MIN = 352.0    # nm  (band 1 center: ~351.95 nm)
+HYSICS_WAV_MAX = 2297.0   # nm  (band 636 center: ~2297.05 nm)
 
 # Number of vertical levels for profile retrieval
 # Start with N=10; increase later if information content supports it
