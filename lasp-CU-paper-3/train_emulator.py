@@ -408,7 +408,9 @@ def main():
         dropout           = config['model'].get('dropout', 0.05),
         activation        = config['model'].get('activation', 'gelu'),
     )
-    model    = ForwardModelEmulator(emulator_config).to(device)
+    # Build model on CPU first so PCA buffers are registered before .to(device).
+    # Calling register_pca() after .to(device) would leave the new tensors on CPU.
+    model = ForwardModelEmulator(emulator_config)
 
     # Register PCA decoder on model (carries to GPU and into checkpoints)
     if n_pca_components > 0:
@@ -421,6 +423,9 @@ def main():
             print(f"  PCA decoder registered: {n_pca_components} components → 636 channels")
         else:
             warnings.warn("n_pca_components > 0 but no PCA found on training dataset.")
+
+    # Move everything (weights + PCA buffers) to the target device in one shot
+    model = model.to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"\nForwardModelEmulator: {n_params:,} trainable parameters")

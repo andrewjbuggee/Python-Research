@@ -336,8 +336,14 @@ class ForwardModelEmulator(nn.Module):
         pca_components : (n_pca_components, n_wavelengths) float32
             PCA loading matrix from the training set.
         """
-        self.pca_mean       = torch.tensor(pca_mean,       dtype=torch.float32)
-        self.pca_components = torch.tensor(pca_components, dtype=torch.float32)
+        # Place buffers on the same device as the model's parameters so that
+        # reconstruct() works correctly even if this is called after .to(device).
+        try:
+            dev = next(self.parameters()).device
+        except StopIteration:
+            dev = torch.device('cpu')
+        self.pca_mean       = torch.tensor(pca_mean,       dtype=torch.float32, device=dev)
+        self.pca_components = torch.tensor(pca_components, dtype=torch.float32, device=dev)
 
     def reconstruct(self, scores: torch.Tensor) -> torch.Tensor:
         """
