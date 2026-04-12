@@ -43,7 +43,7 @@ import yaml
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from models import ForwardModelEmulator, EmulatorConfig
+from models import ForwardModelEmulator, EmulatorConfig, DWMSELoss
 from data import create_emulator_dataloaders
 
 
@@ -79,10 +79,9 @@ def _split_input(x: torch.Tensor, n_levels: int):
     return profile, tau_c, geometry
 
 
-def train_one_epoch(model, loader, optimizer, device) -> dict:
+def train_one_epoch(model, loader, criterion, optimizer, device) -> dict:
     """Train for one epoch. Returns dict of average loss values."""
     model.train()
-    criterion  = nn.MSELoss()
     total_loss = 0.0
     n_batches  = 0
 
@@ -102,26 +101,29 @@ def train_one_epoch(model, loader, optimizer, device) -> dict:
         total_loss += loss.item()
         n_batches  += 1
 
-    return {'mse': total_loss / n_batches}
+    return {'loss': total_loss / n_batches}
 
 
 @torch.no_grad()
-def validate(model, loader, device) -> dict:
-    """Compute validation MSE. Returns loss dict."""
+def validate(model, loader, criterion, device) -> dict:
+    """Compute validation loss (DWMSE) and plain MSE for monitoring. Returns loss dict."""
     model.eval()
-    criterion  = nn.MSELoss()
-    total_loss = 0.0
-    n_batches  = 0
+    total_dwmse = 0.0
+    total_mse   = 0.0
+    mse_fn      = nn.MSELoss()
+    n_batches   = 0
 
     for x, y in loader:
         x = x.to(device)
         y = y.to(device)
         profile, tau_c, geometry = _split_input(x, model.config.n_levels)
-        pred        = model(profile, tau_c, geometry)
-        total_loss += criterion(pred, y).item()
-        n_batches  += 1
+        pred           = model(profile, tau_c, geometry)
+        total_dwmse   += criterion(pred, y).item()
+        total_mse     += mse_fn(pred, y).item()
+        n_batches     += 1
 
-    return {'mse': total_loss / n_batches}
+    return {'loss': total_dwmse / n_batches,
+            'mse':  total_mse   / n_batches}
 
 
 @torch.no_grad()
@@ -344,6 +346,12 @@ def main():
           f"{list(emulator_config.hidden_dims)} → {emulator_config.n_wavelengths_out}")
 
     # ------------------------------------------------------------------
+    # Loss
+    # ------------------------------------------------------------------
+    criterion = DWMSELoss(eps=config['training'].get('dwmse_eps', 1e-4)).to(device)
+    print(f"\nLoss: DWMSELoss  (eps={criterion.eps})")
+
+    # ------------------------------------------------------------------
     # Optimizer + scheduler
     # ------------------------------------------------------------------
     optimizer = optim.AdamW(
@@ -394,13 +402,14 @@ def main():
     for epoch in range(start_epoch, n_epochs):
         t0 = time.time()
 
-        train_losses = train_one_epoch(model, train_loader, optimizer, device)
-        val_losses   = validate(model, val_loader, device)
+        train_losses = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        val_losses   = validate(model, val_loader, criterion, device)
         scheduler.step(epoch)
 
-        elapsed    = time.time() - t0
-        val_mse    = val_losses['mse']
-        current_lr = optimizer.param_groups[0]['lr']
+        elapsed      = time.time() - t0
+        val_loss     = val_losses['loss']   # DWMSE — used for checkpointing / early stopping
+        val_mse_plain= val_losses['mse']    # plain MSE — logged for interpretability
+        current_lr   = optimizer.param_groups[0]['lr']
 
         # ---- Compute MRE at intervals (more expensive than MSE alone) ----
         val_mre = None
@@ -408,8 +417,9 @@ def main():
             val_mre = compute_mre(model, val_loader, device)
 
             print(f"Epoch {epoch:4d} | "
-                  f"Train MSE: {train_losses['mse']:.6f} | "
-                  f"Val MSE: {val_mse:.6f} | "
+                  f"Train DWMSE: {train_losses['loss']:.6f} | "
+                  f"Val DWMSE: {val_loss:.6f} | "
+                  f"Val MSE: {val_mse_plain:.6f} | "
                   f"Val MRE: {val_mre:.3f}% | "
                   f"LR: {current_lr:.2e} | "
                   f"{elapsed:.1f}s")
@@ -419,7 +429,7 @@ def main():
                 emulator_ready = True
                 ready_path = output_dir / "emulator_ready.pt"
                 save_checkpoint(model, optimizer, scheduler, epoch,
-                                val_mse, val_mre, config, ready_path)
+                                val_mse_plain, val_mre, config, ready_path)
                 print()
                 print(f"  ╔══════════════════════════════════════════════════╗")
                 print(f"  ║  EMULATOR READY                                  ║")
@@ -429,27 +439,29 @@ def main():
                 print()
         else:
             print(f"Epoch {epoch:4d} | "
-                  f"Train MSE: {train_losses['mse']:.6f} | "
-                  f"Val MSE: {val_mse:.6f} | "
+                  f"Train DWMSE: {train_losses['loss']:.6f} | "
+                  f"Val DWMSE: {val_loss:.6f} | "
+                  f"Val MSE: {val_mse_plain:.6f} | "
                   f"LR: {current_lr:.2e} | "
                   f"{elapsed:.1f}s")
 
         history.append({
-            'epoch':     epoch,
-            'train_mse': train_losses['mse'],
-            'val_mse':   val_mse,
-            'val_mre':   val_mre,
-            'lr':        current_lr,
-            'time_s':    elapsed,
+            'epoch':       epoch,
+            'train_dwmse': train_losses['loss'],
+            'val_dwmse':   val_loss,
+            'val_mse':     val_mse_plain,
+            'val_mre':     val_mre,
+            'lr':          current_lr,
+            'time_s':      elapsed,
         })
 
-        # ---- Checkpointing (on val MSE) ----
-        if val_mse < best_val_mse:
-            best_val_mse     = val_mse
+        # ---- Checkpointing: track best val DWMSE ----
+        if val_loss < best_val_mse:
+            best_val_mse     = val_loss
             best_val_mre     = val_mre if val_mre is not None else best_val_mre
             patience_counter = 0
             save_checkpoint(model, optimizer, scheduler, epoch,
-                            val_mse, best_val_mre, config,
+                            val_mse_plain, best_val_mre, config,
                             output_dir / "best_model.pt")
         else:
             patience_counter += 1
@@ -460,14 +472,14 @@ def main():
 
         if epoch % 50 == 0 and epoch > 0:
             save_checkpoint(model, optimizer, scheduler, epoch,
-                            val_mse, best_val_mre, config,
+                            val_mse_plain, best_val_mre, config,
                             output_dir / f"checkpoint_epoch{epoch:04d}.pt")
 
     # ------------------------------------------------------------------
     # Save final model and training history
     # ------------------------------------------------------------------
     save_checkpoint(model, optimizer, scheduler, epoch,
-                    val_mse, best_val_mre, config,
+                    val_mse_plain, best_val_mre, config,
                     output_dir / "final_model.pt")
 
     with open(output_dir / "history.json", 'w') as f:
@@ -504,7 +516,7 @@ def main():
         if 'wavelengths' in f:
             wavelengths = f['wavelengths'][:].astype(np.float32)
 
-    test_mse = validate(model, test_loader, device)['mse']
+    test_mse = validate(model, test_loader, criterion, device)['mse']
     test_mre = compute_mre(model, test_loader, device)
     print(f"\n  Test MSE: {test_mse:.6f}")
     print(f"  Test MRE: {test_mre:.3f}%")
