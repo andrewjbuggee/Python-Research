@@ -48,8 +48,8 @@ DEFAULT_N_LEVELS = 10
 # observed log10 values fall outside [MIN, MAX] the normalized input will
 # lie outside [0, 1], which will trigger a runtime warning in EmulatorDataset.
 WV_ABOVE_LOG10_MIN = 21.0   # log10(molec/cm²) — very dry above-cloud column
-WV_ABOVE_LOG10_MAX = 23.5   # log10(molec/cm²) — very moist above-cloud column
-WV_IN_LOG10_MIN    = 17.0   # log10(molec/cm²) — very thin / dry in-cloud layer
+WV_ABOVE_LOG10_MAX = 23.0   # log10(molec/cm²) — very moist above-cloud column
+WV_IN_LOG10_MIN    = 19.0   # log10(molec/cm²) — very thin / dry in-cloud layer
 WV_IN_LOG10_MAX    = 23.0   # log10(molec/cm²) — thick / moist in-cloud layer
 
 # Physical bounds on effective radius (μm)
@@ -61,7 +61,7 @@ RE_MAX = 50.0   # TODO: update from scan
 # Optical depth bounds
 # Update TAU_MAX after running convert_matFiles_to_HDF.py scan.
 TAU_MIN = 1.5   # in-situ profiles include sub-cloud layers where tau=0
-TAU_MAX = 40.0  # TODO: update from scan
+TAU_MAX = 65.0  # TODO: update from scan
 
 
 # =============================================================================

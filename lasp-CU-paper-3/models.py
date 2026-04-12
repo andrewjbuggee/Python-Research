@@ -43,7 +43,7 @@ class RetrievalConfig:
     re_min: float = 1.25             # μm
     re_max: float = 50.0            # μm
     tau_min: float = 1.5
-    tau_max: float = 40.0
+    tau_max: float = 65.0
 
     @property
     def input_dim(self):

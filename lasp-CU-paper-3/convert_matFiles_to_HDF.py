@@ -72,6 +72,12 @@ N_LEVELS      = 10    # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
 N_WAVELENGTHS = 636   # HySICS spectral channels
 
+# Minimum physically-plausible cloud optical depth.
+# Files with tau_c below this value are skipped — a near-zero tau_c indicates
+# either a clear-sky profile or a corrupted measurement, neither of which
+# should be in the cloud retrieval training set.
+TAU_C_MIN = 1.0
+
 # Keys that must be present in every .mat file to be included
 # Now we generate noise from the raw reflectances, so we only need raw data
 REQUIRED_KEYS = {
@@ -376,6 +382,13 @@ for i, path in enumerate(mat_files):
     re    = d['re'][()]
     tau_c = float(d['tau'][()].max())
 
+    # Skip files whose cloud optical depth is below the physical minimum.
+    # A near-zero tau_c means no real cloud is present (clear sky or bad data).
+    if tau_c < TAU_C_MIN:
+        print(f'\n  SKIPPING {path.name} — tau_c = {tau_c:.4f} < TAU_C_MIN ({TAU_C_MIN})')
+        skipped_files.append((path, f'tau_c={tau_c:.4f} < TAU_C_MIN'))
+        continue
+
     re_global_min  = min(re_global_min,  float(re.min()))
     re_global_max  = max(re_global_max,  float(re.max()))
     tau_global_min = min(tau_global_min, tau_c)
@@ -497,7 +510,8 @@ with h5py.File(OUT_PATH, 'w') as f:
     # Pressure levels are the same for every file — store once
     f.create_dataset('era5_pressure_levels', data=era5_pressure_levels)
 
-    wv_above_all = []   # collect one value per file for the summary plot
+    wv_above_all = []   # collect one value per file for the summary plots
+    wv_in_all    = []
 
     for i, path in enumerate(valid_mat_files):
         d = scipy.io.loadmat(path, squeeze_me=True)
@@ -565,6 +579,7 @@ with h5py.File(OUT_PATH, 'w') as f:
         ds_wv_in[row_start:row_end]    = wv_in
         ds_era5_vap[row_start:row_end] = vap_profile[np.newaxis, :]
         wv_above_all.append(wv_above)
+        wv_in_all.append(wv_in)
 
         if (i + 1) % 10 == 0 or i == n_files - 1:
             print(f'  {i+1}/{n_files}  ({row_end} samples written)')
@@ -615,6 +630,37 @@ axes[1].set_title('Above-cloud water vapour — log₁₀ scale', fontsize=12)
 plt.suptitle(
     f'ERA5 above-cloud water vapour  ({n_files} unique profiles)\n'
     f'Range: {wv_above_kg_m2.min():.2f} – {wv_above_kg_m2.max():.2f}  kg m⁻²',
+    fontsize=11,
+)
+plt.tight_layout()
+plt.show()
+
+
+# ============================================================
+# In-cloud water vapour histogram
+# ============================================================
+
+wv_in_arr   = np.array(wv_in_all)
+wv_in_kg_m2 = wv_in_arr * MOLEC_CM2_TO_KG_M2
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+axes[0].hist(wv_in_kg_m2, bins=30, color='darkorange', edgecolor='white',
+             linewidth=0.5)
+axes[0].set_xlabel('In-cloud WV column  (kg m⁻²)', fontsize=11)
+axes[0].set_ylabel('Number of profiles', fontsize=11)
+axes[0].set_title('In-cloud water vapour — linear scale', fontsize=12)
+
+log_in_kg = np.log10(wv_in_kg_m2)
+axes[1].hist(log_in_kg, bins=30, color='darkorange', edgecolor='white',
+             linewidth=0.5)
+axes[1].set_xlabel('log₁₀  [in-cloud WV column  (kg m⁻²)]', fontsize=11)
+axes[1].set_ylabel('Number of profiles', fontsize=11)
+axes[1].set_title('In-cloud water vapour — log₁₀ scale', fontsize=12)
+
+plt.suptitle(
+    f'ERA5 in-cloud water vapour  ({n_files} unique profiles)\n'
+    f'Range: {wv_in_kg_m2.min():.4f} – {wv_in_kg_m2.max():.4f}  kg m⁻²',
     fontsize=11,
 )
 plt.tight_layout()
