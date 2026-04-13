@@ -1,18 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=pinn_sweep
-#SBATCH --partition=aa100          # Alpine GPU partition (NVIDIA A100)
+#SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --gres=gpu:1               # 1 GPU per run (each run is small)
-#SBATCH --mem=16G
 #SBATCH --time=01:00:00            # ~30 min per run + margin
-#SBATCH --array=0-49               # 50 runs (matches run_000.json to run_049.json)
+#SBATCH --partition=aa100          # Alpine GPU partition (NVIDIA A100)
+#SBATCH --qos=normal
+#SBATCH --mem=16G
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:1               # 1 GPU per run (each run is small)
+#SBATCH --cpus-per-task=4
+#SBATCH --job-name=pinn_sweep
 #SBATCH --output=logs/sweep_%A_%a.out
 #SBATCH --error=logs/sweep_%A_%a.err
-#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
-#SBATCH --account=ucb-general       # Update with your allocation
+#SBATCH --array=0-49%16               # 50 runs (matches run_000.json to run_049.json)
 
 # ============================================================
 # Hyperparameter Sweep — SLURM Job Array
