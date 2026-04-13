@@ -64,9 +64,9 @@ from pathlib import Path
 # Configuration
 # ============================================================
 
-MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_12_April_2026/')
+MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'combined_vocals_oracles_training_data_12_April_2026.h5')
+                'combined_vocals_oracles_training_data_13_April_2026.h5')
 
 N_LEVELS      = 10    # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
@@ -76,7 +76,7 @@ N_WAVELENGTHS = 636   # HySICS spectral channels
 # Files with tau_c below this value are skipped — a near-zero tau_c indicates
 # either a clear-sky profile or a corrupted measurement, neither of which
 # should be in the cloud retrieval training set.
-TAU_C_MIN = 1.0
+TAU_C_MIN = 3.0
 
 # Keys that must be present in every .mat file to be included
 # Now we generate noise from the raw reflectances, so we only need raw data
@@ -324,7 +324,7 @@ def extract_era5_vapor(d: dict, z_raw: np.ndarray) -> tuple:
     gph_above  = np.concatenate([[z_top_m],    gph[above_mask]])
     vap_above  = np.concatenate([[vap_at_top], vap[above_mask]])
     # Integrate: metres → cm (×100), result in molec/cm²
-    wv_above = float(np.trapz(vap_above, gph_above * 100.0))
+    wv_above = float(np.trapezoid(vap_above, gph_above * 100.0))
 
     # ---- In-cloud column -------------------------------------------
     # ERA5 levels strictly between cloud base and cloud top, bracketed by
@@ -334,7 +334,7 @@ def extract_era5_vapor(d: dict, z_raw: np.ndarray) -> tuple:
     gph_in  = np.concatenate([[z_base_m],    gph[in_mask],  [z_top_m]])
     vap_in  = np.concatenate([[vap_at_base], vap[in_mask],  [vap_at_top]])
     sort_i  = np.argsort(gph_in)
-    wv_in   = float(np.trapz(vap_in[sort_i], gph_in[sort_i] * 100.0))
+    wv_in   = float(np.trapezoid(vap_in[sort_i], gph_in[sort_i] * 100.0))
 
     return wv_above, wv_in, vap.astype(np.float32)
 
@@ -424,12 +424,36 @@ print(f'  RE_MAX  = {re_max_suggested:.0f}')
 print(f'  TAU_MIN = {tau_global_min:.1f}')
 print(f'  TAU_MAX = {tau_max_suggested:.0f}')
 
+# ---- Count unique profiles after tau_c filtering ----
+# Fingerprint by rounding the first 5 values of each raw r_e profile.
+# This matches the logic in data.compute_profile_ids().
+unique_fingerprints = set()
+for path in valid_mat_files:
+    d = scipy.io.loadmat(path, squeeze_me=True)
+    re_raw = d['re'][()].astype(np.float64)
+    fp = tuple(np.round(re_raw[:5], 4))
+    unique_fingerprints.add(fp)
+n_unique_profiles = len(unique_fingerprints)
+print(f'\nUnique cloud droplet profiles after τ_c ≥ {TAU_C_MIN} filtering: {n_unique_profiles}')
+print(f'  (Each profile is simulated under {N_GEOMETRIES} viewing geometries)')
+print(f'  Suggested profile-held-out split for data.py / emulator.yaml:')
+n_test_suggest  = max(1, round(n_unique_profiles * 0.07))
+n_val_suggest   = max(1, round(n_unique_profiles * 0.07))
+n_train_suggest = n_unique_profiles - n_val_suggest - n_test_suggest
+print(f'    n_val_profiles:  {n_val_suggest}')
+print(f'    n_test_profiles: {n_test_suggest}')
+print(f'    Training profiles: ~{n_train_suggest}')
+
+FIGURES_DIR = Path('/Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/Figures')
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
 fig, ax = plt.subplots()
 ax.hist(tau_c_all, bins=30)
 ax.set_xlabel('tau_c')
 ax.set_ylabel('Count')
 ax.set_title('Distribution of tau_c across all files')
 plt.tight_layout()
+fig.savefig(FIGURES_DIR / 'distribution_tau_c.png', dpi=400, bbox_inches='tight')
 plt.show()
 
 
@@ -512,6 +536,7 @@ with h5py.File(OUT_PATH, 'w') as f:
 
     wv_above_all = []   # collect one value per file for the summary plots
     wv_in_all    = []
+    era5_vap_all = []   # collect per-file vapor profiles for bounds summary
 
     for i, path in enumerate(valid_mat_files):
         d = scipy.io.loadmat(path, squeeze_me=True)
@@ -580,6 +605,7 @@ with h5py.File(OUT_PATH, 'w') as f:
         ds_era5_vap[row_start:row_end] = vap_profile[np.newaxis, :]
         wv_above_all.append(wv_above)
         wv_in_all.append(wv_in)
+        era5_vap_all.append(vap_profile)
 
         if (i + 1) % 10 == 0 or i == n_files - 1:
             print(f'  {i+1}/{n_files}  ({row_end} samples written)')
@@ -633,6 +659,7 @@ plt.suptitle(
     fontsize=11,
 )
 plt.tight_layout()
+fig.savefig(FIGURES_DIR / 'distribution_wv_above_cloud.png', dpi=400, bbox_inches='tight')
 plt.show()
 
 
@@ -664,4 +691,42 @@ plt.suptitle(
     fontsize=11,
 )
 plt.tight_layout()
+fig.savefig(FIGURES_DIR / 'distribution_wv_in_cloud.png', dpi=400, bbox_inches='tight')
 plt.show()
+
+
+# ============================================================
+# Water vapour bounds summary for data.py
+# ============================================================
+
+era5_vap_arr = np.array(era5_vap_all)  # (n_files, N_ERA5_LEVELS), molec/cm³
+
+log10_wv_above = np.log10(wv_above_arr)
+log10_wv_in    = np.log10(wv_in_arr)
+log10_era5_vap = np.log10(era5_vap_arr[era5_vap_arr > 0])  # exclude zeros
+
+print('\n' + '=' * 60)
+print('WATER VAPOUR BOUNDS — update these in data.py')
+print('=' * 60)
+print(f'\n  Above-cloud WV column (molec/cm²):')
+print(f'    min = {wv_above_arr.min():.4e}   log10 = {log10_wv_above.min():.2f}')
+print(f'    max = {wv_above_arr.max():.4e}   log10 = {log10_wv_above.max():.2f}')
+print(f'  In-cloud WV column (molec/cm²):')
+print(f'    min = {wv_in_arr.min():.4e}   log10 = {log10_wv_in.min():.2f}')
+print(f'    max = {wv_in_arr.max():.4e}   log10 = {log10_wv_in.max():.2f}')
+print(f'  ERA5 vapor concentration (molec/cm³):')
+print(f'    surface max = {era5_vap_arr.max():.4e}   log10 = {np.log10(era5_vap_arr.max()):.2f}')
+
+# Suggest bounds with a small margin
+wv_above_log10_min = float(np.floor(log10_wv_above.min()))
+wv_above_log10_max = float(np.ceil(log10_wv_above.max()))
+wv_in_log10_min    = float(np.floor(log10_wv_in.min()))
+wv_in_log10_max    = float(np.ceil(log10_wv_in.max()))
+era5_vap_log10_max = float(np.ceil(np.log10(era5_vap_arr.max())))
+
+print(f'\n  Suggested bounds for data.py:')
+print(f'    WV_ABOVE_LOG10_MIN = {wv_above_log10_min:.1f}')
+print(f'    WV_ABOVE_LOG10_MAX = {wv_above_log10_max:.1f}')
+print(f'    WV_IN_LOG10_MIN    = {wv_in_log10_min:.1f}')
+print(f'    WV_IN_LOG10_MAX    = {wv_in_log10_max:.1f}')
+print(f'    ERA5_VAP_LOG10_MAX = {era5_vap_log10_max:.1f}')

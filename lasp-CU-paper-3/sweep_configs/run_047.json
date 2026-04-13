@@ -1,0 +1,43 @@
+{
+  "run_id": 47,
+  "run_name": "4x512_dr0.11_lr1.6e-04_strong_ends",
+  "data": {
+    "h5_path": "/scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5",
+    "instrument": "hysics",
+    "num_workers": 4
+  },
+  "output_dir": "sweep_results",
+  "hyperparams": {
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.107,
+    "learning_rate": 0.000159,
+    "sigma_floor": 0.0392,
+    "level_weights": [
+      6.0,
+      2.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      2.0,
+      3.0,
+      5.0
+    ],
+    "level_weights_name": "strong_ends",
+    "n_epochs": 400,
+    "batch_size": 256,
+    "weight_decay": 0.0001,
+    "scheduler_patience": 30,
+    "early_stop_patience": 80,
+    "lambda_physics": 0.1,
+    "lambda_monotonicity": 0.0,
+    "lambda_adiabatic": 0.1,
+    "lambda_smoothness": 0.1
+  }
+}

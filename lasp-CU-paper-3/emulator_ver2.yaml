@@ -1,0 +1,132 @@
+# ============================================================
+# ForwardModelEmulator v2 — Per-Band Subnetworks + MRE Loss
+# ============================================================
+# Paper 3: PINN for Cloud Droplet Profile Retrieval
+# Andrew J. Buggee, LASP / CU Boulder
+#
+# Key changes from v1 (emulator.yaml):
+#   1. Per-band subnetworks — each spectral band gets its own small
+#      network, following Bue et al. (2019).  Absorption bands near
+#      1.38 and 1.9 μm get dedicated specialist networks.
+#   2. MRE loss — directly penalizes mean relative error in linear
+#      reflectance space, matching the evaluation metric.
+#   3. No PCA — unnecessary with per-band decomposition (each
+#      subnetwork only predicts ~30–120 channels).
+#
+# Usage:
+#   python train_emulator_ver2.py --config emulator_ver2.yaml
+# ============================================================
+
+data:
+  h5_path: "/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5"
+  instrument: "hysics"
+  num_workers: 0
+  seed: 42
+
+  # Profile-held-out split
+  profile_holdout: true
+  n_val_profiles: 14
+  n_test_profiles: 14
+
+  # Fallback sample-level split (only if profile_holdout: false)
+  train_frac: 0.8
+  val_frac: 0.1
+
+  # No PCA — per-band decomposition replaces it
+  n_pca_components: 0
+
+  # Log-reflectance targets for each subnetwork
+  log_reflectance: true
+  log_eps: 1.0e-6
+
+  # ERA5 atmospheric input mode
+  use_era5_profile: false
+
+  # LHC augmentation (optional)
+  lhc_h5_path: null
+
+# ------------------------------------------------------------
+# Spectral band definitions
+# ------------------------------------------------------------
+# Each band has a name, wavelength range [nm], and per-band
+# architecture overrides (hidden_dims, dropout).
+#
+# Default wavelength grid: 636 channels, ~352–2297 nm.
+# Channels are assigned to the first band whose range contains them.
+#
+# Bands can overlap — but each channel is assigned to exactly one
+# band (first match wins).
+# ------------------------------------------------------------
+bands:
+  - name: "vis"
+    wl_min: 350.0
+    wl_max: 700.0
+    hidden_dims: [256, 256]
+    dropout: 0.05
+
+  - name: "nir"
+    wl_min: 700.0
+    wl_max: 1000.0
+    hidden_dims: [256, 256]
+    dropout: 0.05
+
+  - name: "swir1"
+    wl_min: 1000.0
+    wl_max: 1300.0
+    hidden_dims: [256, 256]
+    dropout: 0.05
+
+  - name: "h2o_1380"
+    wl_min: 1300.0
+    wl_max: 1500.0
+    hidden_dims: [256, 256, 256]
+    dropout: 0.05
+
+  - name: "swir2"
+    wl_min: 1500.0
+    wl_max: 1750.0
+    hidden_dims: [256, 256]
+    dropout: 0.05
+
+  - name: "h2o_1900"
+    wl_min: 1750.0
+    wl_max: 2050.0
+    hidden_dims: [256, 256, 256]
+    dropout: 0.05
+
+  - name: "swir3"
+    wl_min: 2050.0
+    wl_max: 2300.0
+    hidden_dims: [256, 256]
+    dropout: 0.05
+
+model:
+  n_levels: 10
+  n_geometry_inputs: 4
+  n_atm_inputs: 2
+  n_wavelengths_out: 636
+  activation: "gelu"
+
+  # Default architecture per band (overridden by per-band settings above)
+  default_hidden_dims: [256, 256]
+  default_dropout: 0.05
+
+training:
+  batch_size: 256
+  n_epochs: 1000
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  early_stopping_patience: 100
+
+  # ReduceLROnPlateau scheduler
+  scheduler_factor: 0.5
+  scheduler_patience: 30
+  scheduler_eta_min: 0.000001
+
+  # Loss function: "mre" (Mean Relative Error) or "mse" (log-reflectance MSE)
+  loss: "mre"
+  mre_eps: 0.0001          # floor in MRE denominator to prevent division by near-zero
+
+  # Accuracy target
+  mre_target_pct: 1.0
+  mre_log_interval: 10

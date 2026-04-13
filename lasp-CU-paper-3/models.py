@@ -40,9 +40,9 @@ class RetrievalConfig:
     dropout: float = 0.1
     activation: str = "gelu"
     # Physical bounds (used in output layer)
-    re_min: float = 1.25             # μm
+    re_min: float = 1.5             # μm
     re_max: float = 50.0            # μm
-    tau_min: float = 1.5
+    tau_min: float = 3.0
     tau_max: float = 65.0
 
     @property
@@ -171,11 +171,14 @@ class DropletProfileNetwork(nn.Module):
         profile = profile_norm * (self.re_max - self.re_min) + self.re_min
 
         # Profile std: exp(log_std) in normalized [0,1] space.
-        # Clamp log_std to [-6, 2] → std in roughly [0.002, 7.4] normalized units,
-        # i.e. [~0.1, ~370] μm — well outside physical range on the high end but
-        # the NLL loss will drive it toward the data-appropriate scale.
+        # Clamp log_std to [-4, 2]:
+        #   lower bound: exp(-4)≈0.018 normalized → 0.018×48.5≈0.9 μm physical
+        #   upper bound: exp(2)≈7.4 normalized → 7.4×48.5≈359 μm physical
+        # The lower bound of -4 prevents σ-collapse (network learning near-zero
+        # uncertainty on memorized training profiles) while still allowing
+        # physically meaningful sub-micron uncertainty (~0.9 μm floor).
         profile_log_std = self.profile_std_head(features)
-        profile_std_norm = torch.exp(profile_log_std.clamp(-6.0, 2.0))  # (batch, n_levels)
+        profile_std_norm = torch.exp(profile_log_std.clamp(-4.0, 2.0))  # (batch, n_levels)
         profile_std = profile_std_norm * (self.re_max - self.re_min)     # physical units (μm)
 
         # Tau output: sigmoid → [0,1] then scale to physical range
@@ -183,8 +186,9 @@ class DropletProfileNetwork(nn.Module):
         tau_c = tau_norm * (self.tau_max - self.tau_min) + self.tau_min
 
         # Tau std: same approach as profile_std — exp(clamped log-std) in normalized space
+        # exp(-4)≈0.018 normalized → 0.018×62≈1.1 optical depth units (floor)
         tau_log_std = self.tau_std_head(features)
-        tau_std_norm = torch.exp(tau_log_std.clamp(-6.0, 2.0))           # (batch, 1)
+        tau_std_norm = torch.exp(tau_log_std.clamp(-4.0, 2.0))           # (batch, 1)
         tau_std = tau_std_norm * (self.tau_max - self.tau_min)            # physical units
 
         return {
@@ -451,9 +455,11 @@ class SupervisedLoss(nn.Module):
     """
 
     def __init__(self, tau_weight: float = 1.0,
-                 level_weights: Optional[torch.Tensor] = None):
+                 level_weights: Optional[torch.Tensor] = None,
+                 sigma_floor: float = 0.01):
         super().__init__()
         self.tau_weight = tau_weight
+        self.sigma_floor = sigma_floor  # minimum σ in normalized [0,1] space
         if level_weights is not None:
             # Normalize so mean == 1.0, preserving overall loss scale
             w = level_weights.float()
@@ -479,6 +485,10 @@ class SupervisedLoss(nn.Module):
         mu = output['profile_normalized']           # (batch, n_levels)
         sigma = output['profile_std_normalized']    # (batch, n_levels), positive by construction
 
+        # σ floor: prevent NLL explosion on held-out data from σ-collapse.
+        # Default 0.01 in normalized [0,1] space corresponds to ~0.5 μm.
+        sigma = sigma.clamp(min=self.sigma_floor)
+
         # Gaussian NLL (constant 0.5*log(2π) dropped — doesn't affect gradients)
         nll = torch.log(sigma) + 0.5 * ((profile_true - mu) / sigma).pow(2)  # (batch, n_levels)
         if self.level_weights is not None:
@@ -488,6 +498,7 @@ class SupervisedLoss(nn.Module):
 
         tau_mu = output['tau_normalized'].squeeze(-1)       # (batch,)
         tau_sigma = output['tau_std_normalized'].squeeze(-1)  # (batch,), positive by construction
+        tau_sigma = tau_sigma.clamp(min=self.sigma_floor)       # σ floor (same as profile)
         tau_loss = (torch.log(tau_sigma) + 0.5 * ((tau_true - tau_mu) / tau_sigma).pow(2)).mean()
 
         total = profile_loss + self.tau_weight * tau_loss
@@ -688,10 +699,12 @@ class CombinedLoss(nn.Module):
                  emulator: Optional[ForwardModelEmulator] = None,
                  measurement_uncertainty: Optional[torch.Tensor] = None,
                  level_weights: Optional[torch.Tensor] = None,
+                 sigma_floor: float = 0.01,
                  ):
         super().__init__()
 
-        self.supervised = SupervisedLoss(tau_weight=1.0, level_weights=level_weights)
+        self.supervised = SupervisedLoss(tau_weight=1.0, level_weights=level_weights,
+                                         sigma_floor=sigma_floor)
         self.physics = PhysicsLoss(
             lambda_monotonicity=lambda_monotonicity,
             lambda_adiabatic=lambda_adiabatic,

@@ -1,0 +1,90 @@
+bands:
+- dropout: 0.05
+  hidden_dims:
+  - 256
+  - 256
+  name: vis
+  wl_max: 700.0
+  wl_min: 350.0
+- dropout: 0.05
+  hidden_dims:
+  - 256
+  - 256
+  name: nir
+  wl_max: 1000.0
+  wl_min: 700.0
+- dropout: 0.05
+  hidden_dims:
+  - 256
+  - 256
+  name: swir1
+  wl_max: 1300.0
+  wl_min: 1000.0
+- dropout: 0.05
+  hidden_dims:
+  - 256
+  - 256
+  - 256
+  name: h2o_1380
+  wl_max: 1500.0
+  wl_min: 1300.0
+- dropout: 0.05
+  hidden_dims:
+  - 256
+  - 256
+  name: swir2
+  wl_max: 1750.0
+  wl_min: 1500.0
+- dropout: 0.05
+  hidden_dims:
+  - 256
+  - 256
+  - 256
+  name: h2o_1900
+  wl_max: 2050.0
+  wl_min: 1750.0
+- dropout: 0.05
+  hidden_dims:
+  - 256
+  - 256
+  name: swir3
+  wl_max: 2300.0
+  wl_min: 2050.0
+data:
+  h5_path: /Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5
+  instrument: hysics
+  lhc_h5_path: null
+  log_eps: 1.0e-06
+  log_reflectance: true
+  n_pca_components: 0
+  n_test_profiles: 14
+  n_val_profiles: 14
+  num_workers: 0
+  profile_holdout: true
+  seed: 42
+  train_frac: 0.8
+  use_era5_profile: false
+  val_frac: 0.1
+model:
+  activation: gelu
+  default_dropout: 0.05
+  default_hidden_dims:
+  - 256
+  - 256
+  n_atm_inputs: 2
+  n_geometry_inputs: 4
+  n_levels: 10
+  n_wavelengths_out: 636
+training:
+  batch_size: 256
+  early_stopping_patience: 100
+  learning_rate: 0.001
+  loss: mre
+  mre_eps: 0.0001
+  mre_log_interval: 10
+  mre_target_pct: 1.0
+  n_epochs: 1000
+  scheduler_eta_min: 1.0e-06
+  scheduler_factor: 0.5
+  scheduler_patience: 30
+  weight_decay: 0.0001

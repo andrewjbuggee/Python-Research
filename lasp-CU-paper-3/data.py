@@ -13,7 +13,7 @@ Author: Andrew J. Buggee, LASP / CU Boulder
 import numpy as np
 import h5py
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, Subset, random_split
 from pathlib import Path
 from typing import Tuple, Optional, Dict
 import warnings
@@ -44,26 +44,26 @@ DEFAULT_N_LEVELS = 10
 # against your actual dataset.  Conservative defaults are set here; if
 # observed log10 values fall outside [MIN, MAX] the normalized input will
 # lie outside [0, 1], which will trigger a runtime warning in EmulatorDataset.
-WV_ABOVE_LOG10_MIN = 21.0   # log10(molec/cm²) — very dry above-cloud column
-WV_ABOVE_LOG10_MAX = 23.0   # log10(molec/cm²) — very moist above-cloud column
-WV_IN_LOG10_MIN    = 19.0   # log10(molec/cm²) — very thin / dry in-cloud layer
-WV_IN_LOG10_MAX    = 23.0   # log10(molec/cm²) — thick / moist in-cloud layer
+WV_ABOVE_LOG10_MIN = 20.0   # log10(molec/cm²) — very dry above-cloud column
+WV_ABOVE_LOG10_MAX = 24.0   # log10(molec/cm²) — very moist above-cloud column
+WV_IN_LOG10_MIN    = 18.0   # log10(molec/cm²) — very thin / dry in-cloud layer
+WV_IN_LOG10_MAX    = 24.0   # log10(molec/cm²) — thick / moist in-cloud layer
 
 # ERA5 full vapor-concentration profile normalization (molecules/cm³, log10 scale).
 # Surface values reach ~3–5 × 10^17 molec/cm³; upper troposphere/stratosphere
 # values approach zero.  log10(v + 1.0) maps the range to [0, ~17.5]; dividing
 # by ERA5_VAP_LOG10_MAX normalises to [0, 1].
-ERA5_VAP_LOG10_MAX = 18.0   # log10(molec/cm³) — conservative upper bound
+ERA5_VAP_LOG10_MAX = 19.0   # log10(molec/cm³) — conservative upper bound
 
 # Physical bounds on effective radius (μm)
 # Update RE_MAX after running convert_matFiles_to_HDF.py — the scan pass
 # will print the observed max across all in-situ profiles.
-RE_MIN = 1.25
+RE_MIN = 1.5
 RE_MAX = 50.0   # TODO: update from scan
 
 # Optical depth bounds
 # Update TAU_MAX after running convert_matFiles_to_HDF.py scan.
-TAU_MIN = 1.5   # in-situ profiles include sub-cloud layers where tau=0
+TAU_MIN = 3   # in-situ profiles include sub-cloud layers where tau=0
 TAU_MAX = 65.0  # TODO: update from scan
 
 
@@ -344,6 +344,9 @@ def create_dataloaders(h5_path: str,
                        num_workers: int = 4,
                        seed: int = 42,
                        instrument: str = 'hysics',
+                       profile_holdout: bool = False,
+                       n_val_profiles: int = 14,
+                       n_test_profiles: int = 14,
                        ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train/val/test DataLoaders from an HDF5 file.
@@ -356,6 +359,7 @@ def create_dataloaders(h5_path: str,
         Batch size for training.
     train_frac, val_frac : float
         Fractions for train/val split. Test = 1 - train - val.
+        Only used when profile_holdout=False.
     num_workers : int
         Number of data loading workers.
     seed : int
@@ -363,6 +367,14 @@ def create_dataloaders(h5_path: str,
     instrument : str
         Which instrument's reflectance to use: 'hysics' or 'emit'.
         See LibRadtranDataset for details.
+    profile_holdout : bool
+        If True, use profile-aware splits so that val/test sets contain
+        cloud profiles NEVER seen during training.  This is strongly
+        recommended — it uses the same split as
+        create_emulator_dataloaders() for consistency.
+    n_val_profiles, n_test_profiles : int
+        Number of unique profiles reserved for val/test when
+        profile_holdout=True.
 
     Returns
     -------
@@ -370,15 +382,33 @@ def create_dataloaders(h5_path: str,
     """
     dataset = LibRadtranDataset(h5_path, normalize=True, instrument=instrument)
 
-    n = len(dataset)
-    n_train = int(n * train_frac)
-    n_val = int(n * val_frac)
-    n_test = n - n_train - n_val
+    if profile_holdout:
+        train_idx, val_idx, test_idx = create_profile_aware_splits(
+            h5_path,
+            n_val_profiles=n_val_profiles,
+            n_test_profiles=n_test_profiles,
+            seed=seed,
+        )
+        train_set = Subset(dataset, train_idx)
+        val_set   = Subset(dataset, val_idx)
+        test_set  = Subset(dataset, test_idx)
 
-    train_set, val_set, test_set = random_split(
-        dataset, [n_train, n_val, n_test],
-        generator=torch.Generator().manual_seed(seed)
-    )
+        split_mode = "profile-held-out"
+        print(f"  Split mode: {split_mode}")
+        print(f"  Val profiles (never in train):  {n_val_profiles}")
+        print(f"  Test profiles (never in train): {n_test_profiles}")
+    else:
+        n = len(dataset)
+        n_train = int(n * train_frac)
+        n_val = int(n * val_frac)
+        n_test = n - n_train - n_val
+
+        train_set, val_set, test_set = random_split(
+            dataset, [n_train, n_val, n_test],
+            generator=torch.Generator().manual_seed(seed)
+        )
+        split_mode = "random sample-level"
+        print(f"  Split mode: {split_mode}")
 
     # pin_memory speeds up CPU→GPU transfers but is not supported on MPS
     pin = torch.cuda.is_available()
@@ -467,17 +497,17 @@ def compute_profile_ids(h5_path: str) -> np.ndarray:
 
 def create_profile_aware_splits(
         h5_path: str,
-        n_val_profiles: int = 10,
-        n_test_profiles: int = 10,
+        n_val_profiles: int = 14,
+        n_test_profiles: int = 14,
         seed: int = 42,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Split sample indices so that held-out profiles NEVER appear in training.
 
-    Example with ~136 unique profiles and n_val=10, n_test=10:
-        Train : ~116 profiles  (~85% of samples)
-        Val   :   10 profiles  (~ 7% of samples)
-        Test  :   10 profiles  (~ 7% of samples)
+    Example with 200 unique profiles and n_val=14, n_test=14:
+        Train :  172 profiles  ( 86% of samples)
+        Val   :   14 profiles  (  7% of samples)
+        Test  :   14 profiles  (  7% of samples)
     Profile counts are inferred from the HDF5 data at runtime.
 
     Why this matters
