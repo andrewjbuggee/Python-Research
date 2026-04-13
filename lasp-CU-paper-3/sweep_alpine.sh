@@ -49,12 +49,11 @@ echo "Start time:    $(date)"
 echo "============================================"
 
 # Load modules
-module purge
+# Load anaconda (only available on compute/compile nodes, not login nodes)
 module load anaconda
-module load cuda/12.1
 
 # Activate conda environment
-conda activate paper3
+conda activate dropProfs_nn
 
 # Navigate to project directory
 cd /projects/$USER/paper3
