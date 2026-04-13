@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
-#SBATCH --time=01:00:00            # ~30 min per run + margin
+#SBATCH --time=00:55:00            # Test run finished in ~4 min; 30 min is safe margin
 #SBATCH --partition=aa100          # Alpine GPU partition (NVIDIA A100)
 #SBATCH --qos=normal
 #SBATCH --mem=16G
