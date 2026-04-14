@@ -1,6 +1,6 @@
 {
   "run_id": 44,
-  "run_name": "4x512_dr0.18_lr8.7e-04_uniform",
+  "run_name": "3x256_dr0.04_lr3.8e-05_wd2e-04_b512_strong_ends",
   "data": {
     "h5_path": "/scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5",
     "instrument": "hysics",
@@ -9,32 +9,31 @@
   "output_dir": "sweep_results",
   "hyperparams": {
     "hidden_dims": [
-      512,
-      512,
-      512,
-      512
+      256,
+      256,
+      256
     ],
-    "dropout": 0.182,
-    "learning_rate": 0.000869,
-    "sigma_floor": 0.043,
+    "dropout": 0.043,
+    "learning_rate": 3.8e-05,
+    "weight_decay": 0.000231,
+    "sigma_floor": 0.0474,
+    "batch_size": 512,
     "level_weights": [
+      6.0,
+      2.0,
       1.0,
       1.0,
       1.0,
       1.0,
       1.0,
-      1.0,
-      1.0,
-      1.0,
-      1.0,
-      1.0
+      2.0,
+      3.0,
+      5.0
     ],
-    "level_weights_name": "uniform",
+    "level_weights_name": "strong_ends",
     "n_epochs": 400,
-    "batch_size": 256,
-    "weight_decay": 0.0001,
     "scheduler_patience": 30,
-    "early_stop_patience": 80,
+    "early_stop_patience": 40,
     "lambda_physics": 0.1,
     "lambda_monotonicity": 0.0,
     "lambda_adiabatic": 0.1,
