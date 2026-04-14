@@ -1,0 +1,24 @@
+# 1. Generate configs (on your MacBook)
+cd /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3
+python generate_sweep.py
+
+# 2. Upload to Alpine
+rsync -av --exclude='__pycache__' --exclude='.git' --exclude='checkpoints' \
+  ./ anbu8374@login.rc.colorado.edu:/projects/anbu8374/paper3/
+
+# 3. Submit on Alpine
+ssh anbu8374@login.rc.colorado.edu
+cd /projects/anbu8374/paper3
+mkdir -p logs
+sbatch sweep_alpine.sh       # launches 50 parallel GPU jobs
+
+# 4. Monitor
+squeue -u $USER              # check job status
+sacct -j <JOB_ID>            # detailed status
+
+# 5. After completion — aggregate results (on Alpine or locally)
+python compare_sweep.py
+
+# Or rsync results back and analyze locally:
+rsync -av anbu8374@login.rc.colorado.edu:/projects/anbu8374/paper3/sweep_results/ sweep_results/
+python compare_sweep.py

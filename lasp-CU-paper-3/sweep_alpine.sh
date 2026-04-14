@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
-#SBATCH --time=00:55:00            # Test run finished in ~4 min; 30 min is safe margin
+#SBATCH --time=00:55:00            # Test run finished in ~4 min; 55 min is generous margin
 #SBATCH --partition=aa100          # Alpine GPU partition (NVIDIA A100)
 #SBATCH --qos=normal
 #SBATCH --mem=16G
@@ -13,7 +13,7 @@
 #SBATCH --error=logs/sweep_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
-#SBATCH --array=0-49%16               # 50 runs (matches run_000.json to run_049.json)
+#SBATCH --array=0-99%16               # 100 runs (matches run_000.json to run_099.json)
 
 # ============================================================
 # Hyperparameter Sweep — SLURM Job Array
@@ -70,9 +70,12 @@ echo "Config: $CONFIG_FILE"
 echo ""
 
 python sweep_train.py --config-json "$CONFIG_FILE"
+EXIT_CODE=$?
 
 echo ""
 echo "============================================"
 echo "End time:      $(date)"
-echo "Exit code:     $?"
+echo "Exit code:     $EXIT_CODE"
 echo "============================================"
+
+exit $EXIT_CODE   # propagate failure so SLURM marks the task as FAILED
