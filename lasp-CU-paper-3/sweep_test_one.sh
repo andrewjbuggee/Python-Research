@@ -36,7 +36,7 @@ module load anaconda
 conda activate dropProfs_nn
 
 # Navigate to project directory
-cd /projects/$USER/paper3
+cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
 
 # Create directories
 mkdir -p logs sweep_results

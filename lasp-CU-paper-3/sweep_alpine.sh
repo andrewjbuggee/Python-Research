@@ -29,7 +29,7 @@
 #      /scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5
 #
 # Submit with:
-#   cd /projects/anbu8374/paper3
+#   cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
 #   sbatch sweep_alpine.sh
 #
 # Monitor with:
@@ -56,7 +56,7 @@ module load anaconda
 conda activate dropProfs_nn
 
 # Navigate to project directory
-cd /projects/$USER/paper3
+cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
 
 # Create directories
 mkdir -p logs sweep_results
