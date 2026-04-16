@@ -1,0 +1,75 @@
+{
+  "run_id": 23,
+  "run_name": "tapered_dr0.32_lr1.9e-04_wd1e-06_b128_uniform",
+  "hyperparams": {
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.318,
+    "learning_rate": 0.000188,
+    "weight_decay": 1.05e-06,
+    "sigma_floor": 0.0282,
+    "batch_size": 128,
+    "level_weights": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "level_weights_name": "uniform",
+    "n_epochs": 400,
+    "scheduler_patience": 30,
+    "early_stop_patience": 40,
+    "lambda_physics": 0.1,
+    "lambda_monotonicity": 0.0,
+    "lambda_adiabatic": 0.1,
+    "lambda_smoothness": 0.1
+  },
+  "n_params": 580118,
+  "best_val_loss": -5.75783920480359,
+  "best_epoch": 8,
+  "final_epoch": 48,
+  "train_time_seconds": 203.76042580604553,
+  "test_nll": -6.350176374117534,
+  "test_metrics": {
+    "rmse_per_level": [
+      1.5201516151428223,
+      0.9894863963127136,
+      0.8110185265541077,
+      0.7867081761360168,
+      0.6669567823410034,
+      0.7583177089691162,
+      0.7127062082290649,
+      0.8459704518318176,
+      0.852633535861969,
+      2.3005623817443848
+    ],
+    "mean_rmse": 1.0244511365890503,
+    "tau_rmse": 1.6845879554748535,
+    "mean_std_per_level": [
+      4.277136325836182,
+      1.2930628061294556,
+      0.8944551348686218,
+      0.9104390144348145,
+      0.8921389579772949,
+      0.8884250521659851,
+      0.905280351638794,
+      1.0485988855361938,
+      1.4651703834533691,
+      2.009273052215576
+    ],
+    "mean_std_overall": 1.458393931388855,
+    "mean_tau_std": 1.3401085138320923,
+    "n_test_samples": 6144
+  }
+}
