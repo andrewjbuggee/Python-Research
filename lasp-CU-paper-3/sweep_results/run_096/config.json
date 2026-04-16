@@ -1,0 +1,44 @@
+{
+  "run_id": 96,
+  "run_name": "tapered_dr0.34_lr5.4e-05_wd3e-03_b256_deep",
+  "data": {
+    "h5_path": "/scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5",
+    "instrument": "hysics",
+    "num_workers": 4
+  },
+  "output_dir": "sweep_results",
+  "hyperparams": {
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.344,
+    "learning_rate": 5.4e-05,
+    "weight_decay": 0.0027,
+    "sigma_floor": 0.0316,
+    "batch_size": 256,
+    "level_weights": [
+      1.0,
+      1.0,
+      1.0,
+      1.5,
+      2.0,
+      2.5,
+      3.0,
+      3.5,
+      4.0,
+      5.0
+    ],
+    "level_weights_name": "deep",
+    "n_epochs": 400,
+    "scheduler_patience": 30,
+    "early_stop_patience": 40,
+    "lambda_physics": 0.1,
+    "lambda_monotonicity": 0.0,
+    "lambda_adiabatic": 0.1,
+    "lambda_smoothness": 0.1
+  }
+}

@@ -1,235 +1,267 @@
 [
   {
     "run_id": 0,
-    "run_name": "4x256_dr0.29_lr1.6e-03_uniform",
+    "run_name": "3x128_dr0.02_lr2.4e-03_wd4e-03_b512_uniform",
     "hidden_dims": [
-      256,
-      256,
-      256,
-      256
+      128,
+      128,
+      128
     ],
-    "dropout": 0.291,
-    "learning_rate": 0.001617,
-    "sigma_floor": 0.0119,
+    "dropout": 0.022,
+    "learning_rate": 0.002367,
+    "weight_decay": 0.0045,
+    "sigma_floor": 0.0302,
+    "batch_size": 512,
     "level_weights_name": "uniform"
   },
   {
     "run_id": 1,
-    "run_name": "4x256_dr0.13_lr2.6e-03_ends",
+    "run_name": "4x512_dr0.21_lr5.7e-05_wd1e-03_b256_uniform",
     "hidden_dims": [
-      256,
-      256,
-      256,
-      256
+      512,
+      512,
+      512,
+      512
     ],
-    "dropout": 0.134,
-    "learning_rate": 0.0026,
-    "sigma_floor": 0.0073,
-    "level_weights_name": "ends"
+    "dropout": 0.209,
+    "learning_rate": 5.7e-05,
+    "weight_decay": 0.00106,
+    "sigma_floor": 0.0125,
+    "batch_size": 256,
+    "level_weights_name": "uniform"
   },
   {
     "run_id": 2,
-    "run_name": "4x256_dr0.24_lr2.2e-03_top",
+    "run_name": "4x256_dr0.18_lr8.8e-04_wd4e-04_b256_top",
     "hidden_dims": [
       256,
       256,
       256,
       256
     ],
-    "dropout": 0.239,
-    "learning_rate": 0.002187,
-    "sigma_floor": 0.0347,
+    "dropout": 0.18,
+    "learning_rate": 0.000875,
+    "weight_decay": 0.000433,
+    "sigma_floor": 0.0105,
+    "batch_size": 256,
     "level_weights_name": "top"
   },
   {
     "run_id": 3,
-    "run_name": "4x256_dr0.14_lr8.3e-04_strong_ends",
+    "run_name": "6x256_dr0.12_lr3.2e-04_wd3e-04_b128_ends",
     "hidden_dims": [
+      256,
+      256,
       256,
       256,
       256,
       256
     ],
-    "dropout": 0.135,
-    "learning_rate": 0.000826,
-    "sigma_floor": 0.0266,
-    "level_weights_name": "strong_ends"
-  },
-  {
-    "run_id": 4,
-    "run_name": "4x512_dr0.23_lr3.2e-04_uniform",
-    "hidden_dims": [
-      512,
-      512,
-      512,
-      512
-    ],
-    "dropout": 0.228,
-    "learning_rate": 0.000319,
-    "sigma_floor": 0.0204,
-    "level_weights_name": "uniform"
-  },
-  {
-    "run_id": 5,
-    "run_name": "4x512_dr0.19_lr1.0e-04_ends",
-    "hidden_dims": [
-      512,
-      512,
-      512,
-      512
-    ],
-    "dropout": 0.194,
-    "learning_rate": 0.000101,
-    "sigma_floor": 0.0312,
+    "dropout": 0.124,
+    "learning_rate": 0.000315,
+    "weight_decay": 0.000287,
+    "sigma_floor": 0.048,
+    "batch_size": 128,
     "level_weights_name": "ends"
   },
   {
-    "run_id": 6,
-    "run_name": "4x512_dr0.06_lr1.2e-03_top",
+    "run_id": 4,
+    "run_name": "3x256_dr0.12_lr2.4e-04_wd1e-05_b256_strong_ends",
     "hidden_dims": [
-      512,
-      512,
-      512,
-      512
+      256,
+      256,
+      256
     ],
-    "dropout": 0.057,
-    "learning_rate": 0.001154,
-    "sigma_floor": 0.0225,
-    "level_weights_name": "top"
-  },
-  {
-    "run_id": 7,
-    "run_name": "4x512_dr0.10_lr2.8e-04_strong_ends",
-    "hidden_dims": [
-      512,
-      512,
-      512,
-      512
-    ],
-    "dropout": 0.1,
-    "learning_rate": 0.000282,
-    "sigma_floor": 0.0364,
+    "dropout": 0.119,
+    "learning_rate": 0.000236,
+    "weight_decay": 1.13e-05,
+    "sigma_floor": 0.0173,
+    "batch_size": 256,
     "level_weights_name": "strong_ends"
   },
   {
-    "run_id": 8,
-    "run_name": "tapered_dr0.15_lr3.0e-03_uniform",
+    "run_id": 5,
+    "run_name": "6x256_dr0.38_lr5.2e-04_wd8e-03_b128_strong_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.384,
+    "learning_rate": 0.000524,
+    "weight_decay": 0.00804,
+    "sigma_floor": 0.0465,
+    "batch_size": 128,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 6,
+    "run_name": "tapered_dr0.38_lr1.0e-05_wd1e-03_b512_strong_ends",
     "hidden_dims": [
       512,
       512,
       256,
       256
     ],
-    "dropout": 0.155,
-    "learning_rate": 0.00297,
-    "sigma_floor": 0.0097,
+    "dropout": 0.379,
+    "learning_rate": 1e-05,
+    "weight_decay": 0.000986,
+    "sigma_floor": 0.0138,
+    "batch_size": 512,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 7,
+    "run_name": "3x128_dr0.06_lr1.1e-05_wd3e-06_b128_ends",
+    "hidden_dims": [
+      128,
+      128,
+      128
+    ],
+    "dropout": 0.061,
+    "learning_rate": 1.1e-05,
+    "weight_decay": 2.6e-06,
+    "sigma_floor": 0.0335,
+    "batch_size": 128,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 8,
+    "run_name": "3x128_dr0.36_lr4.5e-04_wd4e-03_b128_uniform",
+    "hidden_dims": [
+      128,
+      128,
+      128
+    ],
+    "dropout": 0.361,
+    "learning_rate": 0.000447,
+    "weight_decay": 0.00383,
+    "sigma_floor": 0.0338,
+    "batch_size": 128,
     "level_weights_name": "uniform"
   },
   {
     "run_id": 9,
-    "run_name": "tapered_dr0.10_lr4.4e-04_ends",
+    "run_name": "4x512_dr0.01_lr1.5e-04_wd2e-06_b128_uniform",
     "hidden_dims": [
       512,
       512,
-      256,
-      256
-    ],
-    "dropout": 0.103,
-    "learning_rate": 0.000444,
-    "sigma_floor": 0.0378,
-    "level_weights_name": "ends"
-  },
-  {
-    "run_id": 10,
-    "run_name": "tapered_dr0.24_lr1.0e-03_top",
-    "hidden_dims": [
       512,
-      512,
-      256,
-      256
+      512
     ],
-    "dropout": 0.241,
-    "learning_rate": 0.001007,
-    "sigma_floor": 0.022,
-    "level_weights_name": "top"
-  },
-  {
-    "run_id": 11,
-    "run_name": "tapered_dr0.26_lr1.3e-03_strong_ends",
-    "hidden_dims": [
-      512,
-      512,
-      256,
-      256
-    ],
-    "dropout": 0.255,
-    "learning_rate": 0.001275,
-    "sigma_floor": 0.0123,
-    "level_weights_name": "strong_ends"
-  },
-  {
-    "run_id": 12,
-    "run_name": "5x256_dr0.27_lr1.8e-03_uniform",
-    "hidden_dims": [
-      256,
-      256,
-      256,
-      256,
-      256
-    ],
-    "dropout": 0.274,
-    "learning_rate": 0.001778,
-    "sigma_floor": 0.0283,
+    "dropout": 0.009,
+    "learning_rate": 0.000154,
+    "weight_decay": 1.87e-06,
+    "sigma_floor": 0.0203,
+    "batch_size": 128,
     "level_weights_name": "uniform"
   },
   {
-    "run_id": 13,
-    "run_name": "5x256_dr0.16_lr2.8e-03_ends",
+    "run_id": 10,
+    "run_name": "tapered_dr0.18_lr2.5e-03_wd2e-05_b128_strong_ends",
     "hidden_dims": [
+      512,
+      512,
+      256,
+      256
+    ],
+    "dropout": 0.184,
+    "learning_rate": 0.002499,
+    "weight_decay": 2.06e-05,
+    "sigma_floor": 0.0412,
+    "batch_size": 128,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 11,
+    "run_name": "6x256_dr0.30_lr1.6e-03_wd2e-06_b256_top",
+    "hidden_dims": [
+      256,
       256,
       256,
       256,
       256,
       256
     ],
-    "dropout": 0.162,
-    "learning_rate": 0.002759,
-    "sigma_floor": 0.0495,
+    "dropout": 0.299,
+    "learning_rate": 0.001648,
+    "weight_decay": 2.17e-06,
+    "sigma_floor": 0.0485,
+    "batch_size": 256,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 12,
+    "run_name": "6x256_dr0.12_lr1.9e-03_wd6e-05_b256_deep",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.125,
+    "learning_rate": 0.001902,
+    "weight_decay": 5.6e-05,
+    "sigma_floor": 0.0288,
+    "batch_size": 256,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 13,
+    "run_name": "3x256_dr0.31_lr4.9e-03_wd8e-04_b512_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.306,
+    "learning_rate": 0.00489,
+    "weight_decay": 0.000764,
+    "sigma_floor": 0.0258,
+    "batch_size": 512,
     "level_weights_name": "ends"
   },
   {
     "run_id": 14,
-    "run_name": "5x256_dr0.28_lr1.9e-03_top",
+    "run_name": "4x512_dr0.28_lr2.1e-03_wd3e-03_b512_strong_ends",
     "hidden_dims": [
-      256,
-      256,
-      256,
-      256,
-      256
+      512,
+      512,
+      512,
+      512
     ],
-    "dropout": 0.279,
-    "learning_rate": 0.001891,
-    "sigma_floor": 0.0269,
-    "level_weights_name": "top"
+    "dropout": 0.283,
+    "learning_rate": 0.002095,
+    "weight_decay": 0.00316,
+    "sigma_floor": 0.0292,
+    "batch_size": 512,
+    "level_weights_name": "strong_ends"
   },
   {
     "run_id": 15,
-    "run_name": "5x256_dr0.05_lr7.7e-04_strong_ends",
+    "run_name": "5x512_dr0.15_lr1.1e-04_wd9e-06_b512_uniform",
     "hidden_dims": [
-      256,
-      256,
-      256,
-      256,
-      256
+      512,
+      512,
+      512,
+      512,
+      512
     ],
-    "dropout": 0.05,
-    "learning_rate": 0.00077,
-    "sigma_floor": 0.0068,
-    "level_weights_name": "strong_ends"
+    "dropout": 0.146,
+    "learning_rate": 0.000111,
+    "weight_decay": 9.17e-06,
+    "sigma_floor": 0.0402,
+    "batch_size": 512,
+    "level_weights_name": "uniform"
   },
   {
     "run_id": 16,
-    "run_name": "5x512_dr0.11_lr6.3e-04_uniform",
+    "run_name": "5x512_dr0.15_lr1.3e-05_wd9e-06_b128_ends",
     "hidden_dims": [
       512,
       512,
@@ -237,228 +269,687 @@
       512,
       512
     ],
-    "dropout": 0.113,
-    "learning_rate": 0.000627,
-    "sigma_floor": 0.016,
-    "level_weights_name": "uniform"
+    "dropout": 0.15,
+    "learning_rate": 1.3e-05,
+    "weight_decay": 8.99e-06,
+    "sigma_floor": 0.0149,
+    "batch_size": 128,
+    "level_weights_name": "ends"
   },
   {
     "run_id": 17,
-    "run_name": "5x512_dr0.26_lr2.0e-04_ends",
+    "run_name": "3x256_dr0.26_lr2.2e-04_wd1e-05_b128_strong_ends",
     "hidden_dims": [
-      512,
-      512,
-      512,
-      512,
-      512
+      256,
+      256,
+      256
     ],
-    "dropout": 0.263,
-    "learning_rate": 0.000197,
-    "sigma_floor": 0.0333,
-    "level_weights_name": "ends"
+    "dropout": 0.264,
+    "learning_rate": 0.000218,
+    "weight_decay": 1.03e-05,
+    "sigma_floor": 0.0407,
+    "batch_size": 128,
+    "level_weights_name": "strong_ends"
   },
   {
     "run_id": 18,
-    "run_name": "5x512_dr0.13_lr2.7e-04_top",
+    "run_name": "6x256_dr0.09_lr8.2e-05_wd1e-05_b512_deep",
     "hidden_dims": [
-      512,
-      512,
-      512,
-      512,
-      512
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
     ],
-    "dropout": 0.127,
-    "learning_rate": 0.000267,
-    "sigma_floor": 0.0105,
-    "level_weights_name": "top"
+    "dropout": 0.087,
+    "learning_rate": 8.2e-05,
+    "weight_decay": 1.36e-05,
+    "sigma_floor": 0.0178,
+    "batch_size": 512,
+    "level_weights_name": "deep"
   },
   {
     "run_id": 19,
-    "run_name": "5x512_dr0.15_lr1.4e-03_strong_ends",
+    "run_name": "tapered_dr0.05_lr4.7e-03_wd2e-03_b512_top",
     "hidden_dims": [
       512,
-      512,
-      512,
-      512,
-      512
+      256,
+      256,
+      128,
+      128
     ],
-    "dropout": 0.147,
-    "learning_rate": 0.001386,
-    "sigma_floor": 0.0136,
-    "level_weights_name": "strong_ends"
-  },
-  {
-    "run_id": 20,
-    "run_name": "4x256_dr0.17_lr1.2e-04_uniform",
-    "hidden_dims": [
-      256,
-      256,
-      256,
-      256
-    ],
-    "dropout": 0.166,
-    "learning_rate": 0.000117,
-    "sigma_floor": 0.0284,
-    "level_weights_name": "uniform"
-  },
-  {
-    "run_id": 21,
-    "run_name": "4x256_dr0.28_lr4.9e-04_ends",
-    "hidden_dims": [
-      256,
-      256,
-      256,
-      256
-    ],
-    "dropout": 0.282,
-    "learning_rate": 0.000494,
-    "sigma_floor": 0.0298,
-    "level_weights_name": "ends"
-  },
-  {
-    "run_id": 22,
-    "run_name": "4x256_dr0.25_lr1.3e-03_top",
-    "hidden_dims": [
-      256,
-      256,
-      256,
-      256
-    ],
-    "dropout": 0.25,
-    "learning_rate": 0.001309,
-    "sigma_floor": 0.0146,
+    "dropout": 0.051,
+    "learning_rate": 0.004671,
+    "weight_decay": 0.00183,
+    "sigma_floor": 0.0314,
+    "batch_size": 512,
     "level_weights_name": "top"
   },
   {
+    "run_id": 20,
+    "run_name": "tapered_dr0.13_lr4.6e-05_wd2e-03_b128_strong_ends",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.13,
+    "learning_rate": 4.6e-05,
+    "weight_decay": 0.00197,
+    "sigma_floor": 0.0492,
+    "batch_size": 128,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 21,
+    "run_name": "4x512_dr0.36_lr2.2e-03_wd4e-03_b256_strong_ends",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.356,
+    "learning_rate": 0.002178,
+    "weight_decay": 0.0036,
+    "sigma_floor": 0.0101,
+    "batch_size": 256,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 22,
+    "run_name": "3x256_dr0.20_lr2.5e-05_wd6e-04_b128_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.198,
+    "learning_rate": 2.5e-05,
+    "weight_decay": 0.000602,
+    "sigma_floor": 0.0154,
+    "batch_size": 128,
+    "level_weights_name": "ends"
+  },
+  {
     "run_id": 23,
-    "run_name": "4x256_dr0.06_lr2.5e-04_strong_ends",
+    "run_name": "tapered_dr0.32_lr1.9e-04_wd1e-06_b128_uniform",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.318,
+    "learning_rate": 0.000188,
+    "weight_decay": 1.05e-06,
+    "sigma_floor": 0.0282,
+    "batch_size": 128,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 24,
+    "run_name": "3x256_dr0.07_lr6.9e-05_wd2e-06_b256_deep",
+    "hidden_dims": [
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.073,
+    "learning_rate": 6.9e-05,
+    "weight_decay": 1.63e-06,
+    "sigma_floor": 0.0432,
+    "batch_size": 256,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 25,
+    "run_name": "4x256_dr0.16_lr8.8e-05_wd8e-05_b128_ends",
     "hidden_dims": [
       256,
       256,
       256,
       256
     ],
-    "dropout": 0.06,
-    "learning_rate": 0.000248,
-    "sigma_floor": 0.0086,
-    "level_weights_name": "strong_ends"
-  },
-  {
-    "run_id": 24,
-    "run_name": "4x512_dr0.20_lr3.9e-04_uniform",
-    "hidden_dims": [
-      512,
-      512,
-      512,
-      512
-    ],
-    "dropout": 0.201,
-    "learning_rate": 0.000392,
-    "sigma_floor": 0.0442,
-    "level_weights_name": "uniform"
-  },
-  {
-    "run_id": 25,
-    "run_name": "4x512_dr0.09_lr1.1e-04_ends",
-    "hidden_dims": [
-      512,
-      512,
-      512,
-      512
-    ],
-    "dropout": 0.088,
-    "learning_rate": 0.000111,
-    "sigma_floor": 0.039,
+    "dropout": 0.163,
+    "learning_rate": 8.8e-05,
+    "weight_decay": 7.73e-05,
+    "sigma_floor": 0.0079,
+    "batch_size": 128,
     "level_weights_name": "ends"
   },
   {
     "run_id": 26,
-    "run_name": "4x512_dr0.29_lr5.5e-04_top",
+    "run_name": "5x512_dr0.17_lr1.4e-05_wd5e-03_b128_strong_ends",
     "hidden_dims": [
+      512,
       512,
       512,
       512,
       512
     ],
-    "dropout": 0.29,
-    "learning_rate": 0.00055,
-    "sigma_floor": 0.0192,
-    "level_weights_name": "top"
-  },
-  {
-    "run_id": 27,
-    "run_name": "4x512_dr0.18_lr1.5e-04_strong_ends",
-    "hidden_dims": [
-      512,
-      512,
-      512,
-      512
-    ],
-    "dropout": 0.185,
-    "learning_rate": 0.00015,
-    "sigma_floor": 0.0417,
+    "dropout": 0.17,
+    "learning_rate": 1.4e-05,
+    "weight_decay": 0.00501,
+    "sigma_floor": 0.0204,
+    "batch_size": 128,
     "level_weights_name": "strong_ends"
   },
   {
+    "run_id": 27,
+    "run_name": "tapered_dr0.11_lr7.2e-04_wd4e-05_b512_deep",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.107,
+    "learning_rate": 0.000718,
+    "weight_decay": 3.98e-05,
+    "sigma_floor": 0.0264,
+    "batch_size": 512,
+    "level_weights_name": "deep"
+  },
+  {
     "run_id": 28,
-    "run_name": "tapered_dr0.25_lr4.6e-04_uniform",
+    "run_name": "tapered_dr0.29_lr1.6e-03_wd1e-06_b256_strong_ends",
     "hidden_dims": [
       512,
       512,
       256,
       256
     ],
-    "dropout": 0.251,
-    "learning_rate": 0.000462,
-    "sigma_floor": 0.0477,
-    "level_weights_name": "uniform"
+    "dropout": 0.288,
+    "learning_rate": 0.0016,
+    "weight_decay": 1.4e-06,
+    "sigma_floor": 0.0379,
+    "batch_size": 256,
+    "level_weights_name": "strong_ends"
   },
   {
     "run_id": 29,
-    "run_name": "tapered_dr0.21_lr3.6e-04_ends",
+    "run_name": "6x256_dr0.09_lr3.3e-04_wd4e-06_b512_ends",
     "hidden_dims": [
-      512,
-      512,
+      256,
+      256,
+      256,
+      256,
       256,
       256
     ],
-    "dropout": 0.208,
-    "learning_rate": 0.000364,
-    "sigma_floor": 0.0195,
+    "dropout": 0.088,
+    "learning_rate": 0.000328,
+    "weight_decay": 3.95e-06,
+    "sigma_floor": 0.0452,
+    "batch_size": 512,
     "level_weights_name": "ends"
   },
   {
     "run_id": 30,
-    "run_name": "tapered_dr0.20_lr9.1e-04_top",
+    "run_name": "3x256_dr0.10_lr3.5e-04_wd3e-05_b128_deep",
     "hidden_dims": [
-      512,
-      512,
+      256,
       256,
       256
     ],
-    "dropout": 0.199,
-    "learning_rate": 0.000914,
-    "sigma_floor": 0.0352,
-    "level_weights_name": "top"
+    "dropout": 0.097,
+    "learning_rate": 0.000346,
+    "weight_decay": 2.78e-05,
+    "sigma_floor": 0.0488,
+    "batch_size": 128,
+    "level_weights_name": "deep"
   },
   {
     "run_id": 31,
-    "run_name": "tapered_dr0.14_lr2.2e-04_strong_ends",
+    "run_name": "3x128_dr0.05_lr1.8e-04_wd2e-03_b256_ends",
+    "hidden_dims": [
+      128,
+      128,
+      128
+    ],
+    "dropout": 0.046,
+    "learning_rate": 0.000184,
+    "weight_decay": 0.00239,
+    "sigma_floor": 0.0347,
+    "batch_size": 256,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 32,
+    "run_name": "6x256_dr0.40_lr9.0e-04_wd1e-04_b512_top",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.397,
+    "learning_rate": 0.000901,
+    "weight_decay": 0.000118,
+    "sigma_floor": 0.0249,
+    "batch_size": 512,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 33,
+    "run_name": "4x512_dr0.02_lr2.8e-04_wd8e-03_b512_deep",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.02,
+    "learning_rate": 0.000283,
+    "weight_decay": 0.00753,
+    "sigma_floor": 0.0135,
+    "batch_size": 512,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 34,
+    "run_name": "3x256_dr0.38_lr1.9e-05_wd2e-05_b128_top",
+    "hidden_dims": [
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.376,
+    "learning_rate": 1.9e-05,
+    "weight_decay": 1.55e-05,
+    "sigma_floor": 0.0192,
+    "batch_size": 128,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 35,
+    "run_name": "4x256_dr0.15_lr4.8e-05_wd3e-05_b512_top",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.154,
+    "learning_rate": 4.8e-05,
+    "weight_decay": 2.65e-05,
+    "sigma_floor": 0.0256,
+    "batch_size": 512,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 36,
+    "run_name": "5x512_dr0.06_lr2.2e-05_wd2e-04_b512_top",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.059,
+    "learning_rate": 2.2e-05,
+    "weight_decay": 0.000199,
+    "sigma_floor": 0.0347,
+    "batch_size": 512,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 37,
+    "run_name": "4x512_dr0.22_lr4.3e-05_wd2e-05_b512_ends",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.219,
+    "learning_rate": 4.3e-05,
+    "weight_decay": 2.16e-05,
+    "sigma_floor": 0.0067,
+    "batch_size": 512,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 38,
+    "run_name": "4x512_dr0.39_lr7.3e-05_wd2e-05_b256_top",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.392,
+    "learning_rate": 7.3e-05,
+    "weight_decay": 2.32e-05,
+    "sigma_floor": 0.0375,
+    "batch_size": 256,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 39,
+    "run_name": "4x512_dr0.23_lr3.6e-03_wd1e-05_b128_top",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.233,
+    "learning_rate": 0.003627,
+    "weight_decay": 1.22e-05,
+    "sigma_floor": 0.0053,
+    "batch_size": 128,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 40,
+    "run_name": "5x512_dr0.17_lr1.8e-05_wd3e-04_b512_ends",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.167,
+    "learning_rate": 1.8e-05,
+    "weight_decay": 0.000336,
+    "sigma_floor": 0.047,
+    "batch_size": 512,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 41,
+    "run_name": "3x128_dr0.22_lr2.0e-04_wd6e-06_b256_top",
+    "hidden_dims": [
+      128,
+      128,
+      128
+    ],
+    "dropout": 0.216,
+    "learning_rate": 0.0002,
+    "weight_decay": 6.22e-06,
+    "sigma_floor": 0.0389,
+    "batch_size": 256,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 42,
+    "run_name": "6x256_dr0.23_lr1.6e-04_wd8e-03_b256_uniform",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.225,
+    "learning_rate": 0.000156,
+    "weight_decay": 0.00845,
+    "sigma_floor": 0.0459,
+    "batch_size": 256,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 43,
+    "run_name": "tapered_dr0.07_lr1.5e-05_wd4e-04_b128_ends",
     "hidden_dims": [
       512,
       512,
       256,
       256
     ],
-    "dropout": 0.142,
-    "learning_rate": 0.000218,
-    "sigma_floor": 0.0308,
+    "dropout": 0.071,
+    "learning_rate": 1.5e-05,
+    "weight_decay": 0.000369,
+    "sigma_floor": 0.0367,
+    "batch_size": 128,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 44,
+    "run_name": "3x256_dr0.04_lr3.8e-05_wd2e-04_b512_strong_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.043,
+    "learning_rate": 3.8e-05,
+    "weight_decay": 0.000231,
+    "sigma_floor": 0.0474,
+    "batch_size": 512,
     "level_weights_name": "strong_ends"
   },
   {
-    "run_id": 32,
-    "run_name": "5x256_dr0.22_lr7.2e-04_uniform",
+    "run_id": 45,
+    "run_name": "tapered_dr0.08_lr3.6e-05_wd1e-03_b256_deep",
     "hidden_dims": [
+      512,
+      512,
+      256,
+      256
+    ],
+    "dropout": 0.078,
+    "learning_rate": 3.6e-05,
+    "weight_decay": 0.00145,
+    "sigma_floor": 0.0158,
+    "batch_size": 256,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 46,
+    "run_name": "5x512_dr0.37_lr1.2e-04_wd6e-05_b512_deep",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.368,
+    "learning_rate": 0.000121,
+    "weight_decay": 5.96e-05,
+    "sigma_floor": 0.0419,
+    "batch_size": 512,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 47,
+    "run_name": "6x256_dr0.13_lr5.3e-05_wd1e-03_b128_top",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.132,
+    "learning_rate": 5.3e-05,
+    "weight_decay": 0.00141,
+    "sigma_floor": 0.0219,
+    "batch_size": 128,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 48,
+    "run_name": "3x128_dr0.02_lr1.2e-03_wd1e-03_b256_strong_ends",
+    "hidden_dims": [
+      128,
+      128,
+      128
+    ],
+    "dropout": 0.016,
+    "learning_rate": 0.001196,
+    "weight_decay": 0.00128,
+    "sigma_floor": 0.0073,
+    "batch_size": 256,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 49,
+    "run_name": "3x256_dr0.03_lr3.1e-05_wd3e-06_b512_deep",
+    "hidden_dims": [
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.03,
+    "learning_rate": 3.1e-05,
+    "weight_decay": 2.89e-06,
+    "sigma_floor": 0.0352,
+    "batch_size": 512,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 50,
+    "run_name": "tapered_dr0.25_lr2.1e-05_wd3e-03_b128_top",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.25,
+    "learning_rate": 2.1e-05,
+    "weight_decay": 0.00298,
+    "sigma_floor": 0.0209,
+    "batch_size": 128,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 51,
+    "run_name": "tapered_dr0.12_lr3.0e-04_wd1e-04_b128_deep",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.115,
+    "learning_rate": 0.000305,
+    "weight_decay": 0.000102,
+    "sigma_floor": 0.0233,
+    "batch_size": 128,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 52,
+    "run_name": "5x512_dr0.37_lr1.4e-03_wd9e-05_b256_ends",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.367,
+    "learning_rate": 0.00136,
+    "weight_decay": 9.26e-05,
+    "sigma_floor": 0.0274,
+    "batch_size": 256,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 53,
+    "run_name": "3x256_dr0.00_lr3.0e-05_wd4e-05_b512_uniform",
+    "hidden_dims": [
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.002,
+    "learning_rate": 3e-05,
+    "weight_decay": 4.27e-05,
+    "sigma_floor": 0.0357,
+    "batch_size": 512,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 54,
+    "run_name": "4x256_dr0.27_lr7.7e-05_wd3e-04_b128_strong_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.267,
+    "learning_rate": 7.7e-05,
+    "weight_decay": 0.000269,
+    "sigma_floor": 0.0444,
+    "batch_size": 128,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 55,
+    "run_name": "5x512_dr0.35_lr1.2e-03_wd7e-06_b128_deep",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.347,
+    "learning_rate": 0.001221,
+    "weight_decay": 6.6e-06,
+    "sigma_floor": 0.0236,
+    "batch_size": 128,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 56,
+    "run_name": "tapered_dr0.08_lr7.3e-04_wd7e-04_b512_ends",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.08,
+    "learning_rate": 0.000735,
+    "weight_decay": 0.000666,
+    "sigma_floor": 0.0306,
+    "batch_size": 512,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 57,
+    "run_name": "tapered_dr0.26_lr2.4e-04_wd2e-06_b256_ends",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.255,
+    "learning_rate": 0.000241,
+    "weight_decay": 1.53e-06,
+    "sigma_floor": 0.0095,
+    "batch_size": 256,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 58,
+    "run_name": "6x256_dr0.22_lr2.9e-03_wd7e-06_b128_uniform",
+    "hidden_dims": [
+      256,
       256,
       256,
       256,
@@ -466,253 +957,677 @@
       256
     ],
     "dropout": 0.221,
-    "learning_rate": 0.000723,
-    "sigma_floor": 0.0174,
+    "learning_rate": 0.002867,
+    "weight_decay": 6.99e-06,
+    "sigma_floor": 0.0361,
+    "batch_size": 128,
     "level_weights_name": "uniform"
   },
   {
-    "run_id": 33,
-    "run_name": "5x256_dr0.18_lr2.5e-03_ends",
+    "run_id": 59,
+    "run_name": "4x256_dr0.01_lr4.9e-04_wd1e-06_b256_strong_ends",
     "hidden_dims": [
-      256,
       256,
       256,
       256,
       256
     ],
-    "dropout": 0.178,
-    "learning_rate": 0.002538,
-    "sigma_floor": 0.0154,
-    "level_weights_name": "ends"
-  },
-  {
-    "run_id": 34,
-    "run_name": "5x256_dr0.17_lr4.1e-04_top",
-    "hidden_dims": [
-      256,
-      256,
-      256,
-      256,
-      256
-    ],
-    "dropout": 0.172,
-    "learning_rate": 0.000411,
-    "sigma_floor": 0.0182,
-    "level_weights_name": "top"
-  },
-  {
-    "run_id": 35,
-    "run_name": "5x256_dr0.12_lr1.5e-03_strong_ends",
-    "hidden_dims": [
-      256,
-      256,
-      256,
-      256,
-      256
-    ],
-    "dropout": 0.115,
-    "learning_rate": 0.001508,
-    "sigma_floor": 0.0485,
+    "dropout": 0.007,
+    "learning_rate": 0.000487,
+    "weight_decay": 1.16e-06,
+    "sigma_floor": 0.009,
+    "batch_size": 256,
     "level_weights_name": "strong_ends"
   },
   {
-    "run_id": 36,
-    "run_name": "5x512_dr0.07_lr2.3e-03_uniform",
+    "run_id": 60,
+    "run_name": "tapered_dr0.14_lr4.3e-03_wd7e-03_b512_strong_ends",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.138,
+    "learning_rate": 0.004319,
+    "weight_decay": 0.00655,
+    "sigma_floor": 0.0146,
+    "batch_size": 512,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 61,
+    "run_name": "4x256_dr0.24_lr2.6e-03_wd5e-06_b128_deep",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.244,
+    "learning_rate": 0.002604,
+    "weight_decay": 4.58e-06,
+    "sigma_floor": 0.0195,
+    "batch_size": 128,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 62,
+    "run_name": "6x256_dr0.29_lr2.8e-03_wd4e-03_b256_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.288,
+    "learning_rate": 0.002826,
+    "weight_decay": 0.00431,
+    "sigma_floor": 0.0277,
+    "batch_size": 256,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 63,
+    "run_name": "3x128_dr0.32_lr3.4e-05_wd2e-04_b512_ends",
+    "hidden_dims": [
+      128,
+      128,
+      128
+    ],
+    "dropout": 0.323,
+    "learning_rate": 3.4e-05,
+    "weight_decay": 0.000156,
+    "sigma_floor": 0.0128,
+    "batch_size": 512,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 64,
+    "run_name": "6x256_dr0.38_lr1.1e-04_wd5e-06_b256_strong_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.383,
+    "learning_rate": 0.000105,
+    "weight_decay": 5.15e-06,
+    "sigma_floor": 0.04,
+    "batch_size": 256,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 65,
+    "run_name": "3x128_dr0.25_lr4.0e-03_wd2e-05_b256_uniform",
+    "hidden_dims": [
+      128,
+      128,
+      128
+    ],
+    "dropout": 0.246,
+    "learning_rate": 0.00404,
+    "weight_decay": 1.59e-05,
+    "sigma_floor": 0.0216,
+    "batch_size": 256,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 66,
+    "run_name": "tapered_dr0.31_lr1.4e-03_wd3e-04_b512_top",
+    "hidden_dims": [
+      512,
+      512,
+      256,
+      256
+    ],
+    "dropout": 0.311,
+    "learning_rate": 0.001352,
+    "weight_decay": 0.000315,
+    "sigma_floor": 0.0056,
+    "batch_size": 512,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 67,
+    "run_name": "tapered_dr0.17_lr1.4e-04_wd2e-03_b128_deep",
+    "hidden_dims": [
+      512,
+      512,
+      256,
+      256
+    ],
+    "dropout": 0.174,
+    "learning_rate": 0.000138,
+    "weight_decay": 0.00164,
+    "sigma_floor": 0.0329,
+    "batch_size": 128,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 68,
+    "run_name": "6x256_dr0.14_lr9.5e-04_wd3e-05_b512_strong_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.141,
+    "learning_rate": 0.000953,
+    "weight_decay": 3.12e-05,
+    "sigma_floor": 0.0117,
+    "batch_size": 512,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 69,
+    "run_name": "5x512_dr0.35_lr9.6e-05_wd4e-06_b512_strong_ends",
     "hidden_dims": [
       512,
       512,
       512,
       512,
       512
+    ],
+    "dropout": 0.348,
+    "learning_rate": 9.6e-05,
+    "weight_decay": 3.59e-06,
+    "sigma_floor": 0.0307,
+    "batch_size": 512,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 70,
+    "run_name": "tapered_dr0.10_lr3.7e-04_wd6e-03_b256_top",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.104,
+    "learning_rate": 0.000373,
+    "weight_decay": 0.00581,
+    "sigma_floor": 0.0069,
+    "batch_size": 256,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 71,
+    "run_name": "4x256_dr0.28_lr6.7e-04_wd2e-04_b256_deep",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.28,
+    "learning_rate": 0.000673,
+    "weight_decay": 0.000174,
+    "sigma_floor": 0.05,
+    "batch_size": 256,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 72,
+    "run_name": "5x512_dr0.04_lr6.4e-04_wd1e-06_b256_uniform",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.035,
+    "learning_rate": 0.000636,
+    "weight_decay": 1.28e-06,
+    "sigma_floor": 0.0224,
+    "batch_size": 256,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 73,
+    "run_name": "4x256_dr0.30_lr2.7e-05_wd5e-04_b512_uniform",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.3,
+    "learning_rate": 2.7e-05,
+    "weight_decay": 0.000489,
+    "sigma_floor": 0.0447,
+    "batch_size": 512,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 74,
+    "run_name": "tapered_dr0.23_lr1.5e-03_wd1e-04_b256_uniform",
+    "hidden_dims": [
+      512,
+      512,
+      256,
+      256
+    ],
+    "dropout": 0.229,
+    "learning_rate": 0.001496,
+    "weight_decay": 0.000132,
+    "sigma_floor": 0.0439,
+    "batch_size": 256,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 75,
+    "run_name": "4x512_dr0.27_lr5.8e-04_wd2e-06_b128_deep",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.274,
+    "learning_rate": 0.000576,
+    "weight_decay": 2e-06,
+    "sigma_floor": 0.0141,
+    "batch_size": 128,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 76,
+    "run_name": "5x512_dr0.29_lr1.0e-03_wd1e-04_b128_top",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.295,
+    "learning_rate": 0.001026,
+    "weight_decay": 0.000139,
+    "sigma_floor": 0.0384,
+    "batch_size": 128,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 77,
+    "run_name": "3x256_dr0.24_lr1.6e-05_wd7e-04_b512_top",
+    "hidden_dims": [
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.237,
+    "learning_rate": 1.6e-05,
+    "weight_decay": 0.000724,
+    "sigma_floor": 0.0121,
+    "batch_size": 512,
+    "level_weights_name": "top"
+  },
+  {
+    "run_id": 78,
+    "run_name": "tapered_dr0.36_lr1.4e-05_wd4e-05_b256_strong_ends",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.36,
+    "learning_rate": 1.4e-05,
+    "weight_decay": 3.62e-05,
+    "sigma_floor": 0.0323,
+    "batch_size": 256,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 79,
+    "run_name": "6x256_dr0.04_lr1.1e-03_wd7e-05_b128_deep",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.039,
+    "learning_rate": 0.001104,
+    "weight_decay": 6.93e-05,
+    "sigma_floor": 0.0433,
+    "batch_size": 128,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 80,
+    "run_name": "3x256_dr0.07_lr2.6e-04_wd4e-04_b128_uniform",
+    "hidden_dims": [
+      256,
+      256,
+      256
     ],
     "dropout": 0.067,
-    "learning_rate": 0.002302,
-    "sigma_floor": 0.0321,
+    "learning_rate": 0.000258,
+    "weight_decay": 0.000438,
+    "sigma_floor": 0.0372,
+    "batch_size": 128,
     "level_weights_name": "uniform"
   },
   {
-    "run_id": 37,
-    "run_name": "5x512_dr0.22_lr2.0e-04_ends",
+    "run_id": 81,
+    "run_name": "4x512_dr0.33_lr1.8e-03_wd2e-04_b128_ends",
     "hidden_dims": [
-      512,
       512,
       512,
       512,
       512
     ],
-    "dropout": 0.218,
-    "learning_rate": 0.000205,
-    "sigma_floor": 0.0243,
+    "dropout": 0.334,
+    "learning_rate": 0.001757,
+    "weight_decay": 0.000176,
+    "sigma_floor": 0.006,
+    "batch_size": 128,
     "level_weights_name": "ends"
   },
   {
-    "run_id": 38,
-    "run_name": "5x512_dr0.08_lr3.4e-04_top",
+    "run_id": 82,
+    "run_name": "tapered_dr0.20_lr3.1e-03_wd2e-05_b128_uniform",
     "hidden_dims": [
       512,
       512,
-      512,
-      512,
-      512
+      256,
+      256
     ],
-    "dropout": 0.076,
-    "learning_rate": 0.000339,
-    "sigma_floor": 0.0402,
-    "level_weights_name": "top"
+    "dropout": 0.195,
+    "learning_rate": 0.003069,
+    "weight_decay": 1.88e-05,
+    "sigma_floor": 0.0188,
+    "batch_size": 128,
+    "level_weights_name": "uniform"
   },
   {
-    "run_id": 39,
-    "run_name": "5x512_dr0.07_lr1.4e-04_strong_ends",
+    "run_id": 83,
+    "run_name": "3x128_dr0.33_lr3.7e-03_wd8e-06_b128_strong_ends",
     "hidden_dims": [
-      512,
-      512,
-      512,
-      512,
-      512
+      128,
+      128,
+      128
     ],
-    "dropout": 0.072,
-    "learning_rate": 0.000136,
-    "sigma_floor": 0.0233,
+    "dropout": 0.33,
+    "learning_rate": 0.003726,
+    "weight_decay": 7.64e-06,
+    "sigma_floor": 0.0228,
+    "batch_size": 128,
     "level_weights_name": "strong_ends"
   },
   {
-    "run_id": 40,
-    "run_name": "4x256_dr0.16_lr2.4e-04_uniform",
+    "run_id": 84,
+    "run_name": "tapered_dr0.19_lr1.3e-04_wd9e-05_b512_uniform",
+    "hidden_dims": [
+      512,
+      512,
+      256,
+      256
+    ],
+    "dropout": 0.188,
+    "learning_rate": 0.000134,
+    "weight_decay": 8.73e-05,
+    "sigma_floor": 0.0111,
+    "batch_size": 512,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 85,
+    "run_name": "4x256_dr0.39_lr4.2e-05_wd9e-03_b256_uniform",
     "hidden_dims": [
       256,
       256,
       256,
       256
+    ],
+    "dropout": 0.392,
+    "learning_rate": 4.2e-05,
+    "weight_decay": 0.00941,
+    "sigma_floor": 0.0245,
+    "batch_size": 256,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 86,
+    "run_name": "5x512_dr0.16_lr1.6e-04_wd3e-06_b128_uniform",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512,
+      512
     ],
     "dropout": 0.158,
-    "learning_rate": 0.00024,
+    "learning_rate": 0.000165,
+    "weight_decay": 3.23e-06,
     "sigma_floor": 0.0463,
+    "batch_size": 128,
     "level_weights_name": "uniform"
   },
   {
-    "run_id": 41,
-    "run_name": "4x256_dr0.08_lr5.8e-04_ends",
+    "run_id": 87,
+    "run_name": "3x256_dr0.11_lr7.8e-04_wd9e-04_b256_uniform",
     "hidden_dims": [
-      256,
       256,
       256,
       256
     ],
-    "dropout": 0.081,
-    "learning_rate": 0.000581,
-    "sigma_floor": 0.0451,
-    "level_weights_name": "ends"
+    "dropout": 0.11,
+    "learning_rate": 0.000782,
+    "weight_decay": 0.000851,
+    "sigma_floor": 0.0297,
+    "batch_size": 256,
+    "level_weights_name": "uniform"
   },
   {
-    "run_id": 42,
-    "run_name": "4x256_dr0.30_lr6.8e-04_top",
+    "run_id": 88,
+    "run_name": "4x256_dr0.34_lr1.2e-04_wd4e-05_b512_deep",
     "hidden_dims": [
       256,
       256,
       256,
       256
     ],
-    "dropout": 0.298,
-    "learning_rate": 0.000681,
-    "sigma_floor": 0.0426,
-    "level_weights_name": "top"
+    "dropout": 0.337,
+    "learning_rate": 0.000116,
+    "weight_decay": 4.49e-05,
+    "sigma_floor": 0.0165,
+    "batch_size": 512,
+    "level_weights_name": "deep"
   },
   {
-    "run_id": 43,
-    "run_name": "4x256_dr0.23_lr1.1e-03_strong_ends",
+    "run_id": 89,
+    "run_name": "5x512_dr0.05_lr6.2e-05_wd4e-06_b256_strong_ends",
     "hidden_dims": [
-      256,
-      256,
-      256,
-      256
+      512,
+      512,
+      512,
+      512,
+      512
     ],
-    "dropout": 0.234,
-    "learning_rate": 0.001063,
-    "sigma_floor": 0.0372,
+    "dropout": 0.053,
+    "learning_rate": 6.2e-05,
+    "weight_decay": 4.17e-06,
+    "sigma_floor": 0.017,
+    "batch_size": 256,
     "level_weights_name": "strong_ends"
   },
   {
-    "run_id": 44,
-    "run_name": "4x512_dr0.18_lr8.7e-04_uniform",
+    "run_id": 90,
+    "run_name": "tapered_dr0.33_lr1.1e-05_wd5e-05_b256_top",
     "hidden_dims": [
       512,
       512,
-      512,
-      512
+      256,
+      256
     ],
-    "dropout": 0.182,
-    "learning_rate": 0.000869,
-    "sigma_floor": 0.043,
-    "level_weights_name": "uniform"
-  },
-  {
-    "run_id": 45,
-    "run_name": "4x512_dr0.12_lr1.7e-04_ends",
-    "hidden_dims": [
-      512,
-      512,
-      512,
-      512
-    ],
-    "dropout": 0.125,
-    "learning_rate": 0.000166,
-    "sigma_floor": 0.0057,
-    "level_weights_name": "ends"
-  },
-  {
-    "run_id": 46,
-    "run_name": "4x512_dr0.09_lr1.8e-04_top",
-    "hidden_dims": [
-      512,
-      512,
-      512,
-      512
-    ],
-    "dropout": 0.091,
-    "learning_rate": 0.000184,
-    "sigma_floor": 0.0078,
+    "dropout": 0.325,
+    "learning_rate": 1.1e-05,
+    "weight_decay": 5.1e-05,
+    "sigma_floor": 0.0331,
+    "batch_size": 256,
     "level_weights_name": "top"
   },
   {
-    "run_id": 47,
-    "run_name": "4x512_dr0.11_lr1.6e-04_strong_ends",
+    "run_id": 91,
+    "run_name": "4x256_dr0.21_lr2.6e-05_wd2e-06_b256_ends",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.207,
+    "learning_rate": 2.6e-05,
+    "weight_decay": 2.43e-06,
+    "sigma_floor": 0.0424,
+    "batch_size": 256,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 92,
+    "run_name": "4x256_dr0.27_lr9.1e-05_wd2e-04_b128_uniform",
+    "hidden_dims": [
+      256,
+      256,
+      256,
+      256
+    ],
+    "dropout": 0.27,
+    "learning_rate": 9.1e-05,
+    "weight_decay": 0.000217,
+    "sigma_floor": 0.0185,
+    "batch_size": 128,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 93,
+    "run_name": "4x512_dr0.10_lr2.3e-05_wd2e-03_b256_deep",
     "hidden_dims": [
       512,
       512,
       512,
       512
     ],
-    "dropout": 0.107,
-    "learning_rate": 0.000159,
+    "dropout": 0.096,
+    "learning_rate": 2.3e-05,
+    "weight_decay": 0.00226,
+    "sigma_floor": 0.0096,
+    "batch_size": 256,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 94,
+    "run_name": "tapered_dr0.03_lr3.4e-03_wd5e-06_b512_deep",
+    "hidden_dims": [
+      512,
+      512,
+      256,
+      256
+    ],
+    "dropout": 0.025,
+    "learning_rate": 0.003415,
+    "weight_decay": 5.4e-06,
+    "sigma_floor": 0.024,
+    "batch_size": 512,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 95,
+    "run_name": "tapered_dr0.31_lr1.7e-05_wd5e-04_b256_uniform",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.312,
+    "learning_rate": 1.7e-05,
+    "weight_decay": 0.000539,
+    "sigma_floor": 0.027,
+    "batch_size": 256,
+    "level_weights_name": "uniform"
+  },
+  {
+    "run_id": 96,
+    "run_name": "tapered_dr0.34_lr5.4e-05_wd3e-03_b256_deep",
+    "hidden_dims": [
+      512,
+      256,
+      256,
+      128,
+      128
+    ],
+    "dropout": 0.344,
+    "learning_rate": 5.4e-05,
+    "weight_decay": 0.0027,
+    "sigma_floor": 0.0316,
+    "batch_size": 256,
+    "level_weights_name": "deep"
+  },
+  {
+    "run_id": 97,
+    "run_name": "4x512_dr0.26_lr4.4e-04_wd7e-05_b128_strong_ends",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.258,
+    "learning_rate": 0.000435,
+    "weight_decay": 6.69e-05,
+    "sigma_floor": 0.0085,
+    "batch_size": 128,
+    "level_weights_name": "strong_ends"
+  },
+  {
+    "run_id": 98,
+    "run_name": "4x512_dr0.20_lr4.0e-04_wd6e-03_b256_ends",
+    "hidden_dims": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "dropout": 0.203,
+    "learning_rate": 0.000395,
+    "weight_decay": 0.00551,
+    "sigma_floor": 0.0416,
+    "batch_size": 256,
+    "level_weights_name": "ends"
+  },
+  {
+    "run_id": 99,
+    "run_name": "3x128_dr0.18_lr5.5e-04_wd1e-03_b128_top",
+    "hidden_dims": [
+      128,
+      128,
+      128
+    ],
+    "dropout": 0.18,
+    "learning_rate": 0.000554,
+    "weight_decay": 0.00116,
     "sigma_floor": 0.0392,
-    "level_weights_name": "strong_ends"
-  },
-  {
-    "run_id": 48,
-    "run_name": "tapered_dr0.21_lr2.1e-03_uniform",
-    "hidden_dims": [
-      512,
-      512,
-      256,
-      256
-    ],
-    "dropout": 0.211,
-    "learning_rate": 0.002058,
-    "sigma_floor": 0.0469,
-    "level_weights_name": "uniform"
-  },
-  {
-    "run_id": 49,
-    "run_name": "tapered_dr0.27_lr1.3e-04_ends",
-    "hidden_dims": [
-      512,
-      512,
-      256,
-      256
-    ],
-    "dropout": 0.267,
-    "learning_rate": 0.000129,
-    "sigma_floor": 0.0254,
-    "level_weights_name": "ends"
+    "batch_size": 128,
+    "level_weights_name": "top"
   }
 ]
