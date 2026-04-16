@@ -1,0 +1,11 @@
+Meeting with Mohal Khandelwal from CURC
+
+- Look into using XDMoD for monitoring jobs on the super computer. This is a more advanced version than the seff SLURM command (https://curc.readthedocs.io/en/latest/compute/monitoring-resources.html#xdmod)
+ 
+
+- For checking my SU usage in the las 365 days:
+suuser $USER 365
+
+- I've used 40% of my SLURM allocation so far! I should be fine until my defense.
+
+- The aa100 GPU nodes are very popular. Try using the al40 nodes, which don't have as much traffic. The wait times are shorter.
