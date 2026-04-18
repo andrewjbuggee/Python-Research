@@ -1,16 +1,16 @@
 #!/bin/bash
 #SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
-#SBATCH --time=02:00:00            # Sweep 2: n_epochs=1000 + noise aug can fill ~50 min; 2h margin
+#SBATCH --time=01:30:00            # Sweep 2: n_epochs=1000 + noise aug can fill ~50 min; 1.5h margin
 #SBATCH --partition=aa100          # Alpine GPU partition (NVIDIA A100)
 #SBATCH --qos=normal
-#SBATCH --mem=16G
+#SBATCH --mem=8G                   # Sweep 1 peaked at 1.5G; 8G leaves ~5x headroom for larger data
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1               # 1 GPU per run (each run is small)
 #SBATCH --cpus-per-task=4
-#SBATCH --job-name=pinn_sweep
-#SBATCH --output=logs/sweep_%A_%a.out
-#SBATCH --error=logs/sweep_%A_%a.err
+#SBATCH --job-name=pinn_sweep_2
+#SBATCH --output=logs/sweep2_%A_%a.out
+#SBATCH --error=logs/sweep2_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
 #SBATCH --array=0-99%16               # 100 runs (matches run_000.json to run_099.json)

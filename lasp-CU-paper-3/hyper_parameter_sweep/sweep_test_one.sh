@@ -4,7 +4,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --partition=atesting_a100               # Testing partition
 #SBATCH --qos=testing
-#SBATCH --mem=16G
+#SBATCH --mem=8G                                # Sweep 1 peaked at 1.5G; 8G is plenty
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4

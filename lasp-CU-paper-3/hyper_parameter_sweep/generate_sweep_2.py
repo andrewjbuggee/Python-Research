@@ -69,15 +69,16 @@ Design changes vs. the first sweep (see generate_sweep.py):
      updates can overshoot).  Warmup is standard in transformer/LLM training
      and costs almost nothing.
 
-  8. NEW: lambda_adiabatic and lambda_smoothness swept as continuous params.
-     Sweep #1 held these fixed at 0.1 each — we have no evidence they help.
-     Range for each: [0, 0.25].  LHS-sampled alongside LR/dropout/wd/sigma.
-     lambda_physics is held fixed at 0.1 (retrieval-physics forward term);
-     lambda_monotonicity held at 0.0 (known to not help for r_e profiles).
+  8. NEW: lambda_monotonicity, lambda_adiabatic, lambda_smoothness swept
+     as continuous params.  Sweep #1 held lambda_adiabatic and
+     lambda_smoothness fixed at 0.1 and lambda_monotonicity at 0.0 — we
+     have no direct evidence any of them help.  Range for each: [0, 0.25],
+     LHS-sampled alongside LR/dropout/wd/sigma.  lambda_physics is still
+     held fixed at 0.1 (forward-physics consistency term).
 
 Sampling strategy:
-    - Latin Hypercube Sampling over 6 continuous dims: LR, dropout, wd,
-      sigma_floor, lambda_adiabatic, lambda_smoothness.
+    - Latin Hypercube Sampling over 7 continuous dims: LR, dropout, wd,
+      sigma_floor, lambda_monotonicity, lambda_adiabatic, lambda_smoothness.
     - Shuffled cycling over the 5x5x3x4 = 300 categorical combos of
       (architecture, weights, batch_size, noise_level).  100 runs ->
       each categorical combo appears 0 or 1 times, but because we shuffle
@@ -138,12 +139,13 @@ AUGMENT_NOISE_OPTIONS = [0.000, 0.005, 0.015, 0.030]
 # ─────────────────────────────────────────────────────────────────────────────
 # Continuous search space (LHS)
 # ─────────────────────────────────────────────────────────────────────────────
-LR_LOG10_RANGE           = [-5.52, -3.0]   # 3e-6 to 1e-3
-DROPOUT_RANGE            = [0.15, 0.40]
-WEIGHT_DECAY_LOG10_RANGE = [-6.0, -2.0]    # 1e-6 to 1e-2
-SIGMA_FLOOR_RANGE        = [0.005, 0.05]
-LAMBDA_ADIABATIC_RANGE   = [0.0, 0.25]     # NEW
-LAMBDA_SMOOTHNESS_RANGE  = [0.0, 0.25]     # NEW
+LR_LOG10_RANGE             = [-5.52, -3.0]   # 3e-6 to 1e-3
+DROPOUT_RANGE              = [0.15, 0.40]
+WEIGHT_DECAY_LOG10_RANGE   = [-6.0, -2.0]    # 1e-6 to 1e-2
+SIGMA_FLOOR_RANGE          = [0.005, 0.05]
+LAMBDA_MONOTONICITY_RANGE  = [0.0, 0.25]     # NEW (was fixed at 0.0)
+LAMBDA_ADIABATIC_RANGE     = [0.0, 0.25]     # NEW (was fixed at 0.1)
+LAMBDA_SMOOTHNESS_RANGE    = [0.0, 0.25]     # NEW (was fixed at 0.1)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Training defaults (constant across runs)
@@ -154,8 +156,7 @@ TRAINING_DEFAULTS = {
     'early_stop_patience': 150,
     'warmup_steps': 500,            # NEW
     'lambda_physics': 0.1,
-    'lambda_monotonicity': 0.0,
-    # lambda_adiabatic and lambda_smoothness are per-run (LHS).
+    # lambda_monotonicity, lambda_adiabatic, lambda_smoothness are per-run (LHS).
 }
 
 N_RUNS = 100
@@ -186,8 +187,9 @@ def generate_configs():
     rng.shuffle(categorical_combos)
     n_categorical = len(categorical_combos)
 
-    # 6 continuous dims: LR, dropout, wd, sigma_floor, lambda_adia, lambda_smooth
-    lhs = latin_hypercube_sample(N_RUNS, 6, rng)
+    # 7 continuous dims: LR, dropout, wd, sigma_floor,
+    #                    lambda_monotonicity, lambda_adiabatic, lambda_smoothness
+    lhs = latin_hypercube_sample(N_RUNS, 7, rng)
 
     for i in range(N_RUNS):
         arch_idx, weight_name, batch_size, noise_std = categorical_combos[i % n_categorical]
@@ -203,18 +205,21 @@ def generate_configs():
                               + lhs[i, 2] * (WEIGHT_DECAY_LOG10_RANGE[1] - WEIGHT_DECAY_LOG10_RANGE[0]))
         sigma_floor = (SIGMA_FLOOR_RANGE[0]
                        + lhs[i, 3] * (SIGMA_FLOOR_RANGE[1] - SIGMA_FLOOR_RANGE[0]))
+        lambda_monotonicity = (LAMBDA_MONOTONICITY_RANGE[0]
+                               + lhs[i, 4] * (LAMBDA_MONOTONICITY_RANGE[1] - LAMBDA_MONOTONICITY_RANGE[0]))
         lambda_adiabatic = (LAMBDA_ADIABATIC_RANGE[0]
-                            + lhs[i, 4] * (LAMBDA_ADIABATIC_RANGE[1] - LAMBDA_ADIABATIC_RANGE[0]))
+                            + lhs[i, 5] * (LAMBDA_ADIABATIC_RANGE[1] - LAMBDA_ADIABATIC_RANGE[0]))
         lambda_smoothness = (LAMBDA_SMOOTHNESS_RANGE[0]
-                             + lhs[i, 5] * (LAMBDA_SMOOTHNESS_RANGE[1] - LAMBDA_SMOOTHNESS_RANGE[0]))
+                             + lhs[i, 6] * (LAMBDA_SMOOTHNESS_RANGE[1] - LAMBDA_SMOOTHNESS_RANGE[0]))
 
         # Round for readability
-        lr                = float(f"{lr:.6f}")
-        dropout           = float(f"{dropout:.3f}")
-        weight_decay      = float(f"{weight_decay:.2e}")
-        sigma_floor       = float(f"{sigma_floor:.4f}")
-        lambda_adiabatic  = float(f"{lambda_adiabatic:.3f}")
-        lambda_smoothness = float(f"{lambda_smoothness:.3f}")
+        lr                  = float(f"{lr:.6f}")
+        dropout             = float(f"{dropout:.3f}")
+        weight_decay        = float(f"{weight_decay:.2e}")
+        sigma_floor         = float(f"{sigma_floor:.4f}")
+        lambda_monotonicity = float(f"{lambda_monotonicity:.3f}")
+        lambda_adiabatic    = float(f"{lambda_adiabatic:.3f}")
+        lambda_smoothness   = float(f"{lambda_smoothness:.3f}")
 
         # Architecture descriptor string
         n_layers = len(hidden_dims)
@@ -244,6 +249,7 @@ def generate_configs():
                 'level_weights': level_weights,
                 'level_weights_name': weight_name,
                 'augment_noise_std': noise_std,
+                'lambda_monotonicity': lambda_monotonicity,
                 'lambda_adiabatic': lambda_adiabatic,
                 'lambda_smoothness': lambda_smoothness,
                 **TRAINING_DEFAULTS,
@@ -287,6 +293,7 @@ def main():
             'batch_size': hp['batch_size'],
             'augment_noise_std': hp['augment_noise_std'],
             'level_weights_name': hp['level_weights_name'],
+            'lambda_monotonicity': hp['lambda_monotonicity'],
             'lambda_adiabatic': hp['lambda_adiabatic'],
             'lambda_smoothness': hp['lambda_smoothness'],
         })
@@ -298,8 +305,8 @@ def main():
     print(f"Generated {len(configs)} sweep configurations in {out_dir}/\n")
     print(f"{'ID':>3}  {'Architecture':<22} {'Drop':>5} {'LR':>10} "
           f"{'WD':>10} {'sig_fl':>7} {'BS':>4} {'Noise':>6} "
-          f"{'l_adi':>6} {'l_sm':>6} {'Weights':<12}")
-    print("-" * 120)
+          f"{'l_mono':>6} {'l_adi':>6} {'l_sm':>6} {'Weights':<12}")
+    print("-" * 130)
     for s in summary:
         dims = s['hidden_dims']
         n = len(dims)
@@ -314,6 +321,7 @@ def main():
               f"{s['learning_rate']:10.6f} {s['weight_decay']:10.2e} "
               f"{s['sigma_floor']:7.4f} {s['batch_size']:4d} "
               f"{s['augment_noise_std']:6.3f} "
+              f"{s['lambda_monotonicity']:6.3f} "
               f"{s['lambda_adiabatic']:6.3f} {s['lambda_smoothness']:6.3f} "
               f"{s['level_weights_name']:<12}")
 
@@ -326,11 +334,13 @@ def main():
           f"to {max(s['dropout'] for s in summary):.3f}")
     print(f"  Weight decay:       {min(s['weight_decay'] for s in summary):.2e} "
           f"to {max(s['weight_decay'] for s in summary):.2e}")
-    print(f"  Sigma floor:        {min(s['sigma_floor'] for s in summary):.4f} "
+    print(f"  Sigma floor:          {min(s['sigma_floor'] for s in summary):.4f} "
           f"to {max(s['sigma_floor'] for s in summary):.4f}")
-    print(f"  lambda_adiabatic:   {min(s['lambda_adiabatic'] for s in summary):.3f} "
+    print(f"  lambda_monotonicity:  {min(s['lambda_monotonicity'] for s in summary):.3f} "
+          f"to {max(s['lambda_monotonicity'] for s in summary):.3f}")
+    print(f"  lambda_adiabatic:     {min(s['lambda_adiabatic'] for s in summary):.3f} "
           f"to {max(s['lambda_adiabatic'] for s in summary):.3f}")
-    print(f"  lambda_smoothness:  {min(s['lambda_smoothness'] for s in summary):.3f} "
+    print(f"  lambda_smoothness:    {min(s['lambda_smoothness'] for s in summary):.3f} "
           f"to {max(s['lambda_smoothness'] for s in summary):.3f}")
     print(f"\nCategorical counts:")
     for name in LEVEL_WEIGHTS_OPTIONS:
