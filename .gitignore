@@ -23,6 +23,9 @@
 *.csv
 *.h5
 *.json
+*.pt
+
+
 
 # weird hitran files
 hitran_ri/ascii/*
