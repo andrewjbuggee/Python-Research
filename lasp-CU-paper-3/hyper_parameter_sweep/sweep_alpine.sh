@@ -2,7 +2,7 @@
 #SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
 #SBATCH --time=01:30:00            # Sweep 2: n_epochs=1000 + noise aug can fill ~50 min; 1.5h margin
-#SBATCH --partition=aa100          # Alpine GPU partition (NVIDIA A100)
+#SBATCH --partition=al40           # Alpine GPU partition (NVIDIA L40) — typically less queue traffic than aa100
 #SBATCH --qos=normal
 #SBATCH --mem=8G                   # Sweep 1 peaked at 1.5G; 8G leaves ~5x headroom for larger data
 #SBATCH --ntasks=1
@@ -13,7 +13,13 @@
 #SBATCH --error=logs/sweep2_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
-#SBATCH --array=0-99%16               # 100 runs (matches run_000.json to run_099.json)
+#SBATCH --array=0-99%8                # 100 runs, max 8 concurrent.
+                                      # al40 has 9 L40 GPUs total across 3 nodes with no MIG,
+                                      # so one job = one whole GPU.  Cap at 8 to leave a GPU
+                                      # free for other users (al40 is less crowded than aa100;
+                                      # stay polite so it stays that way).  QOS `normal` has
+                                      # no MaxJobsPU limit, so this %N is purely self-imposed.
+                                      # With ~8.5 min/run and 8 concurrent, full sweep ≈ 2h.
 
 # ============================================================
 # Hyperparameter Sweep — SLURM Job Array
