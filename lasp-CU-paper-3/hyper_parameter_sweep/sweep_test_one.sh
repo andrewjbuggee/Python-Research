@@ -39,10 +39,10 @@ conda activate dropProfs_nn
 cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
 
 # Create directories
-mkdir -p logs sweep_results
+mkdir -p logs sweep_results_test
 
 # Verify HDF5 data file exists
-H5_FILE="/scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5"
+H5_FILE="/scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_7-levels_17_April_2026.h5"
 if [ ! -f "$H5_FILE" ]; then
     echo "ERROR: HDF5 file not found at $H5_FILE"
     echo "Upload it first with:"
