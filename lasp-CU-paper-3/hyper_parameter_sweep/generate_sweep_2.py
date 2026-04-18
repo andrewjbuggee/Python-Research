@@ -101,7 +101,10 @@ import numpy as np
 # ─────────────────────────────────────────────────────────────────────────────
 FIXED = {
     'data': {
-        'h5_path': '/scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5',
+        # Point at the 7-level training file (shape (153216, 7)).
+        # sweep_train.py asserts that the generated level_weights (7 entries)
+        # match the HDF5's profile shape, so the two must stay in sync.
+        'h5_path': '/scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_7-levels_17_April_2026.h5',
         'instrument': 'hysics',
         'num_workers': 4,
     },
