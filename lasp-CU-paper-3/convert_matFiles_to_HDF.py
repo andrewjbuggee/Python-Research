@@ -66,9 +66,9 @@ from pathlib import Path
 
 MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_17_April_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'combined_vocals_oracles_training_data_10-levels_17_April_2026.h5')
+                'combined_vocals_oracles_training_data_7-levels_17_April_2026.h5')
 
-N_LEVELS      = 10    # target vertical levels in output profile
+N_LEVELS      = 7     # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
 N_WAVELENGTHS = 636   # HySICS spectral channels
 

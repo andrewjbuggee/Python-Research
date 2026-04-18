@@ -43,12 +43,12 @@ from data import create_dataloaders
 GREEN = '#10B981'
 
 
-def build_model_from_config(cfg_dict, device):
+def build_model_from_config(cfg_dict, device, n_levels):
     hp = cfg_dict['hyperparams']
     model_config = RetrievalConfig(
         n_wavelengths=636,
         n_geometry_inputs=4,
-        n_levels=10,
+        n_levels=n_levels,
         hidden_dims=tuple(hp['hidden_dims']),
         dropout=hp['dropout'],
         activation='gelu',
@@ -76,21 +76,21 @@ def plot_profiles(pred, pred_std, true_um, tau_true, run_info, out_path,
                   n_examples=6, seed=0):
     """
     6-panel figure: 6 randomly-selected test profiles, retrieved ±1σ vs true.
-    Y-axis is level index 1-10 with 1 at top (cloud top).
+    Y-axis is level index 1..n_levels with 1 at top (cloud top).
     """
     rng = np.random.default_rng(seed)
-    n_avail = pred.shape[0]
+    n_avail, n_levels = pred.shape
     idxs = rng.choice(n_avail, size=min(n_examples, n_avail), replace=False)
 
     nrows, ncols = 2, 3
     fig, axes = plt.subplots(nrows, ncols, figsize=(14, 9), squeeze=False)
     axes = axes.ravel()
 
-    levels = np.arange(1, 11)
+    levels = np.arange(1, n_levels + 1)
 
     for ax, i in zip(axes, idxs):
         ax.plot(true_um[i], levels, 'ko-', markersize=5, linewidth=1.6,
-                label='True (in-situ, 10 levels)')
+                label=f'True (in-situ, {n_levels} levels)')
         ax.errorbar(pred[i], levels,
                     xerr=pred_std[i],
                     fmt='s--', color=GREEN, markersize=4, linewidth=1.5,
@@ -98,7 +98,7 @@ def plot_profiles(pred, pred_std, true_um, tau_true, run_info, out_path,
                     label='PINN retrieval ±1σ')
         ax.invert_yaxis()   # level 1 (cloud top) at top
         ax.set_xlabel(r'$r_e$ (μm)', fontsize=10)
-        ax.set_ylabel('Level (1=top, 10=base)', fontsize=10)
+        ax.set_ylabel(f'Level (1=top, {n_levels}=base)', fontsize=10)
         ax.set_title(f'test idx {i}  |  '
                      rf'$\tau$ true = {float(tau_true[i]):.1f}',
                      fontsize=9)
@@ -123,7 +123,8 @@ def plot_grid_single(per_run_examples, out_path):
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.2 * ncols, 3.6 * nrows),
                              squeeze=False)
     axes = axes.ravel()
-    levels = np.arange(1, 11)
+    n_levels = len(per_run_examples[0]['true'])
+    levels = np.arange(1, n_levels + 1)
 
     for ax, ex in zip(axes, per_run_examples):
         ax.plot(ex['true'], levels, 'ko-', markersize=4, linewidth=1.3,
@@ -211,7 +212,10 @@ def main():
             n_test_profiles=14,
         )
 
-        model, model_config = build_model_from_config(cfg, device)
+        # n_levels is inferred from the test loader's dataset so the plot
+        # script stays consistent with however many levels the HDF5 has.
+        n_levels = test_loader.dataset.n_levels
+        model, model_config = build_model_from_config(cfg, device, n_levels)
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt['model_state_dict'])
 

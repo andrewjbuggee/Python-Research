@@ -121,13 +121,15 @@ HIDDEN_DIMS_OPTIONS = [
     [512, 256, 256, 128, 128],            # 5-layer pyramid     (~440K params)
 ]
 
-# Level-weight schemes — unchanged from sweep #1 per user request.
+# Level-weight schemes — rewritten for the 7-level profile grid.
+# Convention: index 0 = cloud top, index 6 = cloud base
+# (confirmed end-to-end in convert_matFiles_to_HDF.py, data.py, models.py).
 LEVEL_WEIGHTS_OPTIONS = {
-    'uniform':     [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-    'ends':        [4.0, 1.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 3.0],
-    'top':         [6.0, 3.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-    'strong_ends': [6.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 3.0, 5.0],
-    'deep':        [1.0, 1.0, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0],
+    'uniform':     [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    'ends':        [4.0, 1.5, 1.0, 1.0, 1.0, 1.5, 3.0],   # emphasize top & base
+    'top':         [6.0, 3.0, 2.0, 1.0, 1.0, 1.0, 1.0],   # heavy near cloud top
+    'strong_ends': [6.0, 2.0, 1.0, 1.0, 1.0, 2.5, 5.0],   # stronger end bias
+    'deep':        [1.0, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0],   # gradient toward base
 }
 
 BATCH_SIZE_OPTIONS = [128, 256, 512]

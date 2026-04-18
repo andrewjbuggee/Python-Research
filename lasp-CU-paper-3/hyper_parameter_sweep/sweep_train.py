@@ -207,11 +207,17 @@ def main():
     print(f"Data: {len(train_loader.dataset)} train, "
           f"{len(val_loader.dataset)} val, {len(test_loader.dataset)} test")
 
+    # n_levels is data-driven: read from the HDF5 via the dataset.  This lets
+    # you change N_LEVELS in convert_matFiles_to_HDF.py and regenerate data
+    # without having to update the training code.
+    n_levels = train_loader.dataset.n_levels
+    print(f"Profile grid: {n_levels} levels (read from HDF5)")
+
     # ── Model ──────────────────────────────────────────────────────────────
     model_config = RetrievalConfig(
         n_wavelengths=636,
         n_geometry_inputs=4,
-        n_levels=10,
+        n_levels=n_levels,
         hidden_dims=tuple(hp['hidden_dims']),
         dropout=hp['dropout'],
         activation='gelu',
@@ -223,7 +229,16 @@ def main():
           f"hidden_dims={hp['hidden_dims']}, dropout={hp['dropout']}")
 
     # ── Loss ───────────────────────────────────────────────────────────────
+    # Sanity check: level_weights must match n_levels from the HDF5.  If the
+    # config was generated for a different profile grid, fail fast with a
+    # clear message rather than surfacing a shape mismatch deep in the loss.
     level_weights = torch.tensor(hp['level_weights'], dtype=torch.float32)
+    if level_weights.numel() != n_levels:
+        raise ValueError(
+            f"level_weights has {level_weights.numel()} entries but the HDF5 "
+            f"contains {n_levels} profile levels.  Regenerate this sweep's "
+            f"configs with the correct N_LEVELS in generate_sweep_2.py."
+        )
     sigma_floor = hp.get('sigma_floor', 0.01)
     criterion = CombinedLoss(
         config=model_config,

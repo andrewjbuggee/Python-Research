@@ -34,7 +34,7 @@ class RetrievalConfig:
     n_wavelengths: int = 636         # 636 HySICS channels, ~352–2297 nm
     n_geometry_inputs: int = 4      # Solar zenith, viewing zenith, solar azimuth, viewing azimuth
     # Output dimensions
-    n_levels: int = 10              # Vertical levels in profile
+    n_levels: int = 7               # Vertical levels in profile (default matches current HDF5)
     # Architecture
     hidden_dims: tuple = (256, 256, 256, 256)
     dropout: float = 0.1
@@ -43,7 +43,7 @@ class RetrievalConfig:
     re_min: float = 1.5             # μm
     re_max: float = 50.0            # μm
     tau_min: float = 3.0
-    tau_max: float = 65.0
+    tau_max: float = 75.0
 
     @property
     def input_dim(self):
@@ -53,7 +53,7 @@ class RetrievalConfig:
 @dataclass
 class EmulatorConfig:
     """Configuration for the forward model emulator (Stage 2)."""
-    n_levels: int = 10
+    n_levels: int = 7
     n_geometry_inputs: int = 4           # SZA, VZA, SAZ, VAZ
     n_atm_inputs: int = 2                # ERA5 water vapour: wv_above_cloud, wv_in_cloud
     n_wavelengths_out: int = 636         # 636 HySICS channels, ~352–2297 nm

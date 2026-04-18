@@ -34,9 +34,13 @@ MODIS_WAVELENGTHS = np.array([645, 858.5, 469, 555, 1240, 1640, 2130])
 HYSICS_WAV_MIN = 352.0    # nm  (band 1 center: ~351.95 nm)
 HYSICS_WAV_MAX = 2297.0   # nm  (band 636 center: ~2297.05 nm)
 
-# Number of vertical levels for profile retrieval
-# Start with N=10; increase later if information content supports it
-DEFAULT_N_LEVELS = 10
+# Number of vertical levels for profile retrieval.
+# Only used by the synthetic-profile code path (adiabatic_profile /
+# generate_random_profiles).  The real training pipeline reads n_levels
+# directly from the HDF5 shape (RetrievalDataset.__init__ in this file,
+# line ~256), so this constant does not affect model training.
+# Set to 7 to match the current convert_matFiles_to_HDF.py N_LEVELS.
+DEFAULT_N_LEVELS = 7
 
 # ERA5 water vapour column normalization bounds (log10 scale, molec/cm²)
 # Only used when use_era5_profile=False (legacy 2-scalar mode).
@@ -44,16 +48,16 @@ DEFAULT_N_LEVELS = 10
 # against your actual dataset.  Conservative defaults are set here; if
 # observed log10 values fall outside [MIN, MAX] the normalized input will
 # lie outside [0, 1], which will trigger a runtime warning in EmulatorDataset.
-WV_ABOVE_LOG10_MIN = 20.0   # log10(molec/cm²) — very dry above-cloud column
+WV_ABOVE_LOG10_MIN = 21.0   # log10(molec/cm²) — very dry above-cloud column
 WV_ABOVE_LOG10_MAX = 24.0   # log10(molec/cm²) — very moist above-cloud column
-WV_IN_LOG10_MIN    = 18.0   # log10(molec/cm²) — very thin / dry in-cloud layer
-WV_IN_LOG10_MAX    = 24.0   # log10(molec/cm²) — thick / moist in-cloud layer
+WV_IN_LOG10_MIN    = 20.0   # log10(molec/cm²) — very thin / dry in-cloud layer
+WV_IN_LOG10_MAX    = 23.0   # log10(molec/cm²) — thick / moist in-cloud layer
 
 # ERA5 full vapor-concentration profile normalization (molecules/cm³, log10 scale).
 # Surface values reach ~3–5 × 10^17 molec/cm³; upper troposphere/stratosphere
 # values approach zero.  log10(v + 1.0) maps the range to [0, ~17.5]; dividing
 # by ERA5_VAP_LOG10_MAX normalises to [0, 1].
-ERA5_VAP_LOG10_MAX = 19.0   # log10(molec/cm³) — conservative upper bound
+ERA5_VAP_LOG10_MAX = 18.0   # log10(molec/cm³) — conservative upper bound
 
 # Physical bounds on effective radius (μm)
 # Update RE_MAX after running convert_matFiles_to_HDF.py — the scan pass
@@ -64,7 +68,7 @@ RE_MAX = 50.0   # TODO: update from scan
 # Optical depth bounds
 # Update TAU_MAX after running convert_matFiles_to_HDF.py scan.
 TAU_MIN = 3   # in-situ profiles include sub-cloud layers where tau=0
-TAU_MAX = 65.0  # TODO: update from scan
+TAU_MAX = 75.0  # TODO: update from scan
 
 
 # =============================================================================
