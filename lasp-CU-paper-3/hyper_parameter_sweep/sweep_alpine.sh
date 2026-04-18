@@ -13,11 +13,10 @@
 #SBATCH --error=logs/sweep2_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
-#SBATCH --array=0-99%8                # 100 runs, max 8 concurrent.
+#SBATCH --array=0-99%6                # 100 runs, max 6 concurrent.
                                       # al40 has 9 L40 GPUs total across 3 nodes with no MIG,
-                                      # so one job = one whole GPU.  Cap at 8 to leave a GPU
-                                      # free for other users (al40 is less crowded than aa100;
-                                      # stay polite so it stays that way).  QOS `normal` has
+                                      # so one job = one whole GPU.  Cap at 6 to leave a GPU
+                                      # which is the limit set by CURC.  QOS `normal` has
                                       # no MaxJobsPU limit, so this %N is purely self-imposed.
                                       # With ~8.5 min/run and 8 concurrent, full sweep ≈ 2h.
 
