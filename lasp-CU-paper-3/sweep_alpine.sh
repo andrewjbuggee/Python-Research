@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
-#SBATCH --time=00:55:00            # Test run finished in ~4 min; 55 min is generous margin
+#SBATCH --time=02:00:00            # Sweep 2: n_epochs=1000 + noise aug can fill ~50 min; 2h margin
 #SBATCH --partition=aa100          # Alpine GPU partition (NVIDIA A100)
 #SBATCH --qos=normal
 #SBATCH --mem=16G
@@ -62,9 +62,9 @@ cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
 mkdir -p logs sweep_results
 
 # Run this task's configuration
-# SLURM_ARRAY_TASK_ID is 0, 1, 2, ..., 49
+# SLURM_ARRAY_TASK_ID is 0, 1, 2, ..., 99
 RUN_ID=$(printf "%03d" $SLURM_ARRAY_TASK_ID)
-CONFIG_FILE="sweep_configs/run_${RUN_ID}.json"
+CONFIG_FILE="sweep_configs_2/run_${RUN_ID}.json"
 
 echo "Config: $CONFIG_FILE"
 echo ""

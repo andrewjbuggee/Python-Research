@@ -65,10 +65,10 @@ if torch.cuda.is_available():
 print('All imports OK')
 " || { echo "ERROR: Python import check failed"; exit 1; }
 
-# Run a single sweep config (run_000)
+# Run a single sweep config (run_000 from sweep #2)
 echo ""
-echo "Running sweep config run_000..."
-python sweep_train.py --config-json sweep_configs/run_000.json
+echo "Running sweep config run_000 (sweep 2)..."
+python sweep_train.py --config-json sweep_configs_2/run_000.json
 
 EXIT_CODE=$?
 

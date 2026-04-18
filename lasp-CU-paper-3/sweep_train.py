@@ -42,11 +42,44 @@ def parse_args():
 # ─────────────────────────────────────────────────────────────────────────────
 # Training helpers (same logic as the notebook, extracted into functions)
 # ─────────────────────────────────────────────────────────────────────────────
-def train_one_epoch(model, loader, criterion, optimizer, device):
+def train_one_epoch(model, loader, criterion, optimizer, device,
+                    augment_noise_std=0.0,
+                    warmup_steps=0, target_lr=None, global_step_start=0):
+    """
+    One training pass.
+
+    Extras vs. a vanilla loop:
+      - augment_noise_std: fractional Gaussian noise added to input reflectance
+          each batch.  x -> x + sigma * x * N(0, 1).  Applied ON TOP OF any
+          noise already baked into the data.  Zero disables augmentation.
+          Only the spectral portion (first n_wavelengths channels) is perturbed;
+          geometry inputs are left untouched.  The model currently takes a
+          concatenated [spectrum, geometry] vector — we perturb the whole
+          vector here because the geometry channels carry much smaller noise
+          sensitivity in practice, but if that becomes an issue change this
+          to perturb only x[:, :n_wavelengths].
+      - warmup_steps / target_lr: if global_step < warmup_steps, override the
+          optimizer LR with a linear ramp from 0 to target_lr.  After warmup,
+          the LR is left to whatever the scheduler (in the outer loop) set.
+
+    Returns (mean_loss, global_step_end).
+    """
     model.train()
     loss_sum, n = 0.0, 0
+    step = global_step_start
     for x, prof, tau in loader:
         x, prof, tau = x.to(device), prof.to(device), tau.to(device)
+
+        # Linear warmup
+        if warmup_steps > 0 and step < warmup_steps and target_lr is not None:
+            lr_now = target_lr * (step + 1) / warmup_steps
+            for pg in optimizer.param_groups:
+                pg['lr'] = lr_now
+
+        # Input-noise augmentation (per-batch)
+        if augment_noise_std > 0.0:
+            x = x + augment_noise_std * x * torch.randn_like(x)
+
         optimizer.zero_grad()
         output = model(x)
         losses = criterion(output, prof, tau)
@@ -55,7 +88,8 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
         optimizer.step()
         loss_sum += losses['total'].item()
         n += 1
-    return loss_sum / n
+        step += 1
+    return loss_sum / n, step
 
 
 @torch.no_grad()
@@ -215,22 +249,39 @@ def main():
     # ── Training loop ──────────────────────────────────────────────────────
     n_epochs = hp.get('n_epochs', 400)
     early_stop_patience = hp.get('early_stop_patience', 80)
+    warmup_steps = hp.get('warmup_steps', 0)
+    augment_noise_std = hp.get('augment_noise_std', 0.0)
+    target_lr = hp['learning_rate']
     best_val_loss = float('inf')
     epochs_no_improve = 0
     history = []
+    global_step = 0
 
     print(f"\nTraining for up to {n_epochs} epochs "
           f"(early stop patience={early_stop_patience})")
+    print(f"  warmup_steps      = {warmup_steps}")
+    print(f"  augment_noise_std = {augment_noise_std} "
+          f"(fractional, added on top of data-level noise)")
     print("-" * 70)
 
     t_start = time.time()
 
     for epoch in range(n_epochs):
-        train_loss = train_one_epoch(model, train_loader, criterion,
-                                     optimizer, device)
+        train_loss, global_step = train_one_epoch(
+            model, train_loader, criterion, optimizer, device,
+            augment_noise_std=augment_noise_std,
+            warmup_steps=warmup_steps,
+            target_lr=target_lr,
+            global_step_start=global_step,
+        )
         val_loss, val_detail = validate(model, val_loader, criterion, device)
 
-        scheduler.step(val_loss)
+        # Only let the plateau scheduler act once warmup is fully done.
+        # During warmup the LR is being driven manually by train_one_epoch,
+        # so letting ReduceLROnPlateau also step would double-count "no
+        # improvement" epochs from the unstable ramp-up phase.
+        if global_step >= warmup_steps:
+            scheduler.step(val_loss)
         lr = optimizer.param_groups[0]['lr']
 
         history.append({
