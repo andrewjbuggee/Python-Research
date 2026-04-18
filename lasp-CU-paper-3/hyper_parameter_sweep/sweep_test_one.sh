@@ -39,7 +39,9 @@ conda activate dropProfs_nn
 cd /projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep
 
 # Create directories
-mkdir -p logs sweep_results_test
+# (sweep_train.py will create the actual per-run output dir under
+#  whatever 'output_dir' is in the config; sweep_results_3/ for sweep 2)
+mkdir -p logs sweep_results_3
 
 # Verify HDF5 data file exists
 H5_FILE="/scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_7-levels_17_April_2026.h5"
@@ -51,9 +53,13 @@ if [ ! -f "$H5_FILE" ]; then
 fi
 echo "HDF5 file found: $(ls -lh $H5_FILE)"
 
-# Verify Python imports work
+# Verify Python imports work.
+# models.py and data.py live at the repo root, one level up from here.
+# Prepending the parent dir to PYTHONPATH makes them importable for the
+# inline test; sweep_train.py itself already adjusts sys.path internally.
+export PYTHONPATH="$(cd .. && pwd):${PYTHONPATH:-}"
 echo ""
-echo "Checking Python imports..."
+echo "Checking Python imports (PYTHONPATH=$PYTHONPATH)..."
 python -c "
 from models import DropletProfileNetwork, CombinedLoss, RetrievalConfig
 from data import create_dataloaders

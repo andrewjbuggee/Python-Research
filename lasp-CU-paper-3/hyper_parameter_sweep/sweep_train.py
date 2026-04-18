@@ -23,7 +23,12 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# This script lives in <repo>/hyper_parameter_sweep/, but models.py and data.py
+# live at the repo root one level up.  Add the parent directory to sys.path so
+# those modules resolve regardless of where `python sweep_train.py` is invoked
+# from.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
 
 from models import DropletProfileNetwork, CombinedLoss, RetrievalConfig
 from data import create_dataloaders

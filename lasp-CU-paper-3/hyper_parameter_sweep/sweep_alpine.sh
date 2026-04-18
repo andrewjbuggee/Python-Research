@@ -20,16 +20,16 @@
 # ============================================================
 #
 # Before submitting:
-#   1. Run `python generate_sweep.py` locally to create sweep_configs/
+#   1. Run `python generate_sweep_2.py` locally to create sweep_configs_2/
 #   2. Upload project to Alpine:
 #      rsync -av --exclude='__pycache__' --exclude='.git' \
 #        /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/ \
-#        anbu8374@login.rc.colorado.edu:/projects/anbu8374/paper3/
+#        anbu8374@login.rc.colorado.edu:/projects/anbu8374/Python-Research/lasp-CU-paper-3/
 #   3. Make sure HDF5 data is at:
-#      /scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_13_April_2026.h5
+#      /scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_7-levels_17_April_2026.h5
 #
 # Submit with:
-#   cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
+#   cd /projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep
 #   sbatch sweep_alpine.sh
 #
 # Monitor with:
@@ -55,11 +55,14 @@ module load anaconda
 # Activate conda environment
 conda activate dropProfs_nn
 
-# Navigate to project directory
-cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
+# Navigate to the hyper_parameter_sweep directory.
+# sweep_train.py, generate_sweep_2.py, sweep_configs_2/, and sweep_results_3/
+# all live here.  models.py and data.py are at the parent (repo root);
+# sweep_train.py's sys.path is set up to find them automatically.
+cd /projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep
 
 # Create directories
-mkdir -p logs sweep_results
+mkdir -p logs sweep_results_3
 
 # Run this task's configuration
 # SLURM_ARRAY_TASK_ID is 0, 1, 2, ..., 99
