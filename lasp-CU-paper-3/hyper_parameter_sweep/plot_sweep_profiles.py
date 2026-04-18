@@ -214,7 +214,11 @@ def main():
 
         # n_levels is inferred from the test loader's dataset so the plot
         # script stays consistent with however many levels the HDF5 has.
-        n_levels = test_loader.dataset.n_levels
+        # profile_holdout=True wraps the dataset in a Subset, so unwrap.
+        base_ds = test_loader.dataset
+        while hasattr(base_ds, 'dataset'):
+            base_ds = base_ds.dataset
+        n_levels = base_ds.n_levels
         model, model_config = build_model_from_config(cfg, device, n_levels)
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt['model_state_dict'])

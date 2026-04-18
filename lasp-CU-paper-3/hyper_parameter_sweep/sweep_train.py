@@ -215,7 +215,16 @@ def main():
     # n_levels is data-driven: read from the HDF5 via the dataset.  This lets
     # you change N_LEVELS in convert_matFiles_to_HDF.py and regenerate data
     # without having to update the training code.
-    n_levels = train_loader.dataset.n_levels
+    #
+    # Note: profile_holdout=True wraps the RetrievalDataset in torch's Subset
+    # for the train/val/test split.  Subset does not forward attribute access
+    # to the underlying dataset, so we have to unwrap it.  Do this
+    # defensively (walk `.dataset` until we hit the real thing) to also
+    # handle potential future wrappers like ConcatDataset.
+    base_ds = train_loader.dataset
+    while hasattr(base_ds, 'dataset'):
+        base_ds = base_ds.dataset
+    n_levels = base_ds.n_levels
     print(f"Profile grid: {n_levels} levels (read from HDF5)")
 
     # ── Model ──────────────────────────────────────────────────────────────
