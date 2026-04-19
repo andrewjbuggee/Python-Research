@@ -35,8 +35,15 @@ Output HDF5 structure (matches LibRadtranDataset in data.py)
   /reflectances_emit    (n_total, 636)       — noisy TOA reflectance (4% noise)
   /reflectances_uncertainty_hysics (n_total, 636) — per-channel 1-sigma uncertainty
   /reflectances_uncertainty_emit   (n_total, 636) — per-channel 1-sigma uncertainty
-  /profiles      (n_total, N_LEVELS)  — r_e interpolated to fixed grid (top→base)
-  /tau_c         (n_total,)           — cloud optical depth
+  /profiles           (n_total, N_LEVELS)  — r_e interpolated to fixed grid (top→base)
+  /profiles_raw       (n_total, max_raw)    — raw in-situ r_e (top→base), NaN-padded
+  /profiles_raw_z     (n_total, max_raw)    — raw altitude (km, top→base), NaN-padded
+  /profiles_raw_tau   (n_total, max_raw)    — raw optical depth (top=0 → base=τ_c),
+                                              NaN-padded.  Same ordering and valid
+                                              length (per /profile_n_levels) as
+                                              profiles_raw and profiles_raw_z.
+  /profile_n_levels   (n_total,)            — valid entries in each raw row
+  /tau_c              (n_total,)            — scalar column optical depth (max of tau profile)
   /vza           (n_total,)           — viewing zenith angle (deg)
   /vaz           (n_total,)           — viewing azimuth angle (deg)
   /saz           (n_total,)           — solar azimuth angle (deg)
@@ -66,9 +73,9 @@ from pathlib import Path
 
 MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_17_April_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'combined_vocals_oracles_training_data_7-levels_17_April_2026.h5')
+                'combined_vocals_oracles_training_data_8-levels_17_April_2026.h5')
 
-N_LEVELS      = 7     # target vertical levels in output profile
+N_LEVELS      = 8     # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
 N_WAVELENGTHS = 636   # HySICS spectral channels
 
@@ -88,7 +95,8 @@ REQUIRED_KEYS = {
 
 # Noise levels for each instrument (fraction of signal, applied as Gaussian)
 NOISE_HYSICS = 0.003  # 0.3% Gaussian noise
-NOISE_EMIT   = 0.04   # 4.0% Gaussian noise
+NOISE_EMIT   = 0.02   # 4.0% Gaussian noise
+NOISE_FM     = 0.007  # 0.7% Forward model noise assumption 
 
 _SZA_RE = re.compile(r'_sza_(\d+(?:\.\d+)?)_')
 
@@ -510,9 +518,13 @@ with h5py.File(OUT_PATH, 'w') as f:
 
     # Raw in-situ profiles at original resolution, padded with NaN to max_raw_levels.
     # Not used during training; kept for validation plots and diagnostics.
+    # profiles_raw_tau stores the full measured τ(z) profile, in the same ordering
+    # (cloud top → base, index 0 = top, so τ[0] ≈ 0 and τ[n_lev-1] = τ_c) and the
+    # same valid length (via /profile_n_levels) as profiles_raw and profiles_raw_z.
     raw_fill = np.full((n_total, max_raw_levels), np.nan, dtype=np.float32)
-    ds_prof_raw = f.create_dataset('profiles_raw',    data=raw_fill)
-    ds_z_raw    = f.create_dataset('profiles_raw_z',  data=raw_fill.copy())
+    ds_prof_raw = f.create_dataset('profiles_raw',     data=raw_fill)
+    ds_z_raw    = f.create_dataset('profiles_raw_z',   data=raw_fill.copy())
+    ds_tau_raw  = f.create_dataset('profiles_raw_tau', data=raw_fill.copy())
     del raw_fill   # free memory before the main loop
     ds_n_levels = f.create_dataset('profile_n_levels', shape=(n_total,), dtype='i4')
 
@@ -545,8 +557,8 @@ with h5py.File(OUT_PATH, 'w') as f:
         refl_raw = d['Refl_model_allStateVectors'].astype(np.float64)  # (636, 128)
 
         # Generate HySICS (0.3% noise) and EMIT (4% noise)
-        refl_hysics, uncert_hysics = add_gaussian_noise(refl_raw, NOISE_HYSICS)
-        refl_emit, uncert_emit     = add_gaussian_noise(refl_raw, NOISE_EMIT)
+        refl_hysics, uncert_hysics = add_gaussian_noise(refl_raw, NOISE_HYSICS+NOISE_FM)
+        refl_emit, uncert_emit     = add_gaussian_noise(refl_raw, NOISE_EMIT+NOISE_FM)
 
         # Transpose: (636, 128) → (128, 636)
         refl_hysics   = refl_hysics.T
@@ -554,16 +566,30 @@ with h5py.File(OUT_PATH, 'w') as f:
         uncert_hysics = uncert_hysics.T
         uncert_emit   = uncert_emit.T
 
-        # re, z, tau are 1x1 cell arrays; use [()] to extract the inner array
-        re_raw = d['re'][()].astype(np.float64)
-        z_raw  = d['z'][()].astype(np.float64)
-        n_lev  = len(re_raw)
+        # re, z, tau are 1x1 cell arrays; use [()] to extract the inner array.
+        # Convention (confirmed across re, z, tau, lwc in the source .mat files):
+        # index 0 = cloud top, index -1 = cloud base.
+        re_raw  = d['re'][()].astype(np.float64)
+        z_raw   = d['z'][()].astype(np.float64)
+        tau_raw = np.atleast_1d(d['tau'][()]).astype(np.float64)
+        n_lev   = len(re_raw)
+
+        # Sanity check: tau profile should match re/z in length.  If the .mat
+        # file somehow has a mismatched tau vector, fail loudly here rather
+        # than silently storing misaligned data.
+        if len(tau_raw) != n_lev:
+            raise ValueError(
+                f"{path.name}: len(tau)={len(tau_raw)} != len(re)={n_lev}. "
+                f"The raw profile vectors must share a length."
+            )
 
         # Training target: interpolate to N_LEVELS
         profile_fixed = interpolate_profile(re_raw, z_raw, N_LEVELS)  # (N_LEVELS,)
 
-        # Total optical depth
-        tau_c = float(d['tau'][()].max())
+        # Total (column) optical depth — kept as a separate scalar for backward
+        # compatibility with existing consumers; the full τ(z) profile is now
+        # also saved to /profiles_raw_tau.
+        tau_c = float(tau_raw.max())
 
         # Geometry: extract one row per geometry block (every 636 rows)
         # Columns: [VZA, VAZ, SAZ]
@@ -589,6 +615,7 @@ with h5py.File(OUT_PATH, 'w') as f:
         # Raw profile: store actual levels; columns beyond n_lev remain NaN
         ds_prof_raw[row_start:row_end, :n_lev]  = re_raw.astype(np.float32)[np.newaxis, :]
         ds_z_raw[row_start:row_end,    :n_lev]  = z_raw.astype(np.float32)[np.newaxis, :]
+        ds_tau_raw[row_start:row_end,  :n_lev]  = tau_raw.astype(np.float32)[np.newaxis, :]
         ds_n_levels[row_start:row_end]           = n_lev
 
         sza = parse_sza_from_filename(path.name)

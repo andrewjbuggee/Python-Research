@@ -14,18 +14,14 @@ For each of the top-N runs (ranked by mean test RMSE):
     altitude (km).  True profile and NN retrieval (±1σ) are plotted on
     the interpolated grid; raw in-situ measurement is overlaid.
 
-Important caveat — the optical-depth axis
-------------------------------------------
-The HDF5 stores only the total column optical depth `tau_c` per sample,
-not the full τ(z) in-situ profile.  The left y-axis therefore uses a
-linear approximation:
-    τ(level i) = i/(N-1) · τ_c ,   i = 0, 1, ..., N-1
-This is exact when extinction is approximately constant across the
-altitude-interpolated levels (i.e. when droplet size is roughly
-constant).  The raw in-situ profile is mapped to τ via the same linear
-altitude-to-τ transform.  For an EXACT measured τ(z) axis, extend
-`convert_matFiles_to_HDF.py` to also save the full d['tau'] profile
-(currently line 566 takes only its max) and regenerate the HDF5.
+Optical-depth axis
+------------------
+If the HDF5 contains a `profiles_raw_tau` dataset (added by the updated
+`convert_matFiles_to_HDF.py`), we use the real measured τ(z) to build
+the left y-axis and to place the 7 interpolated model levels.  If the
+dataset is absent (older HDF5 files), we fall back to a linear
+approximation τ(level i) = i/(N-1) · τ_c.  A one-line notice is printed
+per run indicating which path was used.
 
 Requires:
     - HDF5 training file accessible (use --h5-path to override if config
@@ -246,7 +242,7 @@ def _draw_panel(ax, pred, pred_std, true_um, raw_re, raw_z,
         fontsize=10,
     )
     if show_legend:
-        ax.legend(fontsize=8, loc='lower left')
+        ax.legend(fontsize=8, loc='upper right')
     return ax2
 
 
@@ -435,6 +431,7 @@ def main():
             'tau_pred_std': found['tau_pred_std'][0],
             'raw_re'      : raw_re[0],
             'raw_z'       : raw_z[0],
+            'raw_tau'     : raw_tau[0],
         })
 
     if per_run_examples:
