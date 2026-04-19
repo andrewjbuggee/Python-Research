@@ -35,7 +35,7 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models import DropletProfileNetwork, RetrievalConfig
 from data import create_dataloaders
 

@@ -1,18 +1,18 @@
 """
 plot_sweep_losses.py — NLL training/validation loss curves for top-N runs.
 
-Reads sweep_results_2/comparison.csv, picks the top N by mean test RMSE,
+Reads sweep_results_3/comparison.csv, picks the top N by mean test RMSE,
 and plots each run's train + val NLL vs epoch using data from that run's
 history.json.  Runs locally — only needs the JSON history files, no model
 checkpoints or HDF5 data.
 
 Outputs:
-    sweep_results_2/Figures/loss_top01_<run_name>.png  ... through top10
-    sweep_results_2/Figures/loss_top10_grid.png        (all 10 in one fig)
+    sweep_results_3/Figures/loss_top01_<run_name>.png  ... through top10
+    sweep_results_3/Figures/loss_top10_grid.png        (all 10 in one fig)
 
 Usage:
     python plot_sweep_losses.py
-    python plot_sweep_losses.py --results-dir sweep_results_2 --top-n 10
+    python plot_sweep_losses.py --results-dir sweep_results_3 --top-n 10
 """
 
 import argparse
@@ -90,7 +90,7 @@ def plot_grid(run_dirs, run_infos, out_path):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--results-dir', default='sweep_results_2')
+    p.add_argument('--results-dir', default='sweep_results_3')
     p.add_argument('--top-n', type=int, default=10)
     args = p.parse_args()
 
