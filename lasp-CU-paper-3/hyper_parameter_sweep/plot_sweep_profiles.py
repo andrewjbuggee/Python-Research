@@ -4,21 +4,36 @@ plot_sweep_profiles.py — predicted vs true r_e profiles for top-N runs.
 For each of the top-N runs (ranked by mean test RMSE):
   - load best_model.pt + config.json
   - build the test dataloader (profile-held-out split, same seed as training)
-  - run inference on the first batch to get r_e predictions + per-level sigma
-  - pick 6 test profiles and plot retrieved r_e (±1σ) vs true r_e on
-    level-index (cloud top=1 at top, cloud base=10 at bottom)
+  - iterate test batches, DEDUPLICATING by unique true profile so each panel
+    shows a different cloud (each held-out cloud appears ~128 times in the
+    loader via varied solar/viewing geometry; without deduplication all
+    panels in the figure would show the same cloud)
+  - pull raw in-situ profiles (before altitude interpolation) from the HDF5
+    so they can be overlaid on the retrieval
+  - 2×3 panel figure: left y-axis is optical depth τ; right y-axis is
+    altitude (km).  True profile and NN retrieval (±1σ) are plotted on
+    the interpolated grid; raw in-situ measurement is overlaid.
 
-Outputs:
-    sweep_results_2/Figures/profiles_top01_run_XXX.png  ...  top10
-    sweep_results_2/Figures/profiles_top10_grid.png  (1 profile per run)
+Important caveat — the optical-depth axis
+------------------------------------------
+The HDF5 stores only the total column optical depth `tau_c` per sample,
+not the full τ(z) in-situ profile.  The left y-axis therefore uses a
+linear approximation:
+    τ(level i) = i/(N-1) · τ_c ,   i = 0, 1, ..., N-1
+This is exact when extinction is approximately constant across the
+altitude-interpolated levels (i.e. when droplet size is roughly
+constant).  The raw in-situ profile is mapped to τ via the same linear
+altitude-to-τ transform.  For an EXACT measured τ(z) axis, extend
+`convert_matFiles_to_HDF.py` to also save the full d['tau'] profile
+(currently line 566 takes only its max) and regenerate the HDF5.
 
 Requires:
-    - HDF5 training file accessible (use --h5-path to override if local path
-      differs from Alpine's /scratch/alpine/anbu8374/...).
+    - HDF5 training file accessible (use --h5-path to override if config
+      points at Alpine but you are running locally).
     - torch, numpy, matplotlib, pandas, h5py.
 
 Usage:
-    python plot_sweep_profiles.py
+    python plot_sweep_profiles.py --results-dir sweep_results_3
     python plot_sweep_profiles.py --h5-path /local/path/training.h5
     python plot_sweep_profiles.py --top-n 10 --n-examples 6 --device cpu
 
@@ -33,6 +48,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import h5py
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -40,9 +56,13 @@ from models import DropletProfileNetwork, RetrievalConfig
 from data import create_dataloaders
 
 
-GREEN = '#10B981'
+GREEN     = '#10B981'   # NN retrieval
+RAW_BLUE  = '#1F5FC2'   # raw in-situ
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Model construction
+# ─────────────────────────────────────────────────────────────────────────────
 def build_model_from_config(cfg_dict, device, n_levels):
     hp = cfg_dict['hyperparams']
     model_config = RetrievalConfig(
@@ -57,58 +77,207 @@ def build_model_from_config(cfg_dict, device, n_levels):
     return model, model_config
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Inference + deduplication
+# ─────────────────────────────────────────────────────────────────────────────
 @torch.no_grad()
-def infer_test_batch(model, test_loader, device, n_examples):
-    """Run inference on the first batch and return n_examples profiles."""
+def gather_unique_profiles(model, test_loader, device, n_examples):
+    """
+    Walk the test DataLoader and collect one example per UNIQUE true profile.
+
+    The held-out test set contains ~14 distinct clouds, each replicated at
+    ~128 sun/view geometries.  Without this deduplication, picking random
+    loader indices tends to grab several geometries of the same cloud —
+    which is what produced the "all six panels are identical" bug in the
+    previous version of this script.
+
+    Returns a dict with arrays indexed by unique-profile order.  Also
+    returns `subset_positions`, the position of each chosen sample in the
+    test Subset; callers use this to look up the corresponding row in the
+    underlying HDF5 (via subset.indices) for the raw in-situ overlay.
+    """
     model.eval()
-    x, prof_true, tau_true = next(iter(test_loader))
-    x = x.to(device)
-    out = model(x)
-    pred      = out['profile'].cpu().numpy()       # already in μm
-    pred_std  = out['profile_std'].cpu().numpy()   # already in μm
-    # prof_true is normalized in [0,1]; denormalize
-    # (re_min/re_max are fixed by RetrievalConfig defaults)
-    # but we'll pull them from the model_config instead to stay safe
-    return x.cpu().numpy(), pred, pred_std, prof_true.numpy(), tau_true.numpy()
+
+    subset_pos   = 0   # running index into the test Subset
+    seen         = {}  # profile-hash -> subset position of first occurrence
+    pred_u       = {}
+    pred_std_u   = {}
+    tau_pred_u   = {}
+    tau_pred_std_u = {}
+    prof_norm_u  = {}
+    tau_true_u   = {}
+
+    for x, prof, tau in test_loader:
+        x_d = x.to(device)
+        out = model(x_d)
+        pred          = out['profile'].cpu().numpy()
+        pred_std      = out['profile_std'].cpu().numpy()
+        tau_pred      = out['tau_c'].squeeze(-1).cpu().numpy()
+        tau_pred_std  = out['tau_std'].squeeze(-1).cpu().numpy()
+        prof_np       = prof.numpy()
+        tau_np        = tau.numpy()
+
+        for i in range(prof_np.shape[0]):
+            key = tuple(np.round(prof_np[i], 6))  # identical profiles hash the same
+            if key not in seen:
+                seen[key]           = subset_pos + i
+                pred_u[key]         = pred[i]
+                pred_std_u[key]     = pred_std[i]
+                tau_pred_u[key]     = float(tau_pred[i])
+                tau_pred_std_u[key] = float(tau_pred_std[i])
+                prof_norm_u[key]    = prof_np[i]
+                tau_true_u[key]     = float(tau_np[i])
+            if len(seen) >= n_examples:
+                break
+
+        subset_pos += prof_np.shape[0]
+        if len(seen) >= n_examples:
+            break
+
+    keys = list(seen.keys())
+    return {
+        'subset_positions': np.array([seen[k] for k in keys], dtype=int),
+        'pred'            : np.stack([pred_u[k]         for k in keys]),
+        'pred_std'        : np.stack([pred_std_u[k]     for k in keys]),
+        'tau_pred'        : np.array([tau_pred_u[k]     for k in keys]),
+        'tau_pred_std'    : np.array([tau_pred_std_u[k] for k in keys]),
+        'prof_norm'       : np.stack([prof_norm_u[k]    for k in keys]),
+        'tau_true_norm'   : np.array([tau_true_u[k]     for k in keys]),
+    }
 
 
-def plot_profiles(pred, pred_std, true_um, tau_true, run_info, out_path,
-                  n_examples=6, seed=0):
+# ─────────────────────────────────────────────────────────────────────────────
+# Raw profile lookup from the HDF5
+# ─────────────────────────────────────────────────────────────────────────────
+def read_raw_profiles(h5_path, subset, subset_positions):
     """
-    6-panel figure: 6 randomly-selected test profiles, retrieved ±1σ vs true.
-    Y-axis is level index 1..n_levels with 1 at top (cloud top).
+    Fetch the raw in-situ r_e profile, raw altitude grid, and scalar tau_c
+    for each chosen sample.  subset_positions are positions within the test
+    Subset; we translate via subset.indices to the underlying HDF5 row.
     """
-    rng = np.random.default_rng(seed)
-    n_avail, n_levels = pred.shape
-    idxs = rng.choice(n_avail, size=min(n_examples, n_avail), replace=False)
+    if hasattr(subset, 'indices'):
+        subset_to_hdf5 = np.asarray(subset.indices, dtype=int)
+    else:
+        # Fallback: identity mapping (no Subset wrapper).  Would only happen
+        # if profile_holdout=False; we warn then proceed.
+        print("  [warn] test loader's dataset has no .indices; assuming "
+              "identity mapping to HDF5 rows.")
+        subset_to_hdf5 = np.arange(len(subset))
 
+    hdf5_rows = subset_to_hdf5[subset_positions]
+
+    raw_re, raw_z, tau_c_vals = [], [], []
+    with h5py.File(h5_path, 'r') as f:
+        n_lev_arr   = f['profile_n_levels']
+        raw_re_ds   = f['profiles_raw']
+        raw_z_ds    = f['profiles_raw_z']
+        tau_c_ds    = f['tau_c']
+        for r in hdf5_rows:
+            n = int(n_lev_arr[r])
+            raw_re.append(raw_re_ds[r, :n].astype(np.float32).copy())
+            raw_z.append(raw_z_ds[r, :n].astype(np.float32).copy())
+            tau_c_vals.append(float(tau_c_ds[r]))
+    return raw_re, raw_z, np.array(tau_c_vals)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-panel plot helper (also used by the grid figure)
+# ─────────────────────────────────────────────────────────────────────────────
+def _draw_panel(ax, pred, pred_std, true_um, raw_re, raw_z,
+                tau_true, tau_pred, tau_pred_std,
+                show_legend=True, tick_fontsize=8):
+    """
+    Draw a single retrieval-vs-truth panel.
+
+    Left y-axis: optical depth τ (linear approximation from τ_c).
+    Right y-axis: altitude (km), rendered via a twin axis.
+    """
+    n_levels = len(pred)
+
+    # Optical depth at each of the N interpolated levels (linear approx).
+    # The model levels are evenly spaced in altitude between z_top and z_base,
+    # so assuming roughly constant extinction they are evenly spaced in τ too.
+    tau_lvl = np.linspace(0.0, tau_true, n_levels)
+
+    # Altitudes at each of the N interpolated levels: the converter uses
+    # linspace between z_raw[0] (top) and z_raw[-1] (base).
+    z_top  = float(raw_z[0])
+    z_base = float(raw_z[-1])
+    z_lvl  = np.linspace(z_top, z_base, n_levels)
+
+    # Raw profile on the same τ axis: map z -> τ via the same linear law
+    # τ(z) = (z_top - z) / (z_top - z_base) · τ_true.  This is the only
+    # approximation in the figure; see module docstring.
+    tau_raw = (z_top - raw_z) / max(z_top - z_base, 1e-9) * tau_true
+
+    # Raw in-situ profile (blue, partially transparent)
+    ax.plot(raw_re, tau_raw, '-', color=RAW_BLUE, linewidth=1.0, alpha=0.55,
+            label='In-situ raw profile')
+
+    # Interpolated true profile on the 7-level model grid (black circles)
+    ax.plot(true_um, tau_lvl, 'ko-', markersize=5, linewidth=1.6,
+            label=f'{n_levels}-level training profile')
+
+    # NN retrieval with ±1σ
+    ax.errorbar(pred, tau_lvl, xerr=pred_std,
+                fmt='s--', color=GREEN, markersize=4, linewidth=1.5,
+                elinewidth=1.0, capsize=3,
+                label='NN retrieval ±1σ')
+
+    # τ=0 at the top of the plot (cloud top), τ=τ_c at the bottom.
+    ax.invert_yaxis()
+    ax.set_xlabel(r'$r_e$ (μm)', fontsize=10)
+    ax.set_ylabel(r'Optical depth $\tau$ (approx)', fontsize=10)
+    ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.6)
+    ax.tick_params(labelsize=tick_fontsize)
+
+    # Right y-axis: altitude (km).  Because ax has τ=0 at top and τ=τ_c at
+    # bottom, and τ increases linearly with (z_top - z), the altitude axis
+    # should have z_top at the TOP of the plot and z_base at the BOTTOM —
+    # i.e. ax2.set_ylim(z_base, z_top) (ymin at bottom, ymax at top, no invert).
+    ax2 = ax.twinx()
+    ax2.set_ylim(z_base, z_top)
+    ax2.set_ylabel('Altitude (km)', fontsize=10)
+    ax2.tick_params(labelsize=tick_fontsize)
+
+    ax.set_title(
+        rf'$\tau_\mathrm{{true}}$ = {tau_true:.2f}   '
+        rf'$\tau_\mathrm{{pred}}$ = {tau_pred:.2f} ± {tau_pred_std:.2f}',
+        fontsize=10,
+    )
+    if show_legend:
+        ax.legend(fontsize=8, loc='lower left')
+    return ax2
+
+
+def plot_profiles(ex, run_info, out_path, n_examples=6):
+    """6-panel figure for one run: unique test profiles, retrieved ±1σ vs true."""
+    n_examples = min(n_examples, len(ex['pred']))
     nrows, ncols = 2, 3
-    fig, axes = plt.subplots(nrows, ncols, figsize=(14, 9), squeeze=False)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(16, 10), squeeze=False)
     axes = axes.ravel()
 
-    levels = np.arange(1, n_levels + 1)
+    for j in range(n_examples):
+        _draw_panel(
+            axes[j],
+            pred         = ex['pred'][j],
+            pred_std     = ex['pred_std'][j],
+            true_um      = ex['true_um'][j],
+            raw_re       = ex['raw_re'][j],
+            raw_z        = ex['raw_z'][j],
+            tau_true     = ex['tau_true'][j],
+            tau_pred     = ex['tau_pred'][j],
+            tau_pred_std = ex['tau_pred_std'][j],
+            show_legend  = (j == 0),
+        )
 
-    for ax, i in zip(axes, idxs):
-        ax.plot(true_um[i], levels, 'ko-', markersize=5, linewidth=1.6,
-                label=f'True (in-situ, {n_levels} levels)')
-        ax.errorbar(pred[i], levels,
-                    xerr=pred_std[i],
-                    fmt='s--', color=GREEN, markersize=4, linewidth=1.5,
-                    elinewidth=1.0, capsize=3,
-                    label='PINN retrieval ±1σ')
-        ax.invert_yaxis()   # level 1 (cloud top) at top
-        ax.set_xlabel(r'$r_e$ (μm)', fontsize=10)
-        ax.set_ylabel(f'Level (1=top, {n_levels}=base)', fontsize=10)
-        ax.set_title(f'test idx {i}  |  '
-                     rf'$\tau$ true = {float(tau_true[i]):.1f}',
-                     fontsize=9)
-        ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.6)
-        ax.legend(fontsize=8, loc='best')
+    for ax in axes[n_examples:]:
+        ax.axis('off')
 
     fig.suptitle(
         f"run_{int(run_info['run_id']):03d}: {run_info['run_name']}   "
         f"(mean RMSE {run_info['mean_rmse']:.3f} μm)",
-        fontsize=12, y=1.02,
+        fontsize=12, y=1.00,
     )
     plt.tight_layout()
     plt.savefig(out_path, dpi=200, bbox_inches='tight')
@@ -116,31 +285,32 @@ def plot_profiles(pred, pred_std, true_um, tau_true, run_info, out_path,
 
 
 def plot_grid_single(per_run_examples, out_path):
-    """One subplot per top-N run, each showing one example profile."""
+    """One subplot per top-N run, each showing that run's first unique profile."""
     n = len(per_run_examples)
     ncols = 5 if n >= 5 else n
     nrows = (n + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.2 * ncols, 3.6 * nrows),
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 3.8 * nrows),
                              squeeze=False)
     axes = axes.ravel()
-    n_levels = len(per_run_examples[0]['true'])
-    levels = np.arange(1, n_levels + 1)
 
     for ax, ex in zip(axes, per_run_examples):
-        ax.plot(ex['true'], levels, 'ko-', markersize=4, linewidth=1.3,
-                label='True')
-        ax.errorbar(ex['pred'], levels, xerr=ex['pred_std'],
-                    fmt='s--', color=GREEN, markersize=3, linewidth=1.3,
-                    elinewidth=0.9, capsize=2, label='PINN ±1σ')
-        ax.invert_yaxis()
-        ax.set_xlabel(r'$r_e$ (μm)', fontsize=9)
-        ax.set_ylabel('Level', fontsize=9)
-        ax.set_title(f"run_{ex['run_id']:03d} — "
-                     f"RMSE {ex['mean_rmse']:.3f} μm",
-                     fontsize=9)
-        ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.6)
-        ax.tick_params(labelsize=8)
-        ax.legend(fontsize=7, loc='best')
+        _draw_panel(
+            ax,
+            pred         = ex['pred'],
+            pred_std     = ex['pred_std'],
+            true_um      = ex['true'],
+            raw_re       = ex['raw_re'],
+            raw_z        = ex['raw_z'],
+            tau_true     = ex['tau_true'],
+            tau_pred     = ex['tau_pred'],
+            tau_pred_std = ex['tau_pred_std'],
+            show_legend  = False,
+            tick_fontsize= 7,
+        )
+        ax.set_title(f"run_{ex['run_id']:03d} — RMSE {ex['mean_rmse']:.3f} μm\n"
+                     rf"$\tau_t$={ex['tau_true']:.1f}, "
+                     rf"$\tau_p$={ex['tau_pred']:.1f}±{ex['tau_pred_std']:.2f}",
+                     fontsize=8)
 
     for ax in axes[n:]:
         ax.axis('off')
@@ -149,19 +319,20 @@ def plot_grid_single(per_run_examples, out_path):
     plt.close(fig)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--results-dir', default='sweep_results_2')
+    p.add_argument('--results-dir', default='sweep_results_3')
     p.add_argument('--top-n', type=int, default=10)
     p.add_argument('--n-examples', type=int, default=6,
-                   help='Profiles per run in the per-run figure')
+                   help='Unique profiles per run in the per-run figure')
     p.add_argument('--device', default=None,
                    help='"cuda", "cpu", or leave unset for auto-detect')
     p.add_argument('--h5-path', default=None,
                    help='Override HDF5 path from config.json '
                         '(useful when config points at Alpine but running locally)')
-    p.add_argument('--seed', type=int, default=0,
-                   help='Seed for selecting which test profiles to plot')
     args = p.parse_args()
 
     device = torch.device(args.device if args.device
@@ -185,8 +356,7 @@ def main():
         ckpt_path = run_dir / 'best_model.pt'
 
         if not cfg_path.exists() or not ckpt_path.exists():
-            print(f"  [skip] rank {rank+1}: missing config or checkpoint "
-                  f"in {run_dir}")
+            print(f"  [skip] rank {rank+1}: missing config or checkpoint in {run_dir}")
             continue
 
         with open(cfg_path) as f:
@@ -199,55 +369,72 @@ def main():
             print(f"         pass --h5-path /your/local/path to override")
             continue
 
-        # Rebuild loaders with the same split as training (seed=42, same
-        # profile_holdout config as sweep_train.py)
         _, _, test_loader = create_dataloaders(
             h5_path=h5_path,
             instrument=cfg['data'].get('instrument', 'hysics'),
             batch_size=hp.get('batch_size', 256),
-            num_workers=0,              # single-process for plotting
+            num_workers=0,
             seed=42,
             profile_holdout=True,
             n_val_profiles=14,
             n_test_profiles=14,
         )
 
-        # n_levels is inferred from the test loader's dataset so the plot
-        # script stays consistent with however many levels the HDF5 has.
-        # profile_holdout=True wraps the dataset in a Subset, so unwrap.
+        # Unwrap to find n_levels on the base RetrievalDataset.
         base_ds = test_loader.dataset
         while hasattr(base_ds, 'dataset'):
             base_ds = base_ds.dataset
         n_levels = base_ds.n_levels
+
         model, model_config = build_model_from_config(cfg, device, n_levels)
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt['model_state_dict'])
 
-        x, pred, pred_std, prof_norm, tau_norm = infer_test_batch(
-            model, test_loader, device, args.n_examples)
+        # 1. Gather unique profiles (fixes the "6 identical panels" bug)
+        found = gather_unique_profiles(model, test_loader, device, args.n_examples)
+        n_found = len(found['pred'])
+        if n_found < args.n_examples:
+            print(f"  [note] rank {rank+1}: only {n_found} unique profiles in "
+                  f"first few test batches (needed {args.n_examples})")
 
-        # Denormalize truths (predictions from the model head are already in μm)
+        # 2. Denormalize ground truth into physical units (μm, dimensionless τ)
         re_min, re_max = model_config.re_min, model_config.re_max
         tau_min, tau_max = model_config.tau_min, model_config.tau_max
-        true_um = prof_norm * (re_max - re_min) + re_min
-        tau_true = tau_norm * (tau_max - tau_min) + tau_min
+        true_um  = found['prof_norm'] * (re_max - re_min) + re_min
+        tau_true = found['tau_true_norm'] * (tau_max - tau_min) + tau_min
+
+        # 3. Pull raw in-situ profiles for these samples from the HDF5
+        raw_re, raw_z, _ = read_raw_profiles(
+            h5_path, test_loader.dataset, found['subset_positions'])
+
+        ex = {
+            'pred'         : found['pred'],
+            'pred_std'     : found['pred_std'],
+            'tau_pred'     : found['tau_pred'],
+            'tau_pred_std' : found['tau_pred_std'],
+            'true_um'      : true_um,
+            'tau_true'     : tau_true,
+            'raw_re'       : raw_re,
+            'raw_z'        : raw_z,
+        }
 
         out_path = fig_dir / f"profiles_top{rank+1:02d}_run_{rid:03d}.png"
-        plot_profiles(pred, pred_std, true_um, tau_true,
-                      row, out_path,
-                      n_examples=args.n_examples, seed=args.seed)
+        plot_profiles(ex, row, out_path, n_examples=args.n_examples)
         print(f"  rank {rank+1:2d}  run_{rid:03d}  "
               f"RMSE={row['mean_rmse']:.3f} μm   -> {out_path.name}")
 
-        # Keep one example for the summary grid
-        rng = np.random.default_rng(args.seed + rank)
-        k = int(rng.integers(0, pred.shape[0]))
+        # First unique profile from this run goes into the cross-run summary
         per_run_examples.append({
-            'run_id': rid,
-            'mean_rmse': row['mean_rmse'],
-            'true': true_um[k],
-            'pred': pred[k],
-            'pred_std': pred_std[k],
+            'run_id'      : rid,
+            'mean_rmse'   : row['mean_rmse'],
+            'true'        : true_um[0],
+            'pred'        : found['pred'][0],
+            'pred_std'    : found['pred_std'][0],
+            'tau_true'    : tau_true[0],
+            'tau_pred'    : found['tau_pred'][0],
+            'tau_pred_std': found['tau_pred_std'][0],
+            'raw_re'      : raw_re[0],
+            'raw_z'       : raw_z[0],
         })
 
     if per_run_examples:
