@@ -73,7 +73,7 @@ from pathlib import Path
 
 MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_17_April_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'combined_vocals_oracles_training_data_8-levels_17_April_2026.h5')
+                'combined_vocals_oracles_training_data_8-tauWeighted-levels_17_April_2026.h5')
 
 N_LEVELS      = 8     # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
@@ -576,25 +576,62 @@ with h5py.File(OUT_PATH, 'w') as f:
 
         # Sanity check: tau profile should match re/z in length.
         #
-        # A known quirk in some source .mat files: the tau vector has one
-        # extra trailing entry that is a duplicate of the last real value
-        # (i.e. tau[-1] == tau[-2]).  This was supposed to have been cleaned
-        # up upstream but a few cases slipped through.  Detect that specific
-        # pattern and trim rather than crashing the whole run.  Any other
-        # length mismatch is a real data-quality problem and we fail loudly.
-        if len(tau_raw) == n_lev + 1 and np.isclose(tau_raw[-1], tau_raw[-2]):
-            print(f"  [note] {path.name}: trimming duplicate trailing tau "
-                  f"value (tau[-1]={tau_raw[-1]:.4f} == tau[-2]).")
-            tau_raw = tau_raw[:n_lev]
-        elif len(tau_raw) != n_lev:
+        # A known quirk in some source .mat files: the tau vector contains
+        # one or more duplicate values (sometimes a trailing duplicate of
+        # the last entry, sometimes duplicated values deeper in the cloud).
+        # These were supposed to have been cleaned up upstream but a few
+        # cases slipped through.
+        #
+        # Some of those "duplicates" are not bit-exact — for example,
+        # tau[-1]=9.159509165643216 vs tau[-2]=9.159509165643220 differ at
+        # the 16th decimal place (float64 rounding noise from whatever
+        # computation produced them).  We therefore dedupe at a relative
+        # tolerance of 1e-6 (≈ 6 significant figures), which is orders of
+        # magnitude looser than machine epsilon but far tighter than any
+        # physically meaningful difference in optical depth.
+        #
+        # When dedup produces exactly n_lev unique values, we proceed.
+        # Any other mismatch is a real data-quality problem; fail loudly.
+        def _unique_with_tol(a, rtol=1e-6):
+            """
+            Return the values of `a` with near-duplicates removed, preserving
+            the order of first occurrence.  Two values v and w are considered
+            the same if  |v - w| <= rtol * max(|v|, |w|, 1).
+            """
+            kept = []
+            for v in a:
+                is_dup = False
+                for k in kept:
+                    if abs(v - k) <= rtol * max(abs(v), abs(k), 1.0):
+                        is_dup = True
+                        break
+                if not is_dup:
+                    kept.append(v)
+            return np.array(kept, dtype=a.dtype)
+
+        if len(tau_raw) > n_lev:
+            tau_unique = _unique_with_tol(tau_raw, rtol=1e-6)
+            if len(tau_unique) == n_lev:
+                n_dropped = len(tau_raw) - n_lev
+                print(f"  [note] {path.name}: dropped {n_dropped} duplicate "
+                      f"tau value(s) within 1e-6 relative tolerance "
+                      f"(len(tau) {len(tau_raw)} → {n_lev}).")
+                tau_raw = tau_unique
+            else:
+                raise ValueError(
+                    f"{path.name}: len(tau)={len(tau_raw)} > len(re)={n_lev}, "
+                    f"but tau has {len(tau_unique)} unique values at rtol=1e-6 "
+                    f"(expected {n_lev}).  Inspect this .mat file manually."
+                )
+        elif len(tau_raw) < n_lev:
             raise ValueError(
-                f"{path.name}: len(tau)={len(tau_raw)} != len(re)={n_lev}. "
-                f"Expected identical lengths (or len(tau)=len(re)+1 with a "
-                f"duplicated final value).  Inspect this .mat file manually."
+                f"{path.name}: len(tau)={len(tau_raw)} < len(re)={n_lev}. "
+                f"Cannot infer missing tau values.  Inspect this .mat file."
             )
 
         # Training target: interpolate to N_LEVELS
-        profile_fixed = interpolate_profile(re_raw, z_raw, N_LEVELS)  # (N_LEVELS,)
+        # profile_fixed = interpolate_profile(re_raw, z_raw, N_LEVELS)  # (N_LEVELS,)
+        profile_fixed = interpolate_profile_tau_weighted(re_raw, tau_raw, z_raw, np.round(0.6*N_LEVELS), N_LEVELS - np.round(0.6*N_LEVELS), 0.5)  # (N_LEVELS,)
 
         # Total (column) optical depth — kept as a separate scalar for backward
         # compatibility with existing consumers; the full τ(z) profile is now
