@@ -574,13 +574,23 @@ with h5py.File(OUT_PATH, 'w') as f:
         tau_raw = np.atleast_1d(d['tau'][()]).astype(np.float64)
         n_lev   = len(re_raw)
 
-        # Sanity check: tau profile should match re/z in length.  If the .mat
-        # file somehow has a mismatched tau vector, fail loudly here rather
-        # than silently storing misaligned data.
-        if len(tau_raw) != n_lev:
+        # Sanity check: tau profile should match re/z in length.
+        #
+        # A known quirk in some source .mat files: the tau vector has one
+        # extra trailing entry that is a duplicate of the last real value
+        # (i.e. tau[-1] == tau[-2]).  This was supposed to have been cleaned
+        # up upstream but a few cases slipped through.  Detect that specific
+        # pattern and trim rather than crashing the whole run.  Any other
+        # length mismatch is a real data-quality problem and we fail loudly.
+        if len(tau_raw) == n_lev + 1 and np.isclose(tau_raw[-1], tau_raw[-2]):
+            print(f"  [note] {path.name}: trimming duplicate trailing tau "
+                  f"value (tau[-1]={tau_raw[-1]:.4f} == tau[-2]).")
+            tau_raw = tau_raw[:n_lev]
+        elif len(tau_raw) != n_lev:
             raise ValueError(
                 f"{path.name}: len(tau)={len(tau_raw)} != len(re)={n_lev}. "
-                f"The raw profile vectors must share a length."
+                f"Expected identical lengths (or len(tau)=len(re)+1 with a "
+                f"duplicated final value).  Inspect this .mat file manually."
             )
 
         # Training target: interpolate to N_LEVELS
