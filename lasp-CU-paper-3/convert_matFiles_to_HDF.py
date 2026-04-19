@@ -79,6 +79,20 @@ N_LEVELS      = 8     # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
 N_WAVELENGTHS = 636   # HySICS spectral channels
 
+# ------------------------------------------------------------------
+# Training-target sampling mode
+# ------------------------------------------------------------------
+# 'even_z'        : N_LEVELS evenly spaced in geometric altitude (km).
+#                   Only re_raw and z_raw are used by the interpolator.
+# 'tau_weighted'  : N_LEVELS spaced non-uniformly in cumulative optical
+#                   depth, with TAU_TOP_FRAC of the levels placed in the
+#                   top TAU_SPLIT fraction of optical depth (denser near
+#                   cloud top, where shortwave reflectance is most
+#                   sensitive).  Requires a valid tau_raw vector.
+SAMPLING_MODE   = 'tau_weighted'   # 'even_z' or 'tau_weighted'
+TAU_TOP_FRAC    = 0.6              # fraction of N_LEVELS placed above TAU_SPLIT
+TAU_SPLIT       = 0.5              # normalized tau (0=top, 1=base) at the split
+
 # Minimum physically-plausible cloud optical depth.
 # Files with tau_c below this value are skipped — a near-zero tau_c indicates
 # either a clear-sky profile or a corrupted measurement, neither of which
@@ -629,9 +643,23 @@ with h5py.File(OUT_PATH, 'w') as f:
                 f"Cannot infer missing tau values.  Inspect this .mat file."
             )
 
-        # Training target: interpolate to N_LEVELS
-        # profile_fixed = interpolate_profile(re_raw, z_raw, N_LEVELS)  # (N_LEVELS,)
-        profile_fixed = interpolate_profile_tau_weighted(re_raw, tau_raw, z_raw, np.round(0.6*N_LEVELS), N_LEVELS - np.round(0.6*N_LEVELS), 0.5)  # (N_LEVELS,)
+        # Training target: interpolate to N_LEVELS using the configured mode.
+        # Both branches return a (N_LEVELS,) float32 array ordered top→base.
+        if SAMPLING_MODE == 'even_z':
+            profile_fixed = interpolate_profile(re_raw, z_raw, N_LEVELS)
+        elif SAMPLING_MODE == 'tau_weighted':
+            # int() cast is required: np.linspace(..., num=...) rejects floats.
+            n_top = int(round(TAU_TOP_FRAC * N_LEVELS))
+            n_bot = N_LEVELS - n_top
+            profile_fixed, _tau_grid, _z_interp = interpolate_profile_tau_weighted(
+                re_raw, tau_raw, z_raw,
+                n_top=n_top, n_bot=n_bot, split_tau=TAU_SPLIT,
+            )  # profile_fixed: (N_LEVELS,) float32
+        else:
+            raise ValueError(
+                f"SAMPLING_MODE must be 'even_z' or 'tau_weighted', "
+                f"got {SAMPLING_MODE!r}"
+            )
 
         # Total (column) optical depth — kept as a separate scalar for backward
         # compatibility with existing consumers; the full τ(z) profile is now
