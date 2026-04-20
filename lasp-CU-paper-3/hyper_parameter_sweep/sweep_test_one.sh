@@ -74,7 +74,13 @@ print('All imports OK')
 # Run a single sweep config (run_000 from sweep #2)
 echo ""
 echo "Running sweep config run_000 (sweep 2)..."
-python sweep_train.py --config-json sweep_configs_2/run_000.json
+# --training-data-dir overrides the directory portion of the h5_path stored in
+# the config JSON, so this script works even if the JSON's path is stale.
+TRAINING_DATA_DIR="/scratch/alpine/anbu8374/neural_network_training_data/"
+
+python sweep_train.py \
+    --config-json sweep_configs_2/run_000.json \
+    --training-data-dir "$TRAINING_DATA_DIR"
 
 EXIT_CODE=$?
 

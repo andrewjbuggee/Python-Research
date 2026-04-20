@@ -49,7 +49,7 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models import DropletProfileNetwork, RetrievalConfig
-from data import create_dataloaders
+from data import create_dataloaders, resolve_h5_path
 
 
 GREEN     = '#10B981'   # NN retrieval
@@ -327,8 +327,17 @@ def main():
     p.add_argument('--device', default=None,
                    help='"cuda", "cpu", or leave unset for auto-detect')
     p.add_argument('--h5-path', default=None,
-                   help='Override HDF5 path from config.json '
-                        '(useful when config points at Alpine but running locally)')
+                   help='Full HDF5 path override (overrides what is stored in '
+                        'each run\'s config.json).  Mutually compatible with '
+                        '--training-data-dir: both can be combined to override '
+                        'just the directory or both directory and filename.')
+    p.add_argument('--training-data-dir', default=None,
+                   help='Directory hosting the HDF5 file on this machine. '
+                        'Replaces only the directory portion of the path '
+                        'stored in each config.json (filename is preserved). '
+                        'Useful for switching between Alpine '
+                        '(/scratch/alpine/anbu8374/neural_network_training_data/) '
+                        'and a local copy without editing any sweep run\'s config.')
     args = p.parse_args()
 
     device = torch.device(args.device if args.device
@@ -359,7 +368,11 @@ def main():
             cfg = json.load(f)
         hp = cfg['hyperparams']
 
-        h5_path = args.h5_path if args.h5_path else cfg['data']['h5_path']
+        # Path resolution order: explicit --h5-path > config's h5_path,
+        # then --training-data-dir overrides the directory portion of whichever
+        # was chosen.
+        base_path = args.h5_path if args.h5_path else cfg['data']['h5_path']
+        h5_path = str(resolve_h5_path(base_path, args.training_data_dir))
         if not Path(h5_path).exists():
             print(f"  [skip] rank {rank+1}: HDF5 not found at {h5_path}")
             print(f"         pass --h5-path /your/local/path to override")

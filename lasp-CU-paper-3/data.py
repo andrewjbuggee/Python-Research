@@ -15,8 +15,50 @@ import h5py
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset, random_split
 from pathlib import Path
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Union
 import warnings
+
+
+# =============================================================================
+# Path-resolution helper used by every training / plotting script
+# =============================================================================
+def resolve_h5_path(h5_path: Union[str, Path],
+                    training_data_dir: Optional[Union[str, Path]] = None) -> Path:
+    """
+    Resolve an HDF5 path, applying a directory override if one is provided.
+
+    Use case: each YAML/JSON config stores an absolute h5_path that points at
+    where the file lives on a particular machine (e.g. Alpine's /scratch).
+    When the same file lives somewhere else (a local copy on a laptop), we
+    don't want to edit the config — we just want to override the directory
+    while keeping the filename.
+
+    Parameters
+    ----------
+    h5_path : str or Path
+        The h5_path stored in the config.  May be absolute or relative.
+    training_data_dir : str, Path, or None
+        Directory that should host the training data on the current machine.
+        If None or empty string, h5_path is returned unchanged.
+
+    Returns
+    -------
+    Path
+        Resolved path.  Whether the file actually exists is the caller's
+        responsibility to check.
+
+    Examples
+    --------
+    >>> resolve_h5_path('/scratch/alpine/anbu8374/.../foo.h5', None)
+    PosixPath('/scratch/alpine/anbu8374/.../foo.h5')
+    >>> resolve_h5_path('/scratch/alpine/anbu8374/.../foo.h5',
+    ...                 '/Users/me/training_data/')
+    PosixPath('/Users/me/training_data/foo.h5')
+    """
+    p = Path(h5_path)
+    if not training_data_dir:                     # None or '' → no override
+        return p
+    return Path(training_data_dir) / p.name
 
 
 # =============================================================================

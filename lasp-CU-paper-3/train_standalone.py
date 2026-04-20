@@ -52,18 +52,23 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from models import DropletProfileNetwork, CombinedLoss, RetrievalConfig
-from data import create_dataloaders
+from data import create_dataloaders, resolve_h5_path
 
 
 GREEN    = '#10B981'   # NN retrieval
 RAW_BLUE = '#1F5FC2'   # raw in-situ
 
 
-# Reference 'deep' scheme from generate_sweep_2.py at the original 7-level grid
-# (emphasises cloud base).  For other n_levels we linearly interpolate these
-# anchor values onto the target grid — keeps the shape of the scheme intact
-# while adapting to the profile resolution.
-DEEP_SCHEME_REF_7LEVEL = np.array([1.0, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0])
+# Reference level-weight schemes from generate_sweep_2.py at the original
+# 7-level grid.  For other n_levels we linearly interpolate these anchor
+# values onto the target grid — keeps the shape of the scheme intact while
+# adapting to the profile resolution.
+#   'deep' : emphasises cloud base (gradient from 1 at top to 5 at base)
+#   'top'  : emphasises cloud top  (6 at top, tapering to 1 mid-profile)
+LEVEL_WEIGHT_REFS_7LEVEL = {
+    'deep': np.array([1.0, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0]),
+    'top':  np.array([6.0, 3.0, 2.0, 1.0, 1.0, 1.0, 1.0]),
+}
 
 
 def build_level_weights(scheme: str, n_levels: int) -> list:
@@ -72,7 +77,7 @@ def build_level_weights(scheme: str, n_levels: int) -> list:
 
     Parameters
     ----------
-    scheme   : 'uniform' or 'deep'
+    scheme   : 'uniform', 'deep', or 'top'
     n_levels : number of profile levels in the HDF5 you are training on
 
     Returns
@@ -81,12 +86,14 @@ def build_level_weights(scheme: str, n_levels: int) -> list:
     """
     if scheme == 'uniform':
         return [1.0] * n_levels
-    if scheme == 'deep':
-        ref = DEEP_SCHEME_REF_7LEVEL
+    if scheme in LEVEL_WEIGHT_REFS_7LEVEL:
+        ref = LEVEL_WEIGHT_REFS_7LEVEL[scheme]
         xs  = np.linspace(0.0, len(ref) - 1, n_levels)
         return np.interp(xs, np.arange(len(ref)), ref).tolist()
-    raise ValueError(f"level_weights scheme must be 'uniform' or 'deep', "
-                     f"got {scheme!r}")
+    raise ValueError(
+        f"level_weights scheme must be one of "
+        f"{['uniform'] + sorted(LEVEL_WEIGHT_REFS_7LEVEL.keys())}, got {scheme!r}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -97,7 +104,14 @@ def parse_args():
     p.add_argument('--run-id', type=int, required=True,
                    help='Sweep run ID to borrow hyperparameters from, e.g. 50 -> run_050')
     p.add_argument('--h5-path', type=str, required=True,
-                   help='HDF5 training file to train on (overrides the one saved in the run config)')
+                   help='HDF5 training file to train on (overrides the one saved in the run config). '
+                        'May be a full path, or just a filename when --training-data-dir is given.')
+    p.add_argument('--training-data-dir', type=str, default=None,
+                   help='Directory that hosts the HDF5 file on this machine. If given, '
+                        'the directory portion of --h5-path is replaced with this; only the '
+                        'filename is preserved. Use this to switch between Alpine '
+                        '(/scratch/alpine/anbu8374/neural_network_training_data/) and a local '
+                        'copy without editing any path.')
     p.add_argument('--sweep-dir', type=str,
                    default='hyper_parameter_sweep/sweep_results_3',
                    help='Directory holding the run_NNN/ subfolders (relative to repo root)')
@@ -107,11 +121,11 @@ def parse_args():
                    help='"cuda", "mps", "cpu". Default: cuda if available, else cpu.')
     p.add_argument('--n-epochs', type=int, default=None,
                    help='Override n_epochs from the run config (default: use what was saved)')
-    p.add_argument('--level-weights', choices=['uniform', 'deep'], default=None,
+    p.add_argument('--level-weights', choices=['uniform', 'deep', 'top'], default=None,
                    help='Override the saved level_weights with a rebuilt one matching '
-                        'the HDF5 n_levels.  "uniform" = [1]*n, "deep" = interpolated '
-                        'gradient toward base.  Default: keep the saved weights and '
-                        'enforce length-matches-n_levels.')
+                        'the HDF5 n_levels.  "uniform" = [1]*n; "deep" = gradient '
+                        'toward cloud base; "top" = gradient toward cloud top.  '
+                        'Default: keep the saved weights and enforce length match.')
     p.add_argument('--seed', type=int, default=42,
                    help='Random seed for the train/val/test split and weight init')
     return p.parse_args()
@@ -372,9 +386,15 @@ def main():
     hp = cfg['hyperparams']
 
     # ── Override h5_path with the user's file ─────────────────────────────────
-    h5_path = Path(args.h5_path).resolve()
+    # If --training-data-dir is given, only the filename of --h5-path is kept;
+    # the directory is taken from --training-data-dir.
+    h5_path = resolve_h5_path(args.h5_path, args.training_data_dir).resolve()
     if not h5_path.exists():
-        raise FileNotFoundError(f'HDF5 file not found: {h5_path}')
+        raise FileNotFoundError(
+            f'HDF5 file not found: {h5_path}\n'
+            f'  --h5-path           = {args.h5_path}\n'
+            f'  --training-data-dir = {args.training_data_dir}'
+        )
     cfg.setdefault('data', {})
     cfg['data']['h5_path'] = str(h5_path)
 
@@ -391,10 +411,22 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Device ────────────────────────────────────────────────────────────────
+    # Auto-select the best-available accelerator: CUDA (NVIDIA GPU) first,
+    # then MPS (Apple Silicon GPU), finally CPU.  Without the MPS check,
+    # Apple laptops silently train on CPU — ~100x slower than MPS.
     if args.device:
         device = torch.device(args.device)
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_available():
+        device = torch.device('mps')
     else:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cpu')
+
+    if device.type == 'cpu':
+        print("  [warn] running on CPU — expect several minutes per epoch.")
+        print("         Pass --device mps (Apple Silicon) or --device cuda (NVIDIA)")
+        print("         if either is available for a ~100x speedup.")
 
     # ── Banner ────────────────────────────────────────────────────────────────
     print(f"\n{'='*70}")
@@ -542,10 +574,11 @@ def main():
                       f"(no improvement in {early_stop_patience} epochs)")
                 break
 
-        if epoch % 20 == 0:
-            print(f"Epoch {epoch:4d} | Train: {train_loss:+.4f} | "
-                  f"Val: {val_loss:+.4f} | LR: {lr:.1e} | "
-                  f"No-improve: {epochs_no_improve}")
+        # Print every epoch for interactive visibility (unlike sweep_train.py
+        # which prints every 20 to keep SLURM logs compact).
+        print(f"Epoch {epoch:4d} | Train: {train_loss:+.4f} | "
+              f"Val: {val_loss:+.4f} | LR: {lr:.1e} | "
+              f"No-improve: {epochs_no_improve}")
 
     train_time = time.time() - t0
     final_epoch = epoch

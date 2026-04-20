@@ -41,7 +41,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from models import ForwardModelEmulator, EmulatorConfig, _ResidualBlock
-from data import create_emulator_dataloaders
+from data import create_emulator_dataloaders, resolve_h5_path
 
 
 # =============================================================================
@@ -57,6 +57,11 @@ def parse_args():
                         help="Path to checkpoint to resume from")
     parser.add_argument("--output-dir", type=str, default="checkpoints/emulator_v2",
                         help="Directory to save checkpoints and diagnostics")
+    parser.add_argument("--training-data-dir", type=str, default=None,
+                        help="Directory hosting the HDF5 file(s) on this machine. "
+                             "If given, replaces the directory portion of "
+                             "data.h5_path (and data.lhc_h5_path if set) in the "
+                             "YAML config. Filename is preserved.")
     return parser.parse_args()
 
 
@@ -454,7 +459,12 @@ def main():
     # ------------------------------------------------------------------
     # Data
     # ------------------------------------------------------------------
-    h5_path = config['data']['h5_path']
+    # Apply --training-data-dir override (if given) to both the main h5_path
+    # and the optional LHC augmentation file.  Filename(s) are preserved.
+    h5_path = str(resolve_h5_path(config['data']['h5_path'], args.training_data_dir))
+    lhc_h5_path = config['data'].get('lhc_h5_path', None)
+    if lhc_h5_path:
+        lhc_h5_path = str(resolve_h5_path(lhc_h5_path, args.training_data_dir))
     print(f"\nLoading data from {h5_path} ...")
 
     profile_holdout = config['data'].get('profile_holdout', True)
@@ -479,7 +489,7 @@ def main():
         n_test_profiles=config['data'].get('n_test_profiles', 10),
         train_frac=config['data'].get('train_frac', 0.8),
         val_frac=config['data'].get('val_frac', 0.1),
-        lhc_h5_path=config['data'].get('lhc_h5_path', None),
+        lhc_h5_path=lhc_h5_path,   # already resolved above
         log_reflectance=log_reflectance,
         log_eps=log_eps,
         use_era5_profile=use_era5_profile,

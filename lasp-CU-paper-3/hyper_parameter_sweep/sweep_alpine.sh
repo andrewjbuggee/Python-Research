@@ -77,7 +77,13 @@ CONFIG_FILE="sweep_configs_2/run_${RUN_ID}.json"
 echo "Config: $CONFIG_FILE"
 echo ""
 
-python sweep_train.py --config-json "$CONFIG_FILE"
+# --training-data-dir overrides the directory portion of the h5_path stored in
+# the config JSON, so the same configs work regardless of where the HDF5 lives.
+TRAINING_DATA_DIR="/scratch/alpine/anbu8374/neural_network_training_data/"
+
+python sweep_train.py \
+    --config-json "$CONFIG_FILE" \
+    --training-data-dir "$TRAINING_DATA_DIR"
 EXIT_CODE=$?
 
 echo ""

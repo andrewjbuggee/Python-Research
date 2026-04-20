@@ -31,7 +31,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from models import DropletProfileNetwork, CombinedLoss, RetrievalConfig
-from data import create_dataloaders
+from data import create_dataloaders, resolve_h5_path
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -41,6 +41,13 @@ def parse_args():
     p = argparse.ArgumentParser(description="Single sweep run")
     p.add_argument("--config-json", type=str, required=True,
                    help="Path to JSON config for this run")
+    p.add_argument("--training-data-dir", type=str, default=None,
+                   help="Directory hosting the HDF5 file on this machine. If "
+                        "given, replaces the directory portion of the h5_path "
+                        "stored in the config (filename is preserved). Use this "
+                        "to switch between Alpine "
+                        "(/scratch/alpine/anbu8374/neural_network_training_data/) "
+                        "and a local copy without regenerating sweep configs.")
     return p.parse_args()
 
 
@@ -194,13 +201,21 @@ def main():
     output_dir = Path(cfg['output_dir']) / f'run_{run_id:03d}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save the config into the run directory for reproducibility
+    # Resolve the actual on-disk path.  If --training-data-dir was provided,
+    # only the filename of cfg['data']['h5_path'] is preserved; the directory
+    # is overridden.  Update the saved config to reflect what was actually used.
+    h5_path = str(resolve_h5_path(cfg['data']['h5_path'], args.training_data_dir))
+    cfg['data']['h5_path'] = h5_path
+    print(f"HDF5 file: {h5_path}")
+
+    # Save the config into the run directory for reproducibility (with the
+    # path that was actually used, post-override).
     with open(output_dir / 'config.json', 'w') as f:
         json.dump(cfg, f, indent=2)
 
     # ── Data ───────────────────────────────────────────────────────────────
     train_loader, val_loader, test_loader = create_dataloaders(
-        h5_path=cfg['data']['h5_path'],
+        h5_path=h5_path,
         instrument=cfg['data'].get('instrument', 'hysics'),
         batch_size=hp.get('batch_size', 256),
         num_workers=cfg['data'].get('num_workers', 4),
