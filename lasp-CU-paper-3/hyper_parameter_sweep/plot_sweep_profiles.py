@@ -162,79 +162,96 @@ def read_raw_profiles(h5_path, subset, subset_positions):
 
     hdf5_rows = subset_to_hdf5[subset_positions]
 
-    raw_re, raw_z, tau_c_vals = [], [], []
+    raw_re, raw_z, raw_tau, tau_c_vals = [], [], [], []
     with h5py.File(h5_path, 'r') as f:
         n_lev_arr   = f['profile_n_levels']
         raw_re_ds   = f['profiles_raw']
         raw_z_ds    = f['profiles_raw_z']
         tau_c_ds    = f['tau_c']
+        # profiles_raw_tau was added by the updated converter; tolerate its
+        # absence so this script still runs against older HDF5 files
+        # (sweep_results_2 etc.).  When missing, we plot altitude on the
+        # left y-axis instead of optical depth.
+        has_raw_tau = 'profiles_raw_tau' in f
+        raw_tau_ds  = f['profiles_raw_tau'] if has_raw_tau else None
         for r in hdf5_rows:
             n = int(n_lev_arr[r])
             raw_re.append(raw_re_ds[r, :n].astype(np.float32).copy())
             raw_z.append(raw_z_ds[r, :n].astype(np.float32).copy())
             tau_c_vals.append(float(tau_c_ds[r]))
-    return raw_re, raw_z, np.array(tau_c_vals)
+            if has_raw_tau:
+                raw_tau.append(raw_tau_ds[r, :n].astype(np.float32).copy())
+            else:
+                raw_tau.append(None)
+    return raw_re, raw_z, raw_tau, np.array(tau_c_vals), has_raw_tau
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-panel plot helper (also used by the grid figure)
 # ─────────────────────────────────────────────────────────────────────────────
-def _draw_panel(ax, pred, pred_std, true_um, raw_re, raw_z,
+def _draw_panel(ax, pred, pred_std, true_um, raw_re, raw_z, raw_tau,
                 tau_true, tau_pred, tau_pred_std,
                 show_legend=True, tick_fontsize=8):
     """
     Draw a single retrieval-vs-truth panel.
 
-    Left y-axis: optical depth τ (linear approximation from τ_c).
-    Right y-axis: altitude (km), rendered via a twin axis.
+    Two y-axis modes:
+      raw_tau is a numpy array  → left y-axis = measured optical depth τ;
+                                   right y-axis (twinx) = altitude (km).
+      raw_tau is None           → left y-axis = altitude (km) only.
+                                   This is the backward-compatible path for
+                                   HDF5 files that predate /profiles_raw_tau
+                                   (e.g. sweep_results_2's training data).
     """
     n_levels = len(pred)
 
-    # Optical depth at each of the N interpolated levels (linear approx).
-    # The model levels are evenly spaced in altitude between z_top and z_base,
-    # so assuming roughly constant extinction they are evenly spaced in τ too.
-    tau_lvl = np.linspace(0.0, tau_true, n_levels)
-
-    # Altitudes at each of the N interpolated levels: the converter uses
+    # Altitudes at the N interpolated model levels: the converter uses
     # linspace between z_raw[0] (top) and z_raw[-1] (base).
     z_top  = float(raw_z[0])
     z_base = float(raw_z[-1])
     z_lvl  = np.linspace(z_top, z_base, n_levels)
 
-    # Raw profile on the same τ axis: map z -> τ via the same linear law
-    # τ(z) = (z_top - z) / (z_top - z_base) · τ_true.  This is the only
-    # approximation in the figure; see module docstring.
-    tau_raw = (z_top - raw_z) / max(z_top - z_base, 1e-9) * tau_true
+    if raw_tau is not None:
+        # ── τ-axis mode: project the model levels onto the measured τ(z) ─
+        z_asc, tau_asc = raw_z[::-1], raw_tau[::-1]
+        tau_lvl         = np.interp(z_lvl, z_asc, tau_asc)
+        y_lvl           = tau_lvl              # model points
+        y_raw           = raw_tau              # raw in-situ points
+        ax.invert_yaxis()                       # τ=0 at top, τ_c at bottom
+        ax.set_ylabel(r'Optical depth $\tau$', fontsize=10)
+        # Right y-axis: altitude (km).  Place z_top at the top of the plot
+        # (matches τ=0 at top) and z_base at the bottom — no extra invert.
+        ax2 = ax.twinx()
+        ax2.set_ylim(z_base, z_top)
+        ax2.set_ylabel('Altitude (km)', fontsize=10)
+        ax2.tick_params(labelsize=tick_fontsize)
+    else:
+        # ── altitude-axis fallback (older HDF5 without raw τ) ────────────
+        # No twinx — just altitude on the left, with z_top at the top of the
+        # plot.  z_top > z_base so a normal axis with no invert puts higher
+        # altitude at the top automatically.
+        y_lvl = z_lvl
+        y_raw = raw_z
+        ax.set_ylabel('Altitude (km)', fontsize=10)
+        ax2   = None
 
     # Raw in-situ profile (blue, partially transparent)
-    ax.plot(raw_re, tau_raw, '-', color=RAW_BLUE, linewidth=1.0, alpha=0.55,
+    ax.plot(raw_re, y_raw, '-', color=RAW_BLUE, linewidth=1.0, alpha=0.55,
             label='In-situ raw profile')
 
-    # Interpolated true profile on the 7-level model grid (black circles)
-    ax.plot(true_um, tau_lvl, 'ko-', markersize=5, linewidth=1.6,
+    # Interpolated true profile on the model grid (black circles)
+    ax.plot(true_um, y_lvl, 'ko-', markersize=5, linewidth=1.6,
             label=f'{n_levels}-level training profile')
 
     # NN retrieval with ±1σ
-    ax.errorbar(pred, tau_lvl, xerr=pred_std,
+    ax.errorbar(pred, y_lvl, xerr=pred_std,
                 fmt='s--', color=GREEN, markersize=4, linewidth=1.5,
                 elinewidth=1.0, capsize=3,
                 label='NN retrieval ±1σ')
 
-    # τ=0 at the top of the plot (cloud top), τ=τ_c at the bottom.
-    ax.invert_yaxis()
     ax.set_xlabel(r'$r_e$ (μm)', fontsize=10)
-    ax.set_ylabel(r'Optical depth $\tau$ (approx)', fontsize=10)
     ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.6)
     ax.tick_params(labelsize=tick_fontsize)
-
-    # Right y-axis: altitude (km).  Because ax has τ=0 at top and τ=τ_c at
-    # bottom, and τ increases linearly with (z_top - z), the altitude axis
-    # should have z_top at the TOP of the plot and z_base at the BOTTOM —
-    # i.e. ax2.set_ylim(z_base, z_top) (ymin at bottom, ymax at top, no invert).
-    ax2 = ax.twinx()
-    ax2.set_ylim(z_base, z_top)
-    ax2.set_ylabel('Altitude (km)', fontsize=10)
-    ax2.tick_params(labelsize=tick_fontsize)
 
     ax.set_title(
         rf'$\tau_\mathrm{{true}}$ = {tau_true:.2f}   '
@@ -261,6 +278,7 @@ def plot_profiles(ex, run_info, out_path, n_examples=6):
             true_um      = ex['true_um'][j],
             raw_re       = ex['raw_re'][j],
             raw_z        = ex['raw_z'][j],
+            raw_tau      = ex['raw_tau'][j],
             tau_true     = ex['tau_true'][j],
             tau_pred     = ex['tau_pred'][j],
             tau_pred_std = ex['tau_pred_std'][j],
@@ -297,6 +315,7 @@ def plot_grid_single(per_run_examples, out_path):
             true_um      = ex['true'],
             raw_re       = ex['raw_re'],
             raw_z        = ex['raw_z'],
+            raw_tau      = ex['raw_tau'],
             tau_true     = ex['tau_true'],
             tau_pred     = ex['tau_pred'],
             tau_pred_std = ex['tau_pred_std'],
@@ -412,9 +431,15 @@ def main():
         true_um  = found['prof_norm'] * (re_max - re_min) + re_min
         tau_true = found['tau_true_norm'] * (tau_max - tau_min) + tau_min
 
-        # 3. Pull raw in-situ profiles for these samples from the HDF5
-        raw_re, raw_z, _ = read_raw_profiles(
+        # 3. Pull raw in-situ profiles for these samples from the HDF5.
+        #    raw_tau will be a list of None entries when the HDF5 does not
+        #    contain /profiles_raw_tau (older training files); _draw_panel
+        #    handles both cases.
+        raw_re, raw_z, raw_tau, _, has_raw_tau = read_raw_profiles(
             h5_path, test_loader.dataset, found['subset_positions'])
+        if rank == 0:
+            print(f"  tau-axis source: "
+                  f"{'measured profiles_raw_tau' if has_raw_tau else 'altitude (no raw tau in HDF5)'}")
 
         ex = {
             'pred'         : found['pred'],
@@ -425,6 +450,7 @@ def main():
             'tau_true'     : tau_true,
             'raw_re'       : raw_re,
             'raw_z'        : raw_z,
+            'raw_tau'      : raw_tau,
         }
 
         out_path = fig_dir / f"profiles_top{rank+1:02d}_run_{rid:03d}.png"
