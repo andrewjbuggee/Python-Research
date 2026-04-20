@@ -73,9 +73,9 @@ from pathlib import Path
 
 MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_17_April_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'combined_vocals_oracles_training_data_8-tauWeighted-levels_17_April_2026.h5')
+                'combined_vocals_oracles_training_data_10-evenZ-levels_19_April_2026.h5')
 
-N_LEVELS      = 8     # target vertical levels in output profile
+N_LEVELS      = 10     # target vertical levels in output profile
 N_GEOMETRIES  = 128   # viewing geometry configs per .mat file (8 VZA × 4 VAZ × 4 SAZ)
 N_WAVELENGTHS = 636   # HySICS spectral channels
 
@@ -89,7 +89,7 @@ N_WAVELENGTHS = 636   # HySICS spectral channels
 #                   top TAU_SPLIT fraction of optical depth (denser near
 #                   cloud top, where shortwave reflectance is most
 #                   sensitive).  Requires a valid tau_raw vector.
-SAMPLING_MODE   = 'tau_weighted'   # 'even_z' or 'tau_weighted'
+SAMPLING_MODE   = 'even_z'   # 'even_z' or 'tau_weighted'
 TAU_TOP_FRAC    = 0.6              # fraction of N_LEVELS placed above TAU_SPLIT
 TAU_SPLIT       = 0.5              # normalized tau (0=top, 1=base) at the split
 
@@ -110,7 +110,7 @@ REQUIRED_KEYS = {
 # Noise levels for each instrument (fraction of signal, applied as Gaussian)
 NOISE_HYSICS = 0.003  # 0.3% Gaussian noise
 NOISE_EMIT   = 0.02   # 4.0% Gaussian noise
-NOISE_FM     = 0.007  # 0.7% Forward model noise assumption 
+NOISE_FM     = 0      # 0.7% Forward model noise assumption 
 
 _SZA_RE = re.compile(r'_sza_(\d+(?:\.\d+)?)_')
 
