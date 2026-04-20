@@ -1,17 +1,17 @@
 """
 compare_sweep.py — Aggregate and compare results from the hyperparameter sweep.
 
-Reads all sweep_results_3/run_*/results.json files and produces:
+Reads all sweep_results_2/run_*/results.json files and produces:
   1. A sorted table (best → worst by mean RMSE) printed to stdout
-  2. sweep_results_3/comparison.csv   — full results for spreadsheet analysis
-  3. sweep_results_3/comparison.json  — machine-readable aggregate
-  4. sweep_results_3/Figures/sweep_*.png — visualization plots (saved at 400 DPI)
+  2. sweep_results_2/comparison.csv   — full results for spreadsheet analysis
+  3. sweep_results_2/comparison.json  — machine-readable aggregate
+  4. sweep_results_2/Figures/sweep_*.png — visualization plots (saved at 400 DPI)
 
 Run after all Alpine jobs complete:
     python compare_sweep.py
 
-Or run locally if you rsync sweep_results_3/ back from Alpine:
-    rsync -av anbu8374@login.rc.colorado.edu:/projects/anbu8374/paper3/sweep_results_3/ sweep_results_3/
+Or run locally if you rsync sweep_results_2/ back from Alpine:
+    rsync -av anbu8374@login.rc.colorado.edu:/projects/anbu8374/paper3/sweep_results_2/ sweep_results_2/
     python compare_sweep.py
 
 Author: Andrew J. Buggee, LASP / CU Boulder
@@ -31,7 +31,7 @@ except ImportError:
     HAS_MPL = False
 
 
-def load_results(sweep_dir='sweep_results_3'):
+def load_results(sweep_dir='sweep_results_2'):
     """Load all results.json files from the sweep directory."""
     results = []
     sweep_path = Path(sweep_dir)
@@ -123,7 +123,7 @@ def print_table(results):
     print(f"    test NLL:       {best['test_nll']:+.4f}")
 
 
-def save_csv(results, path='sweep_results_3/comparison.csv'):
+def save_csv(results, path='sweep_results_2/comparison.csv'):
     """Save results as CSV for spreadsheet analysis."""
     if not results:
         return
@@ -186,7 +186,7 @@ def save_csv(results, path='sweep_results_3/comparison.csv'):
     print(f"\nCSV saved to {path}")
 
 
-def make_plots(results, fig_dir='sweep_results_3/Figures'):
+def make_plots(results, fig_dir='sweep_results_2/Figures'):
     """Generate comparison plots."""
     if not HAS_MPL:
         print("matplotlib not available — skipping plots")
@@ -224,14 +224,15 @@ def make_plots(results, fig_dir='sweep_results_3/Figures'):
     for i, r in enumerate(results_sorted[:10]):
         rmse_levels = r['test_metrics']['rmse_per_level']
         color = cmap(i / 10)
-        ax.plot(levels, rmse_levels, 'o-', color=color, markersize=5,
-                linewidth=1.5, label=f"Run {r['run_id']:03d} (mean={r['test_metrics']['mean_rmse']:.2f})")
+        ax.plot(rmse_levels, levels, 'o-', color=color, markersize=5,
+                linewidth=1.5, label=f"Run {r['run_id']:03d} (mean rmse (μm) ={r['test_metrics']['mean_rmse']:.2f})")
 
-    ax.set_xlabel('Vertical Level (1=top, 10=base)', fontsize=11)
-    ax.set_ylabel('RMSE (um)', fontsize=11)
+    ax.set_ylabel('Vertical Level (1=top, 10=base)', fontsize=11)
+    ax.set_xlabel('RMSE (um)', fontsize=11)
     ax.set_title('Per-Level RMSE — Top 10 Runs', fontsize=13)
-    ax.legend(fontsize=8, loc='upper left')
-    ax.set_xticks(levels)
+    ax.legend(fontsize=8, loc='upper right')
+    ax.set_yticks(levels)
+    ax.invert_yaxis()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(fig_path / 'sweep_per_level_top10.png', dpi=400)
@@ -337,7 +338,7 @@ def main():
     results = load_results()
 
     if not results:
-        print("No results found in sweep_results_3/. "
+        print("No results found in sweep_results_2/. "
               "Run the sweep first, or rsync results from Alpine.")
         return
 
@@ -357,7 +358,7 @@ def main():
           } for r in results],
         key=lambda x: x['mean_rmse']
     )
-    with open('sweep_results_3/comparison.json', 'w') as f:
+    with open('sweep_results_2/comparison.json', 'w') as f:
         json.dump(aggregate, f, indent=2)
 
     make_plots(results)
