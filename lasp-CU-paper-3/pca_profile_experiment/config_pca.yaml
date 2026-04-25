@@ -1,0 +1,96 @@
+# =============================================================================
+# config_pca.yaml — default training config for the PCA-head experiment.
+# -----------------------------------------------------------------------------
+# This file is consumed by `train_pca.py`.  The schema matches the baseline
+# `train.py` configs used for the hyper-parameter sweeps (sweep_results_2 /
+# sweep_results_3) so that RMSE differences can be attributed to the output
+# parameterization, not to a change in optimizer / loss / data split.
+#
+# The ONLY new entries relative to the baseline config are under `model:`
+#     n_pca_components   int   # K — number of retained PCA components
+#     use_tau_head       bool  # keep the τ_c multi-task head (recommended true)
+#     learn_pca_basis    bool  # true => make the PCA basis a trainable Param
+#
+# The default hyper-parameters below mirror the best sweep_results_3 run
+# (run_050: tapered_dr0.24_lr3.4e-05_wd6e-05_b512_n0.005_ends) so the PCA
+# experiment starts from a known-good baseline and isolates the effect of
+# the output head.
+# =============================================================================
+
+data:
+  # Path is resolved by `data.resolve_h5_path(...)` — if --training-data-dir is
+  # passed to train_pca.py it uses that directory and keeps just the filename.
+  # 50-level dataset (mean sampling RMSE ≈ 0.19 μm vs raw in-situ profiles).
+  h5_path: "training_data/combined_vocals_oracles_training_data_50-evenZ-levels_23_April_2026.h5"
+  instrument: "hysics"
+  num_workers: 4
+  # Fractions used only when profile_holdout=False.  train_pca.py forces
+  # profile_holdout=True and reads n_val_profiles/n_test_profiles/seed from
+  # the saved PCA basis file, so these are effectively ignored.
+  train_frac: 0.8
+  val_frac: 0.1
+
+model:
+  # ───────────── PCA-specific ─────────────
+  n_pca_components: 5       # K=5 captures ≥95% of profile variance at 50-level sampling.
+  use_tau_head: true        # keep multi-task τ head (set false for single-task ablation)
+  learn_pca_basis: false    # fixed inductive bias; set true for "learn your own bottleneck"
+
+  # ───────────── Shared with baseline ─────────────
+  n_wavelengths: 636
+  n_geometry_inputs: 4
+  n_levels: 50              # MUST match the saved pca_basis.npz
+  hidden_dims: [512, 256, 256, 128, 128]
+  dropout: 0.243
+  activation: "gelu"
+
+  # Physical bounds.  These must match data.py's normalization or RMSE in
+  # physical units will be wrong.
+  re_min: 1.5
+  re_max: 50.0
+  tau_min: 3.0
+  tau_max: 75.0
+
+loss:
+  # Gaussian NLL physics weight.  0.1 matches the sweep_3 winner.
+  lambda_physics: 0.1
+  # Soft physical-realism penalties (all applied to the decoded profile).
+  lambda_monotonicity: 0.134     # increasing r_e from base→top
+  lambda_adiabatic:    0.085     # encourages ~adiabatic shape (power-law/linear)
+  lambda_smoothness:   0.049     # 2nd-difference penalty
+  # Floor the predicted aleatoric σ to avoid numerical blowup in NLL.
+  sigma_floor: 0.0374
+  # Per-level weights for the NLL on the profile.  Length = n_levels = 50.
+  # Linearly interpolated from the 7-level "ends" pattern [4.0, 1.5, 1.0, 1.0,
+  # 1.0, 1.5, 3.0] (sweep_3 winner) to 50 levels — peaks at L1 (cloud top, 4.0)
+  # and L50 (cloud base, 3.0), with a flat 1.0 plateau through the middle.
+  level_weights: [4.000, 3.694, 3.388, 3.082, 2.776, 2.469, 2.163, 1.857, 1.551, 1.449,
+                  1.388, 1.327, 1.265, 1.204, 1.143, 1.082, 1.020, 1.000, 1.000, 1.000,
+                  1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000, 1.000,
+                  1.000, 1.000, 1.000, 1.020, 1.082, 1.143, 1.204, 1.265, 1.327, 1.388,
+                  1.449, 1.531, 1.714, 1.898, 2.082, 2.265, 2.449, 2.633, 2.816, 3.000]
+
+training:
+  batch_size: 512
+  learning_rate: 3.4e-05
+  weight_decay: 6.0e-05
+  n_epochs: 1000
+
+  # Cosine annealing with warm restarts — same schedule as the baseline.
+  scheduler_T0: 50
+  scheduler_T_mult: 2
+  scheduler_eta_min: 1.0e-06
+
+  # Early stopping.  PCA should need fewer epochs than the baseline because
+  # the output manifold is already constrained, but keep a wide patience to
+  # allow the cosine restarts to kick in.
+  early_stopping_patience: 150
+
+  # Input Gaussian noise injected at each forward pass (matches sweep3 winner).
+  # This is critical — the PCA head reduces output-side overfitting, but the
+  # network can still overfit the *input* spectrum without noise augmentation.
+  augment_noise_std: 0.005
+
+  # How often (in epochs) to log RMSE metrics and PC-score distributions
+  # for the diagnostic figures.  10 gives ~100 points for a 1000-epoch run.
+  rmse_log_interval: 10

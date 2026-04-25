@@ -1,0 +1,47 @@
+HDF5: /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/training_data/combined_vocals_oracles_training_data_50-evenZ-levels_23_April_2026.h5
+PCA basis fit on: seed=42, n_val_profiles=14, n_test_profiles=14
+Loaded 153,344 samples × 636 channels + 4 geometry inputs (hysics)
+Train: 138,880 samples | Val: 6,528 samples
+
+Fitting per-PC linear + nonlinear ceilings (K = 7)…
+Nonlinear regressor: HGB  (max_iter=400, max_leaf_nodes=63, learning_rate=0.05)
+  ── PC1 ──
+  PC1: ridge rand R²=+0.661 | HGB   rand R²=+0.962 | ridge p-val R²=+0.757 | HGB   p-val R²=+0.780 | trees=400 | 148.0s
+  ── PC2 ──
+  PC2: ridge rand R²=+0.333 | HGB   rand R²=+0.915 | ridge p-val R²=-0.312 | HGB   p-val R²=-0.330 | trees=400 | 144.4s
+  ── PC3 ──
+  PC3: ridge rand R²=+0.148 | HGB   rand R²=+0.921 | ridge p-val R²=-0.441 | HGB   p-val R²=-0.678 | trees=400 | 136.1s
+  ── PC4 ──
+  PC4: ridge rand R²=+0.096 | HGB   rand R²=+0.842 | ridge p-val R²=-0.354 | HGB   p-val R²=-0.579 | trees=400 | 135.5s
+  ── PC5 ──
+  PC5: ridge rand R²=+0.157 | HGB   rand R²=+0.854 | ridge p-val R²=-0.665 | HGB   p-val R²=-1.288 | trees=400 | 129.5s
+  ── PC6 ──
+  PC6: ridge rand R²=+0.085 | HGB   rand R²=+0.824 | ridge p-val R²=-0.185 | HGB   p-val R²=-1.129 | trees=400 | 129.8s
+  ── PC7 ──
+  PC7: ridge rand R²=+0.144 | HGB   rand R²=+0.861 | ridge p-val R²=-0.320 | HGB   p-val R²=-0.129 | trees=400 | 130.7s
+
+================================================================================================
+Linear vs nonlinear retrievability  (K = 7)
+================================================================================================
+ PC | ridge rand |   HGB rand |  Δ (rand) | ridge pval |  HGB pval | trees
+------------------------------------------------------------------------------------------------
+  1 |     +0.661 |     +0.962 |    +0.300 |     +0.757 |    +0.780 |   400
+  2 |     +0.333 |     +0.915 |    +0.582 |     -0.312 |    -0.330 |   400
+  3 |     +0.148 |     +0.921 |    +0.773 |     -0.441 |    -0.678 |   400
+  4 |     +0.096 |     +0.842 |    +0.746 |     -0.354 |    -0.579 |   400
+  5 |     +0.157 |     +0.854 |    +0.697 |     -0.665 |    -1.288 |   400
+  6 |     +0.085 |     +0.824 |    +0.739 |     -0.185 |    -1.129 |   400
+  7 |     +0.144 |     +0.861 |    +0.718 |     -0.320 |    -0.129 |   400
+------------------------------------------------------------------------------------------------
+
+Reading guide:
+  • 'ridge rand'  linear ceiling on a within-train random holdout.
+  • 'HGB rand'    nonlinear ceiling on the same split.
+  • 'Δ (rand)'    NONLINEAR HEADROOM. >0 ⇒ a nonlinear function
+                  of (spectrum, geometry) unlocks signal that
+                  ridge misses; an MLP encoder can in principle
+                  reach this ceiling.  ≈0 ⇒ no encoder will help.
+  • 'p-val'       generalization to NEW PROFILES.  Sensitive to
+                  population shift (only ~14 unique val profiles).
+
+Figures written to pca_profile_experiment/figures/pc_retrievability_nonlinear

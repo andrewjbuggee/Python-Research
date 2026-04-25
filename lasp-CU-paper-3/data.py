@@ -600,6 +600,115 @@ def create_profile_aware_splits(
             np.where(test_mask)[0])
 
 
+def create_profile_aware_kfold_splits(
+        h5_path: str,
+        fold_idx: int,
+        n_folds: int = 5,
+        n_test_profiles: int = 14,
+        seed: int = 42,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Profile-aware K-fold split.
+
+    Reserves `n_test_profiles` unique profiles as a final-test set (always the
+    same across folds — uses the SAME profile selection as
+    create_profile_aware_splits with n_val_profiles=0 in spirit) and partitions
+    the remaining profiles into `n_folds` disjoint groups.  The fold at index
+    `fold_idx` becomes the validation set; the other folds together form the
+    training set.
+
+    The held-out test profiles are FIXED across the K folds — we want the
+    final per-config "test RMSE = X ± Y" to be a measurement of model
+    variance under repeated training, not under repeated test resampling.
+
+    Parameters
+    ----------
+    h5_path : str
+        Path to the HDF5 training data file.
+    fold_idx : int
+        Index of the validation fold (0..n_folds-1).
+    n_folds : int
+        Number of CV folds.
+    n_test_profiles : int
+        Number of unique profiles reserved for final test (held out from
+        every fold's train AND val).
+    seed : int
+        Seed for reproducible profile assignment.  The shuffled order of
+        profile IDs is determined by this seed; the SAME seed across all
+        K calls yields the same partition.
+
+    Returns
+    -------
+    train_indices, val_indices, test_indices : np.ndarray of int
+        Sample-level indices into the HDF5 dataset.
+    """
+    if not (0 <= fold_idx < n_folds):
+        raise ValueError(f"fold_idx={fold_idx} out of range [0, {n_folds})")
+
+    profile_ids = compute_profile_ids(h5_path)
+    n_unique = int(profile_ids.max()) + 1
+
+    rng = np.random.default_rng(seed)
+    shuffled = np.arange(n_unique)
+    rng.shuffle(shuffled)
+
+    # First n_test_profiles are the final test set (always held out).
+    test_profiles = set(shuffled[:n_test_profiles].tolist())
+
+    # Remaining profiles get partitioned into n_folds groups.
+    pool = shuffled[n_test_profiles:]
+    fold_assignments = np.array_split(pool, n_folds)
+    val_profiles = set(fold_assignments[fold_idx].tolist())
+    train_profiles = set(pool.tolist()) - val_profiles
+
+    train_mask = np.array([pid in train_profiles for pid in profile_ids])
+    val_mask   = np.array([pid in val_profiles   for pid in profile_ids])
+    test_mask  = np.array([pid in test_profiles  for pid in profile_ids])
+
+    return (np.where(train_mask)[0],
+            np.where(val_mask)[0],
+            np.where(test_mask)[0])
+
+
+def create_kfold_dataloaders(h5_path: str,
+                             fold_idx: int,
+                             n_folds: int = 5,
+                             batch_size: int = 256,
+                             num_workers: int = 4,
+                             seed: int = 42,
+                             instrument: str = 'hysics',
+                             n_test_profiles: int = 14):
+    """
+    DataLoader wrapper around create_profile_aware_kfold_splits.
+
+    Returns (train_loader, val_loader, test_loader) for ONE fold.  The test
+    loader is identical across all K folds (same n_test_profiles profiles).
+    """
+    dataset = LibRadtranDataset(h5_path, normalize=True, instrument=instrument)
+
+    train_idx, val_idx, test_idx = create_profile_aware_kfold_splits(
+        h5_path, fold_idx=fold_idx, n_folds=n_folds,
+        n_test_profiles=n_test_profiles, seed=seed,
+    )
+
+    train_set = Subset(dataset, train_idx)
+    val_set   = Subset(dataset, val_idx)
+    test_set  = Subset(dataset, test_idx)
+
+    print(f"  Fold {fold_idx} of {n_folds}: "
+          f"train {len(train_idx):,}  val {len(val_idx):,}  "
+          f"test {len(test_idx):,} (test fixed across folds)")
+
+    pin = torch.cuda.is_available()
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=pin)
+    val_loader   = DataLoader(val_set, batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin)
+    test_loader  = DataLoader(test_set, batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin)
+    return train_loader, val_loader, test_loader
+
+
 def _fit_pca(log_refl: np.ndarray, n_components: int) -> tuple:
     """
     Fit PCA on log-reflectances using covariance eigendecomposition.
