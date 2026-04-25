@@ -1,8 +1,10 @@
 #!/bin/bash
 #SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
-#SBATCH --time=04:00:00            # K=5 folds × ~10 min/fold + early-stop margin.
-                                   # Adjust if a smoke run shows different timing.
+#SBATCH --time=02:30:00            # Smoke test of run_000 (a slow config: LR=1e-5,
+                                   # dropout=0.38) finished in 54 min for K=5.
+                                   # 2.5 h gives ~2.7× safety margin for any
+                                   # outlier configs that hit early-stop later.
 #SBATCH --partition=al40           # Alpine GPU partition (NVIDIA L40)
 #SBATCH --qos=normal
 #SBATCH --mem=8G
@@ -14,7 +16,10 @@
 #SBATCH --error=logs/sweep_profOnly_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
-#SBATCH --array=0-149%6            # 150 configs, max 6 concurrent (al40 has 9 L40s).
+#SBATCH --array=0-149%6            # 150 configs, max 6 concurrent (al40 has 9 L40s,
+                                   # CURC convention is to leave 1+ free).
+                                   # At ~55 min/task observed, 6 concurrent ≈ 23 h
+                                   # total wall time.  Bump %N if al40 is empty.
 
 # ============================================================
 # Profile-only Hyperparameter Sweep — SLURM Job Array
