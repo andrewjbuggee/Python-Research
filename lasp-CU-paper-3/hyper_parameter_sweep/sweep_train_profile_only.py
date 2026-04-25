@@ -186,7 +186,7 @@ def train_one_fold(fold_idx: int, n_folds: int,
         n_levels=n_levels,
         hidden_dims=tuple(hp['hidden_dims']),
         dropout=hp['dropout'],
-        activation='gelu',
+        activation=hp.get('activation', 'gelu'),
     )
     model = ProfileOnlyNetwork(model_config).to(device)
 
