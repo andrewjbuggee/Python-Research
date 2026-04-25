@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
-#SBATCH --time=02:30:00            # Smoke test of run_000 (a slow config: LR=1e-5,
+#SBATCH --time=02:45:00            # Smoke test of run_000 (a slow config: LR=1e-5,
                                    # dropout=0.38) finished in 54 min for K=5.
-                                   # 2.5 h gives ~2.7× safety margin for any
+                                   # 2.75 h gives ~2.7× safety margin for any
                                    # outlier configs that hit early-stop later.
 #SBATCH --partition=al40           # Alpine GPU partition (NVIDIA L40)
 #SBATCH --qos=normal
-#SBATCH --mem=8G
+#SBATCH --mem=7G
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1               # 1 GPU per task; one config = K trainings sequentially
 #SBATCH --cpus-per-task=4
