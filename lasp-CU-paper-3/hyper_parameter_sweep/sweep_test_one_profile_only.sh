@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --account=ucb762_asc1                   # Ascent Allocation on Alpine
 #SBATCH --nodes=1
-#SBATCH --time=01:30:00                         # K=5 folds × ~10 min/fold + margin
+#SBATCH --time=01:00:00                         # K=5 folds × ~10 min/fold + margin
 #SBATCH --partition=atesting_a100               # Testing partition
 #SBATCH --qos=testing
 #SBATCH --mem=8G
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --job-name=pinn_test_profOnly
+#SBATCH --job-name=nn_test_profOnly
 #SBATCH --output=logs/sweep_test_profile_only_%j.out
 #SBATCH --error=logs/sweep_test_profile_only_%j.err
 #SBATCH --mail-type=ALL
