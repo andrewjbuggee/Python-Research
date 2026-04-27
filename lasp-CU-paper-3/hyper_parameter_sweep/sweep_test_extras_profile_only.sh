@@ -42,7 +42,7 @@ set -u                          # error on undefined vars
 # DO NOT set -e: if one run fails we still want the next two to run.
 
 # ── Run-time configuration (edit RUN_ID before sbatch'ing) ──────────────────
-RUN_ID=110                       # which run from sweep_results_profile_only/
+RUN_ID=149                       # which run from sweep_results_profile_only/
                                  # to borrow hyperparameters from
 
 REPO_ROOT="/projects/anbu8374/Python-Research/lasp-CU-paper-3"
