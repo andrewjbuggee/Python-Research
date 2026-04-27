@@ -670,6 +670,120 @@ def create_profile_aware_kfold_splits(
             np.where(test_mask)[0])
 
 
+def create_rotating_kfold_splits(
+        h5_path: str,
+        fold_idx: int,
+        n_folds: int,
+        n_val_profiles: int = 14,
+        seed: int = 42,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Rotating K-fold split where every unique profile appears in test exactly once.
+
+    Differs from `create_profile_aware_kfold_splits` (which holds out a FIXED
+    test set across all K folds) — here the *test set itself rotates*: the
+    full pool of unique profiles is partitioned into K disjoint groups, and
+    each fold uses one group as test.  Across all K folds, every profile is
+    tested exactly once.
+
+    Use this when you want a per-profile RMSE — i.e., to see "how does the
+    model do on each unique cloud profile when that profile is held out?".
+    Pick K such that K × (typical test-fold size) ≥ n_unique_profiles; for
+    the current 290-profile catalog, K=21 gives 13–14 profiles per fold.
+
+    Parameters
+    ----------
+    h5_path : str
+    fold_idx : int
+        Which fold (0..K-1) to return.
+    n_folds : int
+        Number of disjoint test partitions.
+    n_val_profiles : int
+        Validation profiles (drawn from the non-test pool, with a per-fold
+        seed offset so val composition rotates lightly fold-to-fold).
+    seed : int
+        Master seed; the same value across all K calls yields the same
+        partition (this is what makes "every profile tested exactly once"
+        actually hold).
+
+    Returns
+    -------
+    train_indices, val_indices, test_indices : np.ndarray of int
+        Sample-level indices into the HDF5 dataset.
+    """
+    if not (0 <= fold_idx < n_folds):
+        raise ValueError(f"fold_idx={fold_idx} out of range [0, {n_folds})")
+
+    profile_ids = compute_profile_ids(h5_path)
+    n_unique = int(profile_ids.max()) + 1
+
+    rng = np.random.default_rng(seed)
+    shuffled = np.arange(n_unique)
+    rng.shuffle(shuffled)
+
+    # Partition all profiles into K disjoint groups → each fold's test set.
+    fold_partitions = np.array_split(shuffled, n_folds)
+    test_profiles  = set(fold_partitions[fold_idx].tolist())
+
+    # Non-test pool for this fold
+    pool = np.array([p for p in shuffled if p not in test_profiles])
+
+    # Val: take n_val_profiles from the pool with a per-fold-rotated seed,
+    # so the val composition isn't identical across folds (mild diversity
+    # for early-stopping decisions).
+    rng_fold = np.random.default_rng(seed + 1000 + fold_idx)
+    pool_shuffled = pool.copy()
+    rng_fold.shuffle(pool_shuffled)
+    val_profiles   = set(pool_shuffled[:n_val_profiles].tolist())
+    train_profiles = set(pool_shuffled[n_val_profiles:].tolist())
+
+    train_mask = np.array([pid in train_profiles for pid in profile_ids])
+    val_mask   = np.array([pid in val_profiles   for pid in profile_ids])
+    test_mask  = np.array([pid in test_profiles  for pid in profile_ids])
+
+    return (np.where(train_mask)[0],
+            np.where(val_mask)[0],
+            np.where(test_mask)[0])
+
+
+def create_rotating_kfold_dataloaders(h5_path: str,
+                                      fold_idx: int,
+                                      n_folds: int,
+                                      batch_size: int = 256,
+                                      num_workers: int = 4,
+                                      seed: int = 42,
+                                      instrument: str = 'hysics',
+                                      n_val_profiles: int = 14):
+    """
+    DataLoader wrapper around create_rotating_kfold_splits.  Returns
+    (train_loader, val_loader, test_loader) for ONE fold.  Across the K
+    folds, every unique profile lands in test exactly once.
+    """
+    dataset = LibRadtranDataset(h5_path, normalize=True, instrument=instrument)
+
+    train_idx, val_idx, test_idx = create_rotating_kfold_splits(
+        h5_path, fold_idx=fold_idx, n_folds=n_folds,
+        n_val_profiles=n_val_profiles, seed=seed,
+    )
+
+    train_set = Subset(dataset, train_idx)
+    val_set   = Subset(dataset, val_idx)
+    test_set  = Subset(dataset, test_idx)
+
+    print(f"  Rotating fold {fold_idx} of {n_folds}: "
+          f"train {len(train_idx):,}  val {len(val_idx):,}  "
+          f"test {len(test_idx):,}  (test profiles rotate across folds)")
+
+    pin = torch.cuda.is_available()
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=pin)
+    val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin)
+    test_loader  = DataLoader(test_set,  batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin)
+    return train_loader, val_loader, test_loader
+
+
 def create_kfold_dataloaders(h5_path: str,
                              fold_idx: int,
                              n_folds: int = 5,
