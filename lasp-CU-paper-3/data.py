@@ -1385,3 +1385,168 @@ def generate_lhc_parameters(
     print("  2. Add results to the HDF5 file:")
     print("       f.create_dataset('reflectances_hysics', data=<array shape (n_samples, 636)>)")
     print("  3. Set lhc_h5_path in emulator.yaml to use this file for training augmentation")
+
+
+# =============================================================================
+# Extras dataset: 643-dim input (640 spectrum+geometry  +  3 scalar priors)
+# =============================================================================
+
+class LibRadtranDatasetExtras(LibRadtranDataset):
+    """
+    Extension of LibRadtranDataset that appends three additional scalar
+    inputs to every sample's input vector x:
+
+        idx 640 : log10(tau_c)              z-scored
+        idx 641 : log10(wv_above_cloud)     z-scored
+        idx 642 : log10(wv_in_cloud)        z-scored
+
+    The z-score constants are baked in below and were measured on the
+    50-evenZ-levels HDF5 (April 2026); they're stable across re-runs of the
+    convert script unless the underlying VOCALS-REx + ORACLES catalog
+    changes substantially.
+
+    Ablation
+    --------
+    Pass any of `zero_tau_c`, `zero_wv_above`, `zero_wv_in` = True to set
+    that channel to 0.0 (the z-score mean — i.e. "no information beyond
+    the dataset average").  Use this to measure how much information each
+    extra contributes vs. what the model can already extract from the
+    640-dim spectrum+geometry vector alone.
+
+    Output
+    ------
+    __getitem__ returns the same 3-tuple as the parent class — the only
+    change is that x has 3 more elements appended.
+
+        x       : (640 + 3,)  float32
+        profile : (n_levels,) float32   (same as parent)
+        tau     : ()          float32   (same as parent)
+    """
+
+    # Z-score constants on log10 of the raw scalars.  Measured on
+    # combined_vocals_oracles_training_data_50-evenZ-levels_23_April_2026.h5:
+    #
+    #   tau_c           : log10 mean = 1.024,  std = 0.260
+    #   wv_above_cloud  : log10 mean = 22.402, std = 0.476
+    #   wv_in_cloud     : log10 mean = 21.649, std = 0.287
+    LOG_TAU_MEAN, LOG_TAU_STD = 1.024, 0.260
+    LOG_WV_ABOVE_MEAN, LOG_WV_ABOVE_STD = 22.402, 0.476
+    LOG_WV_IN_MEAN,    LOG_WV_IN_STD    = 21.649, 0.287
+
+    def __init__(self, h5_path: str,
+                 normalize: bool = True,
+                 instrument: str = 'hysics',
+                 zero_tau_c: bool = False,
+                 zero_wv_above: bool = False,
+                 zero_wv_in: bool = False):
+        super().__init__(h5_path, normalize=normalize, instrument=instrument)
+
+        # Load the three new scalars once into memory (modest size: 153K floats).
+        with h5py.File(h5_path, 'r') as f:
+            for k in ('tau_c', 'wv_above_cloud', 'wv_in_cloud'):
+                if k not in f:
+                    raise RuntimeError(
+                        f"LibRadtranDatasetExtras: HDF5 missing /{k}.  "
+                        f"This dataset class requires all three of "
+                        f"tau_c, wv_above_cloud, wv_in_cloud."
+                    )
+            self._tau_c    = f['tau_c'][:].astype(np.float64)
+            self._wv_above = f['wv_above_cloud'][:].astype(np.float64)
+            self._wv_in    = f['wv_in_cloud'][:].astype(np.float64)
+
+        # Sanity check — z-scored on log values, so the inputs must be > 0
+        if not ((self._tau_c > 0).all()
+                and (self._wv_above > 0).all()
+                and (self._wv_in > 0).all()):
+            raise RuntimeError(
+                "LibRadtranDatasetExtras: tau_c / wv_above_cloud / wv_in_cloud "
+                "must be strictly positive (we log-transform before z-scoring)."
+            )
+
+        # Pre-compute the z-scored arrays once so __getitem__ stays cheap.
+        self._tau_z      = ((np.log10(self._tau_c)    - self.LOG_TAU_MEAN)
+                            / self.LOG_TAU_STD).astype(np.float32)
+        self._wv_above_z = ((np.log10(self._wv_above) - self.LOG_WV_ABOVE_MEAN)
+                            / self.LOG_WV_ABOVE_STD).astype(np.float32)
+        self._wv_in_z    = ((np.log10(self._wv_in)    - self.LOG_WV_IN_MEAN)
+                            / self.LOG_WV_IN_STD).astype(np.float32)
+
+        self.zero_tau_c    = bool(zero_tau_c)
+        self.zero_wv_above = bool(zero_wv_above)
+        self.zero_wv_in    = bool(zero_wv_in)
+
+    def __getitem__(self, idx):
+        # Parent returns (x_640, profile_norm, tau_norm).  Convert to numpy if
+        # needed so we can concatenate the extras cleanly.
+        x_base, prof, tau = super().__getitem__(idx)
+        if isinstance(x_base, torch.Tensor):
+            x_np = x_base.numpy()
+        else:
+            x_np = np.asarray(x_base, dtype=np.float32)
+
+        extras = np.array([
+            0.0 if self.zero_tau_c    else self._tau_z[idx],
+            0.0 if self.zero_wv_above else self._wv_above_z[idx],
+            0.0 if self.zero_wv_in    else self._wv_in_z[idx],
+        ], dtype=np.float32)
+
+        x_full = np.concatenate([x_np, extras]).astype(np.float32)
+        return torch.from_numpy(x_full), prof, tau
+
+
+def create_dataloaders_extras(h5_path: str,
+                              batch_size: int = 256,
+                              num_workers: int = 4,
+                              seed: int = 42,
+                              instrument: str = 'hysics',
+                              n_val_profiles: int = 14,
+                              n_test_profiles: int = 14,
+                              zero_tau_c: bool = False,
+                              zero_wv_above: bool = False,
+                              zero_wv_in: bool = False,
+                              ) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """
+    Like create_dataloaders(profile_holdout=True) but returns loaders backed
+    by LibRadtranDatasetExtras — i.e. each sample's x has 643 features, not
+    640.  Always uses the profile-aware split (this is for retrieval; random
+    sample-level splits leak profile fingerprints).
+
+    Pass `zero_tau_c=True` etc. to ablate individual extras.  All three
+    flags are independent and applied to all three loaders (train/val/test)
+    so the ablation is consistent throughout training and evaluation.
+    """
+    dataset = LibRadtranDatasetExtras(
+        h5_path, normalize=True, instrument=instrument,
+        zero_tau_c=zero_tau_c, zero_wv_above=zero_wv_above, zero_wv_in=zero_wv_in,
+    )
+
+    train_idx, val_idx, test_idx = create_profile_aware_splits(
+        h5_path,
+        n_val_profiles=n_val_profiles,
+        n_test_profiles=n_test_profiles,
+        seed=seed,
+    )
+
+    train_set = Subset(dataset, train_idx)
+    val_set   = Subset(dataset, val_idx)
+    test_set  = Subset(dataset, test_idx)
+
+    print(f"  Split mode: profile-held-out (extras dataset, x dim = 643)")
+    print(f"  Val profiles (never in train):  {n_val_profiles}")
+    print(f"  Test profiles (never in train): {n_test_profiles}")
+    if zero_tau_c or zero_wv_above or zero_wv_in:
+        zeroed = [name for name, flag in
+                  (('tau_c', zero_tau_c),
+                   ('wv_above_cloud', zero_wv_above),
+                   ('wv_in_cloud', zero_wv_in)) if flag]
+        print(f"  Ablation: zeroing channel(s) {zeroed} (z-score 0 = "
+              f"no info beyond mean)")
+
+    pin = torch.cuda.is_available()
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=pin)
+    val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin)
+    test_loader  = DataLoader(test_set,  batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin)
+    return train_loader, val_loader, test_loader

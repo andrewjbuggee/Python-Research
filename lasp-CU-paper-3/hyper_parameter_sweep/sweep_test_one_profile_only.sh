@@ -7,7 +7,7 @@
 #SBATCH --mem=8G
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=4a
 #SBATCH --job-name=nn_test_profOnly
 #SBATCH --output=logs/sweep_test_profile_only_%j.out
 #SBATCH --error=logs/sweep_test_profile_only_%j.err

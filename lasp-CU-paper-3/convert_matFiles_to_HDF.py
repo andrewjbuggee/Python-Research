@@ -153,6 +153,71 @@ def add_gaussian_noise(refl: np.ndarray, noise_level: float) -> tuple:
 
 
 # ============================================================
+# Helper: targeted single-profile despike
+# ============================================================
+#
+# Background.  The K=5 50-level profile-only sweep (April 2026) showed a
+# systematic L13 (idx 12) RMSE spike of ~4 μm in every top-10 config,
+# while neighboring levels were ~1.0–1.6 μm.  Investigation (see the
+# session notes / sweep results discussion) traced this to ONE bad in-situ
+# data point in profile pid 204:
+#
+#     raw k=7 (z = 1.040 km):  r_e = 20.90 μm
+#     local 3-pt median:        7.43 μm
+#     deviation:              +13.5 μm    ← the offender
+#
+# All neighboring raw points in pid 204 are reasonable (~7–10 μm), and the
+# rest of the 290-profile catalog is clean (median worst-spike per profile
+# is 0.07 μm; the next-worst profile has a 3.0 μm spike, well below the
+# threshold here).  So we apply the despike *only* to pid 204 to keep the
+# rest of the dataset bit-identical to the previous HDF5.
+#
+# Fingerprint format matches data.compute_profile_ids():
+#   tuple(np.round(re_raw[:5], 4))
+#
+# If we later decide to despike the whole catalog, change the conditional
+# below to `if True:` and pick a threshold that's conservative enough to
+# leave the borderline pid 104/177/174 spikes (~2.5–3 μm) alone.
+
+PID_204_FINGERPRINT = (9.5434, 9.1513, 9.5306, 9.5567, 7.7079)
+
+
+def despike_re(re_raw: np.ndarray,
+               threshold_um: float = 5.0,
+               window: int = 3) -> np.ndarray:
+    """
+    Replace any in-situ r_e sample whose deviation from the local
+    `window`-point median exceeds `threshold_um` with that median.
+
+    Conservative single-pass median filter — only patches obvious
+    instrument/classification spikes.  Clean profiles pass through
+    bit-identical (because no point exceeds the threshold).
+
+    Parameters
+    ----------
+    re_raw       : (n,) float64 — raw effective-radius profile (μm),
+                                  index 0 = top, index -1 = base
+    threshold_um : float        — μm deviation that flags a sample as a spike
+    window       : odd int      — width of the local median window
+
+    Returns
+    -------
+    out : (n,) float64 — despiked copy
+    """
+    if window % 2 != 1:
+        raise ValueError("despike_re: window must be odd")
+    out = re_raw.copy()
+    half = window // 2
+    n = len(re_raw)
+    for k in range(n):
+        lo, hi = max(0, k - half), min(n, k + half + 1)
+        med = np.median(re_raw[lo:hi])
+        if abs(re_raw[k] - med) > threshold_um:
+            out[k] = med
+    return out
+
+
+# ============================================================
 # Helper: profile interpolation
 # ============================================================
 
@@ -587,6 +652,21 @@ with h5py.File(OUT_PATH, 'w') as f:
         z_raw   = d['z'][()].astype(np.float64)
         tau_raw = np.atleast_1d(d['tau'][()]).astype(np.float64)
         n_lev   = len(re_raw)
+
+        # Targeted despike: profile pid 204 has one bad in-situ r_e sample at
+        # k=7 (~21 μm vs ~7 μm at neighbors).  Patch ONLY this profile, leaving
+        # every other file bit-identical to previous HDF5 builds.  See the
+        # comment block above PID_204_FINGERPRINT for the diagnostic trail.
+        fp = tuple(round(float(v), 4) for v in re_raw[:5])
+        if fp == PID_204_FINGERPRINT:
+            re_raw_orig = re_raw.copy()
+            re_raw = despike_re(re_raw, threshold_um=5.0, window=3)
+            n_patched = int(np.sum(re_raw_orig != re_raw))
+            patched_k = np.where(re_raw_orig != re_raw)[0].tolist()
+            print(f"  [despike] {path.name}: matched pid 204 fingerprint; "
+                  f"patched {n_patched} sample(s) at k={patched_k} "
+                  f"(was {[round(float(re_raw_orig[k]),3) for k in patched_k]} "
+                  f"-> {[round(float(re_raw[k]),3) for k in patched_k]} μm).")
 
         # Sanity check: tau profile should match re/z in length.
         #
