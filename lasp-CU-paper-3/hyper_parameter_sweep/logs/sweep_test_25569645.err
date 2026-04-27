@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep/sweep_train.py", line 398, in <module>
+    main()
+  File "/projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep/sweep_train.py", line 251, in main
+    raise ValueError(
+ValueError: level_weights has 7 entries but the HDF5 contains 10 profile levels.  Regenerate this sweep's configs with the correct N_LEVELS in generate_sweep_2.py.
