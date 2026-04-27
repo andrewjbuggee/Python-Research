@@ -65,6 +65,18 @@ def parse_args():
                    help="Override directory portion of h5_path (filename "
                         "preserved). Use to switch between Alpine and a "
                         "local copy without regenerating sweep configs.")
+    p.add_argument("--instrument", type=str, default=None,
+                   choices=['hysics', 'emit'],
+                   help="Override the instrument stored in the config "
+                        "(cfg['data']['instrument']).  Use to retrain a "
+                        "HySICS-tuned config on the EMIT spectra (different "
+                        "noise level baked into the HDF5) without "
+                        "regenerating the sweep configs.")
+    p.add_argument("--output-dir", type=str, default=None,
+                   help="Override the output directory stored in the config "
+                        "(cfg['output_dir']).  Use to keep EMIT-trained "
+                        "results separate from the HySICS-trained ones, e.g. "
+                        "--output-dir sweep_results_profile_only_emit .")
     return p.parse_args()
 
 
@@ -339,6 +351,17 @@ def main():
 
     hp = cfg['hyperparams']
     n_folds = int(hp.get('n_folds', 5))
+
+    # CLI overrides take precedence over the config-stored values so the
+    # same JSON can drive both HySICS and EMIT runs without being edited.
+    if args.output_dir is not None:
+        cfg['output_dir'] = args.output_dir
+    if args.instrument is not None:
+        cfg.setdefault('data', {})['instrument'] = args.instrument
+    print(f"Instrument:  {cfg['data'].get('instrument', 'hysics')}  "
+          f"{'(CLI override)' if args.instrument else '(from config)'}")
+    print(f"Output dir:  {cfg['output_dir']}  "
+          f"{'(CLI override)' if args.output_dir else '(from config)'}")
 
     output_dir = Path(cfg['output_dir']) / f'run_{run_id:03d}'
     output_dir.mkdir(parents=True, exist_ok=True)
