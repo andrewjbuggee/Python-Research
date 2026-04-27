@@ -24,7 +24,7 @@
 *.h5
 *.json
 *.pt
-
+*.err
 
 
 # weird hitran files
