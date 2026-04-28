@@ -115,6 +115,7 @@ with h5py.File('${H5_FILE}', 'r') as f:
 echo
 python sweep_train_profile_only.py \
     --config-json "$CONFIG_FILE" \
+    --h5-path "$H5_FILE" \
     --training-data-dir "$TRAINING_DATA_DIR" \
     --instrument emit \
     --output-dir "$OUTPUT_DIR_BASE"

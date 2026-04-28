@@ -65,6 +65,14 @@ def parse_args():
                    help="Override directory portion of h5_path (filename "
                         "preserved). Use to switch between Alpine and a "
                         "local copy without regenerating sweep configs.")
+    p.add_argument("--h5-path", type=str, default=None,
+                   help="FULL override of cfg['data']['h5_path'] — both "
+                        "directory AND filename.  Use to retrain a config "
+                        "on a different HDF5 (e.g. 10-evenZ-levels file vs "
+                        "the older 10-levels file the config was generated "
+                        "for).  When combined with --training-data-dir, "
+                        "the directory of --h5-path is replaced with "
+                        "--training-data-dir (filename of --h5-path kept).")
     p.add_argument("--instrument", type=str, default=None,
                    choices=['hysics', 'emit'],
                    help="Override the instrument stored in the config "
@@ -366,8 +374,16 @@ def main():
     output_dir = Path(cfg['output_dir']) / f'run_{run_id:03d}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    h5_path = str(resolve_h5_path(cfg['data']['h5_path'], args.training_data_dir))
+    # CLI --h5-path takes precedence over the config's h5_path; otherwise
+    # the config-stored path is used (with --training-data-dir optionally
+    # rebasing the directory portion).
+    h5_source = args.h5_path if args.h5_path is not None else cfg['data']['h5_path']
+    h5_path = str(resolve_h5_path(h5_source, args.training_data_dir))
     cfg['data']['h5_path'] = h5_path
+    if args.h5_path is not None:
+        print(f"HDF5 file:   {h5_path}  (CLI --h5-path override)")
+    else:
+        print(f"HDF5 file:   {h5_path}  (from config)")
     print(f"HDF5 file: {h5_path}\n")
 
     with open(output_dir / 'config.json', 'w') as f:

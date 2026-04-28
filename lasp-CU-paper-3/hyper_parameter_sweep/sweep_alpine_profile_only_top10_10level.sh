@@ -141,6 +141,7 @@ print(f'  HDF5 has all required datasets for profile-only HySICS training.')
 echo
 python sweep_train_profile_only.py \
     --config-json "$CONFIG_FILE" \
+    --h5-path "$H5_FILE" \
     --training-data-dir "$TRAINING_DATA_DIR" \
     --instrument hysics \
     --output-dir "$OUTPUT_DIR_BASE"
