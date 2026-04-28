@@ -25,7 +25,7 @@
 *.json
 *.pt
 *.err
-
+*.npz
 
 # weird hitran files
 hitran_ri/ascii/*
