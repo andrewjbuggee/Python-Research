@@ -37,8 +37,10 @@ MIN_WINDOW     = 1                       # floor for percentage-based windows
 N_PANELS       = 6                       # 2 rows x 3 cols
 FIGURE_DIR     = Path(__file__).parent / 'Figures'
 FIGURE_NAME    = 'moving_average_smoothing.png'
+FIGURE_NAME_REDUCED = 'moving_average_smoothing_7_levels.png'
 FIGURE_DPI     = 500
 TAU_C_MIN      = 1.0                     # skip files with no real cloud, mirrors converter
+N_REDUCED_LEVELS = 7                     # block-average target length for the second analysis
 
 
 # ── Paper-quality matplotlib style (mirrors regenerate_kfold_figures.setup_style)
@@ -108,6 +110,46 @@ def centered_moving_average(x, window):
         hi = min(n, i + half + 1)
         out[i] = x[lo:hi].mean()
     return out
+
+
+def equal_altitude_bin_average(re, z, m=N_REDUCED_LEVELS):
+    """Reduce a (re, z) profile to m points sampled at evenly spaced altitudes.
+
+    Lays down m+1 bin edges at altitudes evenly spaced from z[0] (cloud top)
+    to z[-1] (cloud base) and takes the mean of raw r_e within each bin. The
+    output altitude grid is the bin centers, which are evenly spaced by
+    construction and inherit the cloud-top → cloud-base orientation of the
+    input. Direction is handled by working in a normalized coordinate
+    u = (z - z_top) / (z_base - z_top) so both increasing and decreasing z
+    are treated identically.
+
+    Empty bins (only possible with very sparse altitude sampling) are filled
+    by linear interpolation across the populated bin centers.
+    """
+    re = np.asarray(re, dtype=np.float64)
+    z  = np.asarray(z,  dtype=np.float64)
+
+    z_top, z_base = float(z[0]), float(z[-1])
+    edges   = np.linspace(z_top, z_base, m + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    if z_top == z_base:
+        return np.full(m, re.mean()), centers
+
+    u = (z - z_top) / (z_base - z_top)
+    bin_idx = np.clip(np.floor(u * m).astype(int), 0, m - 1)
+
+    re_out = np.full(m, np.nan)
+    for k in range(m):
+        mask = bin_idx == k
+        if mask.any():
+            re_out[k] = re[mask].mean()
+
+    valid = ~np.isnan(re_out)
+    if not valid.all():
+        re_out[~valid] = np.interp(centers[~valid], centers[valid], re_out[valid])
+
+    return re_out, centers
 
 
 # ── Load unique profiles ───────────────────────────────────────────────────────
@@ -227,5 +269,69 @@ FIGURE_DIR.mkdir(parents=True, exist_ok=True)
 fig_path = FIGURE_DIR / FIGURE_NAME
 fig.savefig(fig_path, dpi=FIGURE_DPI, bbox_inches='tight')
 print(f'\nFigure saved to: {fig_path}  (dpi={FIGURE_DPI})')
+
+
+# ── 7-level equal-altitude reduction ──────────────────────────────────────────
+# Each profile is collapsed to exactly N_REDUCED_LEVELS points whose altitudes
+# are evenly spaced between cloud top and cloud base. Within each altitude bin
+# the raw r_e values are averaged.
+re_reduced   = []
+z_reduced    = []
+rmse_reduced = np.zeros(n_profiles)
+
+for i, (re_raw, z_raw) in enumerate(zip(profiles_raw, altitudes_raw)):
+    re_red, z_red = equal_altitude_bin_average(re_raw, z_raw, N_REDUCED_LEVELS)
+    re_reduced.append(re_red)
+    z_reduced.append(z_red)
+
+    # Compare on the raw altitude grid: profiles run cloud-top → cloud-base, so
+    # z may be monotonically decreasing. np.interp requires increasing xp, hence
+    # the argsort.
+    order = np.argsort(z_red)
+    re_red_on_raw = np.interp(z_raw, z_red[order], re_red[order])
+    rmse_reduced[i] = np.sqrt(np.mean((re_red_on_raw - re_raw) ** 2))
+
+print()
+print(f'{N_REDUCED_LEVELS}-level equal-altitude RMSE vs. raw profile (μm):')
+print(f'  mean={rmse_reduced.mean():.4f}  median={np.median(rmse_reduced):.4f}  '
+      f'max={rmse_reduced.max():.4f}  min={rmse_reduced.min():.4f}')
+
+
+# ── 2 x 3 figure for the 7-level reduction ────────────────────────────────────
+# Use the same panel_idx selection as the first figure so the comparison is
+# apples-to-apples across raw profile lengths.
+fig2, axes2 = plt.subplots(nrows, ncols, figsize=(13, 8))
+axes2 = axes2.flatten()
+
+reduced_color = 'crimson'
+
+for ax, idx in zip(axes2, panel_idx):
+    re_raw = profiles_raw[idx]
+    z_raw  = altitudes_raw[idx]
+
+    ax.plot(re_raw, z_raw, color='0.4', linewidth=1.2,
+            marker='o', markersize=2.8, label='Raw in-situ')
+    ax.plot(re_reduced[idx], z_reduced[idx], color=reduced_color,
+            linewidth=1.8, marker='s', markersize=5,
+            label=f'{N_REDUCED_LEVELS}-level mean '
+                  f'(RMSE={rmse_reduced[idx]:.3f} $\\mu$m)')
+
+    ax.set_title(f'Profile {idx + 1}  |  {len(re_raw)} measurement levels '
+                 f'→ {N_REDUCED_LEVELS}')
+    ax.set_xlabel(r'$r_e$ ($\mu$m)')
+    ax.set_ylabel('Altitude (km)')
+    ax.legend(loc='best')
+    ax.grid(alpha=0.3)
+
+fig2.suptitle(
+    f'In-situ $r_e$ profiles reduced to {N_REDUCED_LEVELS} evenly spaced '
+    'altitudes (per-bin average)',
+    y=1.005,
+)
+fig2.tight_layout()
+
+fig2_path = FIGURE_DIR / FIGURE_NAME_REDUCED
+fig2.savefig(fig2_path, dpi=FIGURE_DPI, bbox_inches='tight')
+print(f'Figure saved to: {fig2_path}  (dpi={FIGURE_DPI})')
 
 plt.show()
