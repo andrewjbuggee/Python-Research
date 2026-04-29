@@ -558,6 +558,518 @@ def plot_spectral_importance_absolute(spectral: dict,
 
 
 # -----------------------------------------------------------------------------
+# Paper version of the predictors plot — 2x2 panel with the four predictors
+# the manuscript focuses on (tau_c, above-cloud column water vapor,
+# adiabaticity, drizzle proxy).  The cached 3x2 version is still produced
+# by plot_rmse_vs_predictors() above.
+# -----------------------------------------------------------------------------
+def plot_rmse_vs_predictors_paper(per_profile: dict,
+                                  n_folds: int,
+                                  fig_path: Path,
+                                  dpi: int = 500):
+    """
+    2x2 panel of per-profile mean RMSE vs the four physical predictors
+    chosen for the paper:
+
+        top row    | tau_c                     | above-cloud column water vapor
+        bottom row | adiabaticity score        | drizzle proxy
+
+    Subplot titles use the larger fontsize requested for the paper version.
+    """
+    # Tweak these for styling -------------------------------------------------
+    point_color = CB['blue']
+    figsize     = (12, 10)
+    panel_grid  = (2, 2)
+    title_fs    = 14    # subplot-title font size (was 11 in the diagnostic plot)
+    # ------------------------------------------------------------------------
+
+    MOLEC_PER_CM2_TO_MM_PW = 18.01528 / 6.02214076e23 * 10.0
+
+    predictors = {
+        'tau_c':                              per_profile['tau_c'],
+        'wv_above_cloud':                     (per_profile['wv_above_cloud']
+                                               * MOLEC_PER_CM2_TO_MM_PW),
+        'adiabaticity_score':                 per_profile['adiabaticity_score'],
+        'drizzle_proxy_re_max_lower30pct_um': per_profile['drizzle_proxy_re_max_lower30pct_um'],
+    }
+
+    # Order: top-left, top-right, bottom-left, bottom-right.
+    panel = [
+        ('tau_c',
+         r'$\tau_c$'),
+        ('wv_above_cloud',
+         r'Above-cloud column water vapor (mm $\equiv$ kg m$^{-2}$)'),
+        ('adiabaticity_score',
+         r'Adiabaticity (Pearson $r$ of $r_e^{\,3}$ vs $z$ above base)'),
+        ('drizzle_proxy_re_max_lower30pct_um',
+         r'Drizzle proxy: max $r_e$ in base $30\%$ ($\mu$m)'),
+    ]
+
+    mean_rmse = per_profile['mean_rmse_um']
+    n_unique  = per_profile['n_unique']
+
+    fig, axes = plt.subplots(*panel_grid, figsize=figsize)
+    for ax, (key, lbl) in zip(axes.flat, panel):
+        x = predictors[key]
+        ax.scatter(x, mean_rmse, alpha=0.55, s=24,
+                   c=point_color, edgecolors='white', linewidth=0.5)
+        ax.set_xlabel(lbl)
+        ax.set_ylabel(r'Per-profile mean RMSE ($\mu$m)')
+        ax.grid(True, alpha=0.3)
+
+        pr = _pearson_r(x, mean_rmse)
+        sp = _spearman_r(x, mean_rmse)
+        ax.set_title(fr'$r = {pr:+.3f},\ \ \rho = {sp:+.3f}$',
+                     fontsize=title_fs)
+
+        ax.ticklabel_format(style='sci', axis='x', scilimits=(-3, 4),
+                            useMathText=True)
+
+    fig.suptitle(fr'Per-Profile RMSE vs Physical Predictors '
+                 fr'($K={n_folds}$, $n_{{\mathrm{{unique}}}}={n_unique}$)',
+                 fontsize=14, y=1.005)
+    plt.tight_layout()
+    plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+# -----------------------------------------------------------------------------
+# Predicted vs True droplet profiles at six RMSE percentiles — 2x3 panel.
+# Uses HDF5 (raw r_e and z) + fold_NN/test_predictions.npz (50-level true
+# and NN prediction).  Cached to example_profiles_data.npz for fast
+# iteration on styling.  See build_example_profiles_data() for details.
+# -----------------------------------------------------------------------------
+EXAMPLE_PROFILES_CACHE_NAME = 'example_profiles_data.npz'
+DEFAULT_EXAMPLE_PERCENTILES = (10, 25, 40, 55, 70, 85)
+
+
+def select_profiles_at_percentiles(per_profile: dict,
+                                   percentiles=DEFAULT_EXAMPLE_PERCENTILES) -> list:
+    """
+    For each requested mean-RMSE percentile, return the unique-profile
+    record (pid, mean_rmse_um, percentile, rank) closest to that
+    percentile of the per-profile mean-RMSE distribution.
+    """
+    mean_rmse = per_profile['mean_rmse_um']
+    pids      = per_profile['pid']
+    n         = len(mean_rmse)
+    sort_idx  = np.argsort(mean_rmse)
+    selected = []
+    for p in percentiles:
+        rank = int(round(p / 100.0 * (n - 1)))
+        i = sort_idx[rank]
+        selected.append({'pid':        int(pids[i]),
+                         'rmse_um':    float(mean_rmse[i]),
+                         'percentile': float(p),
+                         'rank':       int(rank)})
+    return selected
+
+
+def build_example_profiles_data(results_dir: Path,
+                                h5_path: Path,
+                                per_profile: dict,
+                                percentiles=DEFAULT_EXAMPLE_PERCENTILES) -> dict:
+    """
+    For each profile picked by select_profiles_at_percentiles(), gather:
+        - raw in-situ r_e profile and altitude (variable length, NaN-padded)
+        - 50-level "true" profile (the network's training target, fixed grid)
+        - 50-level NN prediction (mean across all test samples for that pid)
+        - 50-level NN per-level sigma (mean across samples)
+
+    Caches everything to <results_dir>/example_profiles_data.npz so future
+    runs can skip the HDF5 entirely.
+    """
+    import h5py    # lazy: only this code path needs HDF5.
+
+    selected = select_profiles_at_percentiles(per_profile, percentiles)
+    target_pids = {s['pid']: s for s in selected}
+
+    fold_dirs = sorted(results_dir.glob('fold_*'))
+    if not fold_dirs:
+        raise FileNotFoundError(f'No fold_*/ subdirs in {results_dir}')
+
+    # Pass 1 — collect ALL samples for each target pid (predictions + the
+    # hdf5 index of every sample).  Each unique pid lives in exactly one
+    # fold's test set, so once we find it we can break out of subsequent
+    # fold scans for that pid.
+    samples = {}      # pid -> dict of (pred, pred_std, true, hdf5_idx) arrays
+    for fd in fold_dirs:
+        npz_path = fd / 'test_predictions.npz'
+        if not npz_path.exists():
+            continue
+        npz       = np.load(npz_path)
+        pred      = npz['pred']
+        true      = npz['true']
+        pred_std  = npz['pred_std']
+        pids_arr  = npz['profile_ids']
+        h5idx_arr = npz['hdf5_indices']
+        for pid in target_pids:
+            if pid in samples:
+                continue
+            sel = np.where(pids_arr == pid)[0]
+            if sel.size == 0:
+                continue
+            samples[pid] = {
+                'pred':     pred[sel].copy(),
+                'pred_std': pred_std[sel].copy(),
+                'true':     true[sel].copy(),
+                'hdf5_idx': h5idx_arr[sel].copy(),
+            }
+    missing = [pid for pid in target_pids if pid not in samples]
+    if missing:
+        raise RuntimeError(f'Could not locate predictions for pids {missing} '
+                           f'across folds in {results_dir}')
+
+    ordered_pids = [s['pid'] for s in selected]
+    n_levels = samples[ordered_pids[0]]['pred'].shape[1]
+
+    # Means across all geometries — used by the mean-version plot.
+    pred_means = {pid: s['pred'].mean(axis=0)     for pid, s in samples.items()}
+    pred_stds  = {pid: s['pred_std'].mean(axis=0) for pid, s in samples.items()}
+    true_means = {pid: s['true'].mean(axis=0)     for pid, s in samples.items()}
+
+    # Read the four geometry arrays + raw profiles in a single HDF5 pass.
+    with h5py.File(h5_path, 'r') as f:
+        sza_all = f['sza'][:]
+        vza_all = f['vza'][:]
+        saz_all = f['saz'][:]
+        vaz_all = f['vaz'][:]
+
+        max_raw_lev = int(f['profiles_raw'].shape[1])
+        raw_re   = np.full((len(target_pids), max_raw_lev), np.nan, dtype=np.float64)
+        raw_z_km = np.full((len(target_pids), max_raw_lev), np.nan, dtype=np.float64)
+        n_raw    = np.zeros(len(target_pids), dtype=np.int32)
+        for j, pid in enumerate(ordered_pids):
+            # Any sample of this pid exposes the same raw profile/z grid
+            # (raw fields are per-profile, repeated across geometries).
+            row = int(samples[pid]['hdf5_idx'][0])
+            nL  = int(f['profile_n_levels'][row])
+            raw_re[j, :nL]   = f['profiles_raw'][row, :nL]
+            raw_z_km[j, :nL] = f['profiles_raw_z'][row, :nL]
+            n_raw[j] = nL
+
+    # ── Find a viewing geometry common to all selected profiles ────────────
+    # Geometries are gridded at integer-ish degree values; round to 1 dp to
+    # absorb any float drift introduced when the HDF5 was written.
+    def _round_geom(i):
+        return (round(float(sza_all[i]), 1),
+                round(float(vza_all[i]), 1),
+                round(float(saz_all[i]), 1),
+                round(float(vaz_all[i]), 1))
+
+    pid_geoms = {pid: set(_round_geom(int(i)) for i in s['hdf5_idx'])
+                 for pid, s in samples.items()}
+    common_geoms = set.intersection(*pid_geoms.values())
+    if not common_geoms:
+        raise RuntimeError(
+            'No (SZA, VZA, SAZ, VAZ) combination is common to all '
+            f'{len(samples)} selected profiles, so no single shared '
+            'geometry can be chosen.  Either pick different percentiles '
+            'or relax the selection rule (e.g. nearest-neighbor matching).'
+        )
+    # Lex-sorted minimum — fully deterministic.  Change this line if you
+    # want a different shared-geometry selection rule (e.g. closest to
+    # nadir, fixed (SZA, VZA), median across the intersection set).
+    shared_geom = min(common_geoms)
+
+    # For each pid, find the sample whose geometry matches shared_geom.
+    pred_single, sigma_single, true_single, single_h5idx = {}, {}, {}, {}
+    for pid in ordered_pids:
+        s = samples[pid]
+        match = None
+        for j, h5i in enumerate(s['hdf5_idx']):
+            if _round_geom(int(h5i)) == shared_geom:
+                match = j
+                break
+        if match is None:
+            raise RuntimeError(
+                f'pid {pid} has no sample matching the shared geometry '
+                f'{shared_geom} — this should not happen since the geometry '
+                f'came from set intersection.'
+            )
+        pred_single[pid]  = s['pred'][match]
+        sigma_single[pid] = s['pred_std'][match]
+        true_single[pid]  = s['true'][match]
+        single_h5idx[pid] = int(s['hdf5_idx'][match])
+
+    # Pack arrays in selection order.
+    pred_50  = np.stack([pred_means[pid] for pid in ordered_pids])
+    sigma_50 = np.stack([pred_stds[pid]  for pid in ordered_pids])
+    true_50  = np.stack([true_means[pid] for pid in ordered_pids])
+
+    pred_single_50  = np.stack([pred_single[pid]  for pid in ordered_pids])
+    sigma_single_50 = np.stack([sigma_single[pid] for pid in ordered_pids])
+    true_single_50  = np.stack([true_single[pid]  for pid in ordered_pids])
+    single_h5idx_arr = np.array([single_h5idx[pid] for pid in ordered_pids],
+                                 dtype=np.int64)
+    # Per-sample RMSE for the shared-geometry sample of each profile
+    # (kept in the cache for diagnostic use; not currently shown on plot).
+    single_rmse = np.sqrt(((pred_single_50 - true_single_50) ** 2).mean(axis=1))
+
+    # Shared geometry as a (4,) array.  Note the schema change vs the
+    # earlier per-panel-geometry version: single_geom is now 1-D.
+    single_geom = np.array(shared_geom, dtype=np.float32)
+
+    cache_path = results_dir / EXAMPLE_PROFILES_CACHE_NAME
+    np.savez(cache_path,
+             percentiles      = np.array([s['percentile'] for s in selected]),
+             pids             = np.array([s['pid'] for s in selected], dtype=np.int32),
+             rmse_um          = np.array([s['rmse_um'] for s in selected]),
+             pred_50          = pred_50.astype(np.float32),
+             sigma_50         = sigma_50.astype(np.float32),
+             true_50          = true_50.astype(np.float32),
+             raw_re           = raw_re.astype(np.float32),
+             raw_z_km         = raw_z_km.astype(np.float32),
+             n_raw_levels     = n_raw,
+             n_levels         = np.int32(n_levels),
+             # Single-geometry fields (shared across all panels).
+             pred_single_50   = pred_single_50.astype(np.float32),
+             sigma_single_50  = sigma_single_50.astype(np.float32),
+             true_single_50   = true_single_50.astype(np.float32),
+             single_geom      = single_geom,         # shape (4,) — SHARED
+             single_rmse_um   = single_rmse.astype(np.float32),
+             single_hdf5_idx  = single_h5idx_arr)
+    print(f'  cached {cache_path.name} '
+          f'({len(selected)} profiles, percentiles {list(percentiles)})')
+
+    return load_example_profiles_cache(cache_path)
+
+
+def load_example_profiles_cache(cache_path: Path) -> dict:
+    """
+    Load the cached example-profiles NPZ as a plain dict.
+
+    Cache schema v2 added single-geometry fields (pred_single_50, sigma_single_50,
+    single_geom, single_rmse_um, single_hdf5_idx).  These are surfaced when
+    present and silently omitted when absent — older v1 caches still load
+    cleanly for the mean-version plot.
+    """
+    npz  = np.load(cache_path)
+    keys = set(npz.files)
+    out = {
+        'percentiles':  npz['percentiles'],
+        'pids':         npz['pids'],
+        'rmse_um':      npz['rmse_um'],
+        'pred_50':      npz['pred_50'],
+        'sigma_50':     npz['sigma_50'],
+        'true_50':      npz['true_50'],
+        'raw_re':       npz['raw_re'],
+        'raw_z_km':     npz['raw_z_km'],
+        'n_raw_levels': npz['n_raw_levels'],
+        'n_levels':     int(npz['n_levels']),
+    }
+    for k in ('pred_single_50', 'sigma_single_50', 'true_single_50',
+              'single_geom', 'single_rmse_um', 'single_hdf5_idx'):
+        if k in keys:
+            out[k] = npz[k]
+    return out
+
+
+def plot_example_profiles(data: dict,
+                          median_rmse_per_level: np.ndarray,
+                          fig_path: Path,
+                          dpi: int = 500):
+    """
+    2x3 panel: predicted vs true droplet profiles at six per-profile mean
+    RMSE percentiles (10, 25, 40 in the top row; 55, 70, 85 in the bottom
+    row).  Each panel shows:
+        - the 50-level interpolated true profile (black markers + thin
+          black line),
+        - the NN's predicted profile (markers + dashed line) with a
+          shaded band of half-width = median per-level RMSE.
+
+    The shaded band is the SAME vector at every panel — it represents the
+    typical (median) RMSE the model makes at each vertical level across
+    the full set of 290 unique profiles, i.e. the centerline of the
+    per-level uncertainty median plot.
+    """
+    # Tweak these for styling -------------------------------------------------
+    true_color   = CB['black']
+    pred_color   = CB['vermillion']
+    band_alpha   = 0.20
+    figsize      = (15, 9)
+    title_fs     = 14
+    true_lw      = 0.8     # thin connector line for the 50-level markers
+    # ------------------------------------------------------------------------
+
+    n_panels   = data['pred_50'].shape[0]
+    n_levels   = data['n_levels']
+    if median_rmse_per_level.shape[0] != n_levels:
+        raise ValueError(
+            f'median_rmse_per_level has {median_rmse_per_level.shape[0]} '
+            f'levels but the cached predictions have {n_levels}'
+        )
+    z_norm_50  = np.linspace(0, 1, n_levels)
+
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+    for k, ax in enumerate(axes.flat):
+        if k >= n_panels:
+            ax.axis('off')
+            continue
+
+        nL          = int(data['n_raw_levels'][k])
+        raw_z_km_k  = data['raw_z_km'][k, :nL]
+        z_top_km    = float(raw_z_km_k[0])
+        z_base_km   = float(raw_z_km_k[-1])
+        thick_m     = (z_top_km - z_base_km) * 1000.0
+        z_50_m      = z_norm_50 * thick_m
+
+        pred_k = data['pred_50'][k]
+        true_k = data['true_50'][k]
+
+        # 50-level interpolated true profile — black markers + thin line
+        ax.plot(true_k, z_50_m, 'o-', color=true_color, markersize=3,
+                linewidth=true_lw, label=fr'True ({n_levels}-level)')
+
+        # NN prediction — shaded band of half-width median RMSE per level
+        lo = pred_k - median_rmse_per_level
+        hi = pred_k + median_rmse_per_level
+        ax.fill_betweenx(z_50_m, lo, hi, color=pred_color, alpha=band_alpha,
+                         linewidth=0,
+                         label=r'NN estimate $\pm$ median RMSE per level')
+        ax.plot(pred_k, z_50_m, 's--', color=pred_color, markersize=3,
+                linewidth=1.2, label=r'NN estimate (mean)')
+
+        ax.invert_yaxis()    # 0 m at top, cloud base at bottom
+        ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.5)
+        ax.set_xlabel(r'$r_e$ ($\mu$m)')
+        if k % 3 == 0:
+            ax.set_ylabel(r'Depth from cloud top (m)')
+
+        pct = float(data['percentiles'][k])
+        rmse_k = float(data['rmse_um'][k])
+        ax.set_title(fr'{int(pct)}th percentile  '
+                     fr'(mean RMSE $= {rmse_k:.2f}\ \mu\mathrm{{m}}$)',
+                     fontsize=title_fs)
+        if k == 0:
+            ax.legend(loc='best', fontsize=9)
+
+    fig.suptitle(r'Predicted vs True Droplet Profiles — six examples '
+                 r'spanning the per-profile RMSE distribution',
+                 fontsize=14, y=1.005)
+    plt.tight_layout()
+    plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+def plot_example_profiles_single_geom(data: dict,
+                                      median_rmse_per_level: np.ndarray,
+                                      fig_path: Path,
+                                      dpi: int = 500):
+    """
+    Single-geometry counterpart to plot_example_profiles().
+
+    Same six profiles, same percentile labels, same shaded median-RMSE
+    band — but every panel now shows the network's retrieval for the
+    SAME SHARED viewing geometry (chosen by build_example_profiles_data
+    as a (SZA, VZA, SAZ, VAZ) tuple common to all six profiles).
+
+    Because the geometry is identical across panels, the geometry
+    annotation appears only on the first panel (just below the legend).
+    """
+    if 'pred_single_50' not in data:
+        raise RuntimeError(
+            'Cached example-profiles NPZ does not contain single-geometry '
+            'fields.  Delete example_profiles_data.npz and rerun with '
+            '--h5-path to rebuild the cache.'
+        )
+    geom = np.asarray(data['single_geom'])
+    if geom.ndim != 1 or geom.shape[0] != 4:
+        raise RuntimeError(
+            'Cached single_geom has unexpected shape '
+            f'{tuple(geom.shape)}.  This script now requires a single '
+            'shared geometry (shape (4,)) across all panels.  Delete '
+            'example_profiles_data.npz and rerun with --h5-path to rebuild.'
+        )
+
+    # Tweak these for styling -------------------------------------------------
+    true_color   = CB['black']
+    pred_color   = CB['vermillion']
+    band_alpha   = 0.20
+    figsize      = (15, 9)
+    title_fs     = 14
+    true_lw      = 0.8
+    legend_fs    = 9
+    annot_fs     = 9
+    # y-coord of the top of the geometry textbox (axis fraction).  Tuned
+    # to sit just below a 3-line legend at fontsize=9; nudge if you change
+    # the legend or font size.
+    geom_box_y   = 0.66
+    # ------------------------------------------------------------------------
+
+    n_panels  = data['pred_single_50'].shape[0]
+    n_levels  = data['n_levels']
+    if median_rmse_per_level.shape[0] != n_levels:
+        raise ValueError(
+            f'median_rmse_per_level has {median_rmse_per_level.shape[0]} '
+            f'levels but the cached predictions have {n_levels}'
+        )
+    z_norm_50 = np.linspace(0, 1, n_levels)
+    sza, vza, saz, vaz = (float(v) for v in geom)
+
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+    for k, ax in enumerate(axes.flat):
+        if k >= n_panels:
+            ax.axis('off')
+            continue
+
+        nL          = int(data['n_raw_levels'][k])
+        raw_z_km_k  = data['raw_z_km'][k, :nL]
+        z_top_km    = float(raw_z_km_k[0])
+        z_base_km   = float(raw_z_km_k[-1])
+        thick_m     = (z_top_km - z_base_km) * 1000.0
+        z_50_m      = z_norm_50 * thick_m
+
+        pred_k = data['pred_single_50'][k]
+        true_k = data['true_50'][k]    # 50-level true is per-profile, not per-sample
+
+        # 50-level true profile
+        ax.plot(true_k, z_50_m, 'o-', color=true_color, markersize=3,
+                linewidth=true_lw, label=fr'True ({n_levels}-level)')
+
+        # NN single-geometry estimate with median per-level RMSE band
+        lo = pred_k - median_rmse_per_level
+        hi = pred_k + median_rmse_per_level
+        ax.fill_betweenx(z_50_m, lo, hi, color=pred_color, alpha=band_alpha,
+                         linewidth=0,
+                         label=r'NN estimate $\pm$ median RMSE per level')
+        ax.plot(pred_k, z_50_m, 's--', color=pred_color, markersize=3,
+                linewidth=1.2, label=r'NN estimate (single geometry)')
+
+        ax.invert_yaxis()
+        ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.5)
+        ax.set_xlabel(r'$r_e$ ($\mu$m)')
+        if k % 3 == 0:
+            ax.set_ylabel(r'Depth from cloud top (m)')
+
+        pct       = float(data['percentiles'][k])
+        prof_rmse = float(data['rmse_um'][k])      # per-PROFILE mean RMSE
+        ax.set_title(fr'{int(pct)}th percentile  '
+                     fr'(profile mean RMSE $= {prof_rmse:.2f}\ \mu\mathrm{{m}}$)',
+                     fontsize=title_fs)
+
+        if k == 0:
+            ax.legend(loc='upper left', fontsize=legend_fs)
+            # Geometry textbox sits just below the legend.  Same geometry
+            # applies to every panel, so we annotate once.
+            ax.text(0.03, geom_box_y,
+                    f'SZA = {sza:.0f}°,  VZA = {vza:.0f}°\n'
+                    f'SAZ = {saz:.0f}°,  VAZ = {vaz:.0f}°',
+                    transform=ax.transAxes, ha='left', va='top',
+                    fontsize=annot_fs,
+                    bbox=dict(boxstyle='round,pad=0.4',
+                              facecolor='white', alpha=0.85,
+                              edgecolor='lightgray', linewidth=0.6))
+
+    fig.suptitle(r'Predicted vs True Droplet Profiles (single geometry) — '
+                 r'six examples spanning the per-profile RMSE distribution',
+                 fontsize=14, y=1.005)
+    plt.tight_layout()
+    plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+# -----------------------------------------------------------------------------
 # Per-sample RMSE vs viewing geometry — needs HDF5 + the cached
 # fold_NN/test_predictions.npz files (the per-profile CSV does not carry
 # geometry).  Cached to per_sample_geometry_rmse.csv on first run so future
@@ -732,10 +1244,11 @@ def parse_args():
                         'that, per_sample_geometry_rmse.csv is cached in '
                         '--results-dir and used automatically.')
     p.add_argument('--skip', type=str, nargs='*', default=[],
-                   choices=['distribution', 'predictors',
+                   choices=['distribution', 'predictors', 'predictors_paper',
                             'per_level_mean', 'per_level_median',
                             'heatmap', 'spectral_rel', 'spectral_abs',
-                            'geometry'],
+                            'geometry', 'example_profiles',
+                            'example_profiles_single'],
                    help='Skip one or more figures by name')
     return p.parse_args()
 
@@ -779,6 +1292,10 @@ def main():
     if 'predictors' not in args.skip:
         out = fig_dir / 'rmse_vs_predictors.png'
         plot_rmse_vs_predictors(per_profile, correlations, n_folds, out, args.dpi)
+        print(f'  wrote {out.name}')
+    if 'predictors_paper' not in args.skip:
+        out = fig_dir / 'rmse_vs_predictors_paper.png'
+        plot_rmse_vs_predictors_paper(per_profile, n_folds, out, args.dpi)
         print(f'  wrote {out.name}')
     if 'per_level_mean' not in args.skip:
         out = fig_dir / 'per_level_uncertainty.png'
@@ -842,6 +1359,60 @@ def main():
             out = fig_dir / 'rmse_vs_geometry.png'
             plot_rmse_vs_geometry(geom, out, args.dpi)
             print(f'  wrote {out.name}')
+
+    # Example-profile comparison (raw / 50-level / NN) at six RMSE
+    # percentiles.  Cache-first, just like the geometry plot.
+    if 'example_profiles' not in args.skip:
+        cache_path = results_dir / EXAMPLE_PROFILES_CACHE_NAME
+        ex = None
+        if cache_path.exists():
+            ex = load_example_profiles_cache(cache_path)
+            cached_pcts = tuple(int(p) for p in ex['percentiles'])
+            if cached_pcts != tuple(DEFAULT_EXAMPLE_PERCENTILES):
+                print(f'\n[note] example-profiles cache uses percentiles '
+                      f'{cached_pcts}, not {tuple(DEFAULT_EXAMPLE_PERCENTILES)}; '
+                      f'delete {cache_path.name} and pass --h5-path to rebuild.')
+            else:
+                print(f'\nLoaded example-profiles cache: {cache_path.name} '
+                      f'({ex["pred_50"].shape[0]} profiles)')
+        elif args.h5_path is not None:
+            h5 = Path(args.h5_path).resolve()
+            if not h5.exists():
+                print(f'\n[skip] example-profiles plot: --h5-path not found: {h5}')
+            else:
+                print(f'\nBuilding example-profiles data (raw + 50-level + NN '
+                      f'predictions) from HDF5 + folds ...')
+                ex = build_example_profiles_data(results_dir, h5, per_profile,
+                                                 DEFAULT_EXAMPLE_PERCENTILES)
+        else:
+            print(f'\n[skip] example-profiles plot: no {cache_path.name} '
+                  f'cache and no --h5-path supplied.  Pass --h5-path once '
+                  f'to build the cache, then iterate freely.')
+        if ex is not None:
+            # Median per-level RMSE (across all unique profiles) — the
+            # same vector that drives the centerline of
+            # per_level_uncertainty_median.png.  Used as the half-width of
+            # the shaded uncertainty band on each example panel.
+            median_rmse_per_level = np.median(per_profile['rmse_per_level'],
+                                              axis=0)
+            out = fig_dir / 'example_profiles.png'
+            plot_example_profiles(ex, median_rmse_per_level, out, args.dpi)
+            print(f'  wrote {out.name}')
+
+            # Single-geometry counterpart.  Needs cache schema v2 fields;
+            # if the cache pre-dates this feature we tell the user how to
+            # rebuild it instead of failing.
+            if 'example_profiles_single' not in args.skip:
+                if 'pred_single_50' in ex:
+                    out = fig_dir / 'example_profiles_single_geom.png'
+                    plot_example_profiles_single_geom(
+                        ex, median_rmse_per_level, out, args.dpi)
+                    print(f'  wrote {out.name}')
+                else:
+                    print(f'\n[skip] example-profiles single-geometry plot: '
+                          f'cached {EXAMPLE_PROFILES_CACHE_NAME} pre-dates '
+                          f'this feature.  Delete it and rerun with '
+                          f'--h5-path to rebuild.')
 
     print('\nDone.')
 
