@@ -30,7 +30,9 @@ MAT_DIR        = Path('/Volumes/My Passport/neural_network_training_data/saz0_al
 #             window=10 for a 100-point profile and window=2 for a 20-point profile.
 #   • float — a fraction in (0, 1] (e.g. 0.10 is equivalent to '10%')
 # WINDOW_SPECS   = (5, 10, 15, '10%')
-WINDOW_SPECS   = (10, '25%')
+# WINDOW_SPECS   = (10, '25%')
+# WINDOW_SPECS   = ('25%', '35%', '45%')
+WINDOW_SPECS   = ('25%', '45%', '65%')
 MIN_WINDOW     = 1                       # floor for percentage-based windows
 N_PANELS       = 6                       # 2 rows x 3 cols
 FIGURE_DIR     = Path(__file__).parent / 'Figures'
@@ -50,7 +52,7 @@ def setup_style():
         'axes.labelsize':    12,
         'axes.titlesize':    13,
         'figure.titlesize':  14,
-        'legend.fontsize':   10,
+        'legend.fontsize':   7,
         'xtick.labelsize':   10,
         'ytick.labelsize':   10,
         'axes.linewidth':    0.8,
@@ -215,7 +217,7 @@ for ax, idx in zip(axes, panel_idx):
     ax.grid(alpha=0.3)
 
 fig.suptitle(
-    'Centered moving average of in-situ $r_e$ profiles  '
+    'Moving average of in-situ $r_e$ profiles  '
     f'(specs: {", ".join(spec_label(s) for s in WINDOW_SPECS)})',
     y=1.005,
 )
