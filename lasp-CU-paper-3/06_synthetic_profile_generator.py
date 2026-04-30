@@ -60,7 +60,7 @@ MAT_DIR          = Path('/Volumes/My Passport/neural_network_training_data/saz0_
 TAU_C_MIN        = 3.0          # only use clouds with cloud optical depth ≥ this
 L_COMMON         = 80           # length of the common normalized-altitude grid (≥ 60)
 N_FIXED_LEVELS   = 7            # every synthetic profile is on this fixed grid
-N_SAMPLES        = 300000
+N_SAMPLES        = 300001
 
 VAR_TARGET       = 0.99         # cumulative variance target for picking K_RE, K_LWC, K_T, K_VAPOR
 K_RE_MAX         = 6           # hard cap on number of re modes kept
@@ -70,6 +70,8 @@ K_VAPOR_MAX      = 6            # hard cap on number of ERA5 vapor-concentration
 
 LWC_EPS          = 1e-3         # g/m³ floor for log(lwc + eps); below typical in-cloud LWC
 VAPOR_EPS        = 1.0          # molec/cm³ floor for log(vapor + eps)
+QEXT_EFF         = 2.32         # bulk Mie extinction efficiency for τ_c calc
+                                # (calibrated to libRadtran's reported τ; see compute_tau_c)
 RANDOM_SEED      = 0
 
 OUT_DIR          = Path(__file__).parent / 'synthetic_profiles'
@@ -136,14 +138,26 @@ def compute_lwp(lwc_top_to_base, z_top_to_base):
     return 1000.0 * abs(np.trapezoid(lwc_top_to_base, z_top_to_base))
 
 
-def compute_tau_c(re_top_to_base, lwc_top_to_base, z_top_to_base):
+def compute_tau_c(re_top_to_base, lwc_top_to_base, z_top_to_base,
+                  qext_eff=QEXT_EFF):
     """Layer-integrated cloud optical depth from re (μm), LWC (g/m³), z (km).
 
-    dτ = (3/2) · LWC[kg/m³] · dz[m] / (ρ_w[kg/m³] · r_e[m])
-       = 1500 · LWC[g/m³] · dz[km] / r_e[μm]      (after unit conversions)
+    Exact form, with Q_ext the bulk Mie extinction efficiency averaged over the
+    droplet size distribution at the wavelength libRadtran reports cloud
+    optical depth at:
+
+        dτ = (3/2) · Q_ext · LWC[kg/m³] · dz[m] / (ρ_w[kg/m³] · r_e[m])
+           = (750 · Q_ext) · LWC[g/m³] · dz[km] / r_e[μm]   (mixed units)
+
+    The geometric-optics limit Q_ext = 2 (Hansen & Travis, 1974) underestimates
+    the Mie-computed τ for typical cloud droplet sizes by ~10–20%. The default
+    QEXT_EFF = 2.32 is calibrated against libRadtran's reported τ on synthetic
+    ORACLES profiles (cloud 1: HT predicts 6.25, libRadtran reports 7.25 →
+    ratio 1.16 ⇒ Q_ext_eff = 2 · 1.16 = 2.32). Override per call if needed.
     """
     integrand = lwc_top_to_base / np.maximum(re_top_to_base, 1e-6)
-    return 1500.0 * abs(np.trapezoid(integrand, z_top_to_base))
+    factor = 750.0 * qext_eff           # qext_eff = 2 → 1500 (Hansen-Travis)
+    return factor * abs(np.trapezoid(integrand, z_top_to_base))
 
 
 def load_era5_fields(d):
@@ -177,7 +191,8 @@ print(f'Found {len(mat_files)} .mat files in {MAT_DIR}')
 profiles_re   = []   # raw arrays (top → base)
 profiles_lwc  = []
 altitudes_raw = []
-mean_alpha    = []
+mean_alpha    = []   # per-profile vertical-mean alpha (NaN for VOCALS-REx files)
+campaign_each = []   # 'oracles' or 'vocals-rex' per profile
 z_top_each    = []
 z_base_each   = []
 tau_c_each    = []
@@ -188,17 +203,13 @@ vapor_each    = []   # (37,) ERA5 vapor_concentration, surface → TOA
 era5_pressure = None
 
 seen_fingerprints = set()
-n_skip_no_alpha = n_skip_low_tau = n_skip_dup = n_skip_missing = 0
-n_skip_no_era5  = 0
+n_skip_low_tau = n_skip_dup = n_skip_missing = n_skip_no_era5 = 0
 
 for path in mat_files:
     d = scipy.io.loadmat(path, squeeze_me=True)
 
     if not {'re', 'z', 'tau', 'lwc'}.issubset(d.keys()):
         n_skip_missing += 1
-        continue
-    if 'alpha_param' not in d.keys():
-        n_skip_no_alpha += 1
         continue
 
     era5_fields = load_era5_fields(d)
@@ -209,11 +220,14 @@ for path in mat_files:
     if era5_pressure is None:
         era5_pressure = P_grid                               # snapshot once
 
-    re    = np.asarray(d['re'][()],          dtype=np.float64)
-    lwc   = np.asarray(d['lwc'][()],         dtype=np.float64)
-    z     = np.asarray(d['z'][()],           dtype=np.float64)
-    alpha = np.asarray(d['alpha_param'][()], dtype=np.float64)
+    re    = np.asarray(d['re'][()],  dtype=np.float64)
+    lwc   = np.asarray(d['lwc'][()], dtype=np.float64)
+    z     = np.asarray(d['z'][()],   dtype=np.float64)
     tau_c = float(np.asarray(d['tau'][()]).max())
+
+    has_alpha = 'alpha_param' in d.keys()
+    if has_alpha:
+        alpha = np.asarray(d['alpha_param'][()], dtype=np.float64)
 
     if tau_c < TAU_C_MIN:
         n_skip_low_tau += 1
@@ -226,13 +240,18 @@ for path in mat_files:
     seen_fingerprints.add(fp)
 
     # Defensive: trim to common length if any of re / lwc / alpha drift in size
-    n_use = min(len(re), len(lwc), len(z), len(alpha))
-    re, lwc, z, alpha = re[:n_use], lwc[:n_use], z[:n_use], alpha[:n_use]
+    if has_alpha:
+        n_use = min(len(re), len(lwc), len(z), len(alpha))
+        alpha = alpha[:n_use]
+    else:
+        n_use = min(len(re), len(lwc), len(z))
+    re, lwc, z = re[:n_use], lwc[:n_use], z[:n_use]
 
     profiles_re.append(re)
     profiles_lwc.append(lwc)
     altitudes_raw.append(z)
-    mean_alpha.append(trapz_vertical_mean(alpha, z))
+    mean_alpha.append(trapz_vertical_mean(alpha, z) if has_alpha else np.nan)
+    campaign_each.append('oracles' if has_alpha else 'vocals-rex')
     z_top_each.append(float(z[0]))
     z_base_each.append(float(z[-1]))
     tau_c_each.append(tau_c)
@@ -253,18 +272,28 @@ T_arr           = np.asarray(T_each,     dtype=np.float64)   # (n_train, 37)
 vapor_arr       = np.asarray(vapor_each, dtype=np.float64)   # (n_train, 37)
 N_ERA5          = T_arr.shape[1]
 
-print(f'  skipped: {n_skip_no_alpha} no alpha_param (likely VOCALS-REx), '
-      f'{n_skip_low_tau} tau_c<{TAU_C_MIN}, '
+campaign_each = np.asarray(campaign_each)
+n_oracles = int((campaign_each == 'oracles').sum())
+n_vocals  = int((campaign_each == 'vocals-rex').sum())
+
+print(f'  skipped: {n_skip_low_tau} tau_c<{TAU_C_MIN}, '
       f'{n_skip_dup} duplicates, {n_skip_missing} missing keys, '
       f'{n_skip_no_era5} no era5')
-print(f'  kept   : {n_train} unique ORACLES profiles')
+print(f'  kept   : {n_train} unique profiles  '
+      f'(ORACLES = {n_oracles}, VOCALS-REx = {n_vocals})')
 print(f'  n_lev   : min={n_levels_each.min()}, max={n_levels_each.max()}, '
       f'mean={n_levels_each.mean():.1f}')
 print(f'  tau_c   : [{tau_c_each.min():.2f}, {tau_c_each.max():.2f}], '
       f'median={np.median(tau_c_each):.2f}')
 print(f'  thick km: [{thickness_each.min():.3f}, {thickness_each.max():.3f}]')
-print(f'  alpha   : [{mean_alpha.min():.2f}, {mean_alpha.max():.2f}], '
-      f'median={np.median(mean_alpha):.2f}')
+
+# Alpha is only measured in ORACLES; VOCALS-REx files lack alpha_param.
+mask_alpha = ~np.isnan(mean_alpha)
+alpha_obs  = mean_alpha[mask_alpha]
+print(f'  alpha   : measured for {mask_alpha.sum()}/{n_train} profiles '
+      f'(ORACLES only); '
+      f'[{alpha_obs.min():.2f}, {alpha_obs.max():.2f}], '
+      f'median={np.median(alpha_obs):.2f}')
 print(f'  ERA5    : {N_ERA5} pressure levels '
       f'({era5_pressure[0]:.0f}–{era5_pressure[-1]:.0f} hPa), '
       f'T [{T_arr.min():.1f}, {T_arr.max():.1f}] K, '
@@ -329,8 +358,11 @@ K_re,  K_lwc            = scores_re.shape[1],   scores_lwc.shape[1]
 K_T,   K_vapor          = scores_T.shape[1],    scores_vapor.shape[1]
 
 
-# ── Joint MVN ──────────────────────────────────────────────────────────────────
-log_mean_alpha = np.log(np.maximum(mean_alpha, 1e-3))
+# ── Joint MVN over the cross-campaign feature ─────────────────────────────────
+# Alpha is omitted from the joint MVN because VOCALS-REx files don't store it
+# (only ~75% of profiles have it). It is sampled independently from a 1-D
+# log-normal fit on the ORACLES subset; this loses any (mild) alpha–shape
+# correlation but avoids imputing a quarter of the dataset.
 log_thickness  = np.log(thickness_each)
 
 features = np.hstack([
@@ -338,7 +370,6 @@ features = np.hstack([
     scores_lwc,
     scores_T,
     scores_vapor,
-    log_mean_alpha[:, None],
     z_base_each[:,    None],
     log_thickness[:,  None],
 ])
@@ -346,7 +377,15 @@ mu_f  = features.mean(axis=0)
 cov_f = np.cov(features, rowvar=False)
 print(f'\nJoint MVN feature dimension: {features.shape[1]} '
       f'(K_re={K_re} + K_lwc={K_lwc} + K_T={K_T} + K_vapor={K_vapor} '
-      f'+ log(α) + z_base + log(thickness))')
+      f'+ z_base + log(thickness))')
+
+# 1-D log-normal model for alpha (fit on ORACLES profiles only).
+log_alpha_obs = np.log(np.maximum(alpha_obs, 1e-3))
+mu_alpha_log     = float(log_alpha_obs.mean())
+sigma_alpha_log  = float(log_alpha_obs.std(ddof=1)) if len(log_alpha_obs) > 1 else 0.0
+alpha_obs_min, alpha_obs_max = float(alpha_obs.min()), float(alpha_obs.max())
+print(f'Alpha (ORACLES-only) fit: log-N(mu={mu_alpha_log:.3f}, sigma={sigma_alpha_log:.3f})  '
+      f'clip [{alpha_obs_min:.2f}, {alpha_obs_max:.2f}]')
 
 
 # ── Sample N synthetic profiles (with rejection on tau_c) ─────────────────────
@@ -354,9 +393,8 @@ slc_re    = slice(0,                                 K_re)
 slc_lwc   = slice(K_re,                              K_re + K_lwc)
 slc_T     = slice(K_re + K_lwc,                      K_re + K_lwc + K_T)
 slc_vapor = slice(K_re + K_lwc + K_T,                K_re + K_lwc + K_T + K_vapor)
-idx_alpha = K_re + K_lwc + K_T + K_vapor
-idx_zbase = idx_alpha + 1
-idx_thick = idx_alpha + 2
+idx_zbase = K_re + K_lwc + K_T + K_vapor
+idx_thick = idx_zbase + 1
 u_grid_b2t = np.linspace(0.0, 1.0, L_COMMON)
 
 
@@ -371,7 +409,6 @@ def reconstruct_batch(samples_batch):
     new_scores_lwc   = samples_batch[:, slc_lwc]
     new_scores_T     = samples_batch[:, slc_T]
     new_scores_vapor = samples_batch[:, slc_vapor]
-    new_log_alpha    = samples_batch[:, idx_alpha]
     new_z_base       = samples_batch[:, idx_zbase]
     new_log_thick    = samples_batch[:, idx_thick]
 
@@ -380,8 +417,13 @@ def reconstruct_batch(samples_batch):
     new_thickness = np.clip(np.exp(new_log_thick),
                             thickness_each.min(), thickness_each.max())
     new_z_top     = new_z_base + new_thickness
-    new_alpha     = np.clip(np.exp(new_log_alpha),
-                            mean_alpha.min(), mean_alpha.max())
+
+    # Alpha is sampled INDEPENDENTLY from a 1-D log-normal fit on ORACLES data,
+    # not from the joint MVN (VOCALS-REx files lack alpha_param so it can't go
+    # in the joint feature without imputing 25% of rows). Clipped to observed
+    # ORACLES bounds so we never extrapolate alpha past the measured envelope.
+    new_log_alpha = rng.normal(mu_alpha_log, sigma_alpha_log, size=n)
+    new_alpha     = np.clip(np.exp(new_log_alpha), alpha_obs_min, alpha_obs_max)
 
     # Inverse PCA in log-space, then exp() back to physical units.
     log_re_recon    = mu_re    + new_scores_re    @ comps_re
@@ -691,12 +733,12 @@ ax.grid(alpha=0.3, which='both')
 
 # (i) Mean alpha distribution
 ax = axes[2, 2]
-bins = np.linspace(min(mean_alpha.min(), new_alpha.min()),
-                   max(mean_alpha.max(), new_alpha.max()), 40)
-ax.hist(mean_alpha, bins=bins, density=True, alpha=0.55,
-        color='firebrick', label='In-situ')
-ax.hist(new_alpha,  bins=bins, density=True, alpha=0.55,
-        color='steelblue', label='Synthetic')
+bins = np.linspace(min(alpha_obs.min(), new_alpha.min()),
+                   max(alpha_obs.max(), new_alpha.max()), 40)
+ax.hist(alpha_obs, bins=bins, density=True, alpha=0.55,
+        color='firebrick', label=f'In-situ (ORACLES, n={alpha_obs.size})')
+ax.hist(new_alpha, bins=bins, density=True, alpha=0.55,
+        color='steelblue', label=f'Synthetic (n={N_SAMPLES})')
 ax.set_xlabel(r'Vertical-mean $\alpha$ (libRadtran shape)')
 ax.set_ylabel('Density')
 ax.set_title(r'Mean $\alpha_{\rm param}$')

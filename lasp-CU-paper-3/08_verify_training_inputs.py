@@ -18,7 +18,7 @@ from pathlib import Path
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 SCRIPT_DIR  = Path(__file__).parent
-NC_PATH     = SCRIPT_DIR / 'training_inputs' / 'training_inputs_jointMVN_N300000_L7.nc'
+NC_PATH     = SCRIPT_DIR / 'training_inputs' / 'training_inputs_jointMVN_N300001_L7.nc'
 OUT_DIR     = NC_PATH.parent
 FIG_DPI     = 500
 

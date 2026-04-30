@@ -4,8 +4,10 @@ Build a NetCDF input file for the synthetic-cloud RT training set.
 Pipeline (organized as discrete cells; run end-to-end with `python 07_build_training_inputs.py`):
 
   Cell 1 — Load the synthetic profile bundle produced by 06_synthetic_profile_generator.
-  Cell 2 — Walk ORACLES .mat files; pull per-profile (lat, lon, UTC datetime) from
-           era5.geo.latitude, era5.geo.longitude, era5.metadata.era5_utcTime.
+  Cell 2 — Walk VOCALS-REx + ORACLES .mat files; pull per-profile (lat, lon, UTC datetime)
+           from era5.geo.Latitude, era5.geo.Longitude, and era5.metadata.era5_filename.
+           Both campaigns contribute equally to the (SZA, SAZ) bootstrap pool — alpha
+           is irrelevant here (it's only used inside 06 to fit the cloud-side model).
   Cell 3 — Compute the corresponding solar zenith and azimuth angles via pysolar.
            Filter the empirical distribution to SZA < 50°.
   Cell 4 — For each synthetic cloud:
@@ -53,7 +55,7 @@ from pysolar import solar
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 SCRIPT_DIR        = Path(__file__).parent
-SYNTHETIC_NPZ     = SCRIPT_DIR / 'synthetic_profiles' / 'synthetic_profiles_jointMVN_N300000_L7.npz'
+SYNTHETIC_NPZ     = SCRIPT_DIR / 'synthetic_profiles' / 'synthetic_profiles_jointMVN_N300001_L7.npz'
 MAT_DIR           = Path('/Volumes/My Passport/neural_network_training_data/saz0_allProfiles/')
 
 OUT_DIR           = SCRIPT_DIR / 'training_inputs'
@@ -204,20 +206,22 @@ def extract_lat_lon_dt(d, debug=False):
     return float(lat), float(lon), dt
 
 
-print(f'\n[Cell 2] Walking ORACLES .mat files in {MAT_DIR}')
+print(f'\n[Cell 2] Walking VOCALS-REx + ORACLES .mat files in {MAT_DIR}')
 mat_files = sorted(f for f in MAT_DIR.glob('*.mat') if not f.name.startswith('._'))
 print(f'         found {len(mat_files)} files')
 
-geo_records = []   # list of (lat, lon, datetime_utc, source_path)
+# Both campaigns contribute (lat, lon, datetime) → (SZA, SAZ) for the
+# bootstrap distribution. ORACLES files have alpha_param; VOCALS-REx don't.
+# Campaign label is recorded for the summary; both contribute equally to
+# the empirical (SZA, SAZ) pool.
+geo_records = []   # list of (lat, lon, datetime_utc, source_path, campaign)
 seen_fingerprints = set()
-n_ok = n_skip_no_alpha = n_skip_no_geo = n_skip_dup = 0
+n_ok = n_skip_no_geo = n_skip_dup = 0
+n_oracles = n_vocals = 0
 debugged_one = False
 
 for path in mat_files:
     d = scipy.io.loadmat(path, squeeze_me=True, struct_as_record=False)
-    if 'alpha_param' not in d.keys():           # ORACLES filter (same as 06)
-        n_skip_no_alpha += 1
-        continue
 
     re_arr = np.asarray(d.get('re', np.array([0]))[()], dtype=np.float64).flatten()
     fp = tuple(np.round(re_arr[:5], 4))
@@ -226,11 +230,13 @@ for path in mat_files:
         continue
     seen_fingerprints.add(fp)
 
-    # Print era5 structure once on the first ORACLES file to make any future
+    campaign = 'oracles' if 'alpha_param' in d.keys() else 'vocals-rex'
+
+    # Print era5 structure once on the first file to make any future
     # struct/key drift easy to diagnose.
     debug_now = not debugged_one
     if debug_now:
-        print(f'    [debug] inspecting {path.name}')
+        print(f'    [debug] inspecting {path.name}  (campaign={campaign})')
     geo = extract_lat_lon_dt(d, debug=debug_now)
     debugged_one = True
 
@@ -238,12 +244,16 @@ for path in mat_files:
         n_skip_no_geo += 1
         continue
     lat, lon, dt = geo
-    geo_records.append((lat, lon, dt, path.name))
+    geo_records.append((lat, lon, dt, path.name, campaign))
+    if campaign == 'oracles':
+        n_oracles += 1
+    else:
+        n_vocals += 1
     n_ok += 1
 
-print(f'         kept: {n_ok}  | '
-      f'skipped: {n_skip_no_alpha} no alpha, {n_skip_no_geo} no geo, '
-      f'{n_skip_dup} duplicate')
+print(f'         kept: {n_ok} '
+      f'(ORACLES = {n_oracles}, VOCALS-REx = {n_vocals})  | '
+      f'skipped: {n_skip_no_geo} no geo, {n_skip_dup} duplicate')
 
 if n_ok == 0:
     raise RuntimeError(
