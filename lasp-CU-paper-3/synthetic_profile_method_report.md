@@ -152,6 +152,16 @@ The first equality is the standard cloud-optics relation (Hansen & Travis, 1974,
 
 The training set was filtered to $\tau_c \geq 3$. To keep the synthetic distribution comparable, we draw in batches and reject samples whose derived $\tau_c$ falls below 3. The acceptance rate is high ($\approx 0.6$–$0.7$), so this adds modest cost while guaranteeing the synthetic sample obeys the same lower bound as the in-situ population.
 
+### 2.9 Stage 8 — Pairing each synthetic cloud with a sampled solar/viewing geometry
+
+The cloud-side generator yields physical profiles but says nothing about how the cloud will be observed. Each synthetic cloud is therefore paired post-hoc with one realization of the four observation angles libRadtran needs: solar zenith (SZA), solar azimuth (SAZ), viewing zenith (VZA), and viewing azimuth (VAZ). This pairing happens in [`07_build_training_inputs.py`](07_build_training_inputs.py).
+
+The solar pair $(\text{SZA}, \text{SAZ})$ is sampled from the empirical joint distribution implied by the **actual flight tracks** of both VOCALS-REx and ORACLES. For every unique in-situ profile, we read $(\text{lat}, \text{lon}, t_{\text{UTC}})$ from the ERA5 metadata stored in the `.mat` file (`era5.geo.Latitude`, `era5.geo.Longitude`, parsed UTC datetime from `era5.metadata.era5_filename`) and compute the matching $(\text{SZA}, \text{SAZ})$ via the Reda–Andreas Solar Position Algorithm (Reda & Andreas, 2004), implemented through the `pysolar` library. The resulting empirical pool is filtered to $\text{SZA} < 50^\circ$ to discard near-grazing geometries where 1-D plane-parallel radiative transfer breaks down. Both campaigns contribute to this pool — Chile (VOCALS-REx, lat ~ −20°, lon ~ −72°) and Namibia (ORACLES, lat ~ −10°, lon ~ +6°) — so synthetic clouds inherit a realistic mix of solar geometries spanning both ocean basins and the full set of flight times of day.
+
+For each synthetic cloud we then **bootstrap one $(\text{SZA}, \text{SAZ})$ pair jointly** from the filtered pool. Joint bootstrap, rather than independent sampling of each angle, preserves the lat/lon/time-of-day correlation between zenith and azimuth that a parametric two-dimensional uniform or Gaussian would erase (e.g., for southern-hemisphere flights at noon, SAZ is concentrated near due north regardless of season). The viewing pair is sampled non-empirically: $\text{VZA} \sim \mathrm{Uniform}(0^\circ, 45^\circ)$ and $\text{VAZ} \sim \mathrm{Uniform}(0^\circ, 180^\circ)$. These ranges cover the off-nadir view envelope of the HySICS instrument; the principal-plane symmetry collapses VAZ to $[0^\circ, 180^\circ]$.
+
+This separation — empirical bootstrap for $(\text{SZA}, \text{SAZ})$, parametric uniform for $(\text{VZA}, \text{VAZ})$ — reflects the physical asymmetry between the two pairs. Solar geometry is set by where and when the aircraft flew, so we should reuse the empirical structure. Viewing geometry is a free design choice for the satellite mission we are emulating, so a uniform prior across the instrument's swath is the unbiased default.
+
 ---
 
 ## 3. Why this method, and not another?
@@ -200,6 +210,7 @@ None of these is a methodological problem with PCA-in-log-space + MVN; each is a
 - Pincus, R., Barker, H. W., & Morcrette, J.-J. (2003). A fast, flexible, approximate technique for computing radiative transfer in inhomogeneous cloud fields. *J. Geophys. Res.*, **108**(D13), 4376.
 - Räisänen, P., Barker, H. W., Khairoutdinov, M. F., Li, J., & Randall, D. A. (2004). Stochastic generation of subgrid-scale cloudy columns for large-scale models. *Quart. J. Roy. Meteor. Soc.*, **130**(601), 2047–2067.
 - Ramsay, J. O., & Silverman, B. W. (2005). *Functional Data Analysis*, 2nd ed. Springer.
+- Reda, I., & Andreas, A. (2004). Solar position algorithm for solar radiation applications. *Solar Energy*, **76**(5), 577–589.
 - Redemann, J., et al. (2021). An overview of the ORACLES (ObseRvations of Aerosols above CLouds and their intEractionS) project: aerosol–cloud–radiation interactions in the southeast Atlantic basin. *Atmos. Chem. Phys.*, **21**(3), 1507–1563.
 - Saunders, R., Matricardi, M., & Brunel, P. (1999). An improved fast radiative transfer model for assimilation of satellite radiance observations. *Quart. J. Roy. Meteor. Soc.*, **125**(556), 1407–1425.
 - Slingo, A. (1989). A GCM parameterization for the shortwave radiative properties of water clouds. *J. Atmos. Sci.*, **46**(10), 1419–1427.
