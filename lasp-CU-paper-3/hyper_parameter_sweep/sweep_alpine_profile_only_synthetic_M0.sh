@@ -53,6 +53,9 @@ VARIANT=M0
 RUN_ID=$(printf "%03d" $SLURM_ARRAY_TASK_ID)
 CONFIG_FILE="sweep_configs_profile_only_synthetic_${VARIANT}/run_${RUN_ID}.json"
 TRAINING_DATA_DIR="/scratch/alpine/anbu8374/neural_network_training_data/"
+# Per-variant results dir, sibling of the configs dir (not nested inside it).
+# The trainer creates run_NNN/ subdirs underneath whatever path we pass here.
+OUTPUT_DIR="/projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep/sweep_results_profile_only_synthetic_${VARIANT}"
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: config file not found: $CONFIG_FILE"
@@ -65,7 +68,8 @@ echo ""
 
 python sweep_train_profile_only_synthetic.py \
     --config-json "$CONFIG_FILE" \
-    --training-data-dir "$TRAINING_DATA_DIR"
+    --training-data-dir "$TRAINING_DATA_DIR" \
+    --output-dir "$OUTPUT_DIR"
 EXIT_CODE=$?
 
 echo ""
