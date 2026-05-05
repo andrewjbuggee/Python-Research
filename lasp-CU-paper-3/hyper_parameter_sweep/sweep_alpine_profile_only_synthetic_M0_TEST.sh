@@ -16,7 +16,7 @@
 #SBATCH --error=logs/sweep_synth_M0_TEST_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
-#SBATCH --array=0-1             # 100 configs, max 6 concurrent
+#SBATCH --array=0             # 100 configs, max 6 concurrent
 
 # ============================================================
 # Synthetic-cloud Profile-Only Hyperparameter Sweep — VARIANT M0
