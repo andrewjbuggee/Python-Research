@@ -39,6 +39,15 @@ from models_profile_only_extras import ProfileOnlyNetworkExtras
 from models_profile_only        import ProfileOnlyLoss
 from data                       import create_dataloaders_extras, resolve_h5_path
 
+# Reuse the canonical training/eval/predict helpers from the standalone trainer
+# so the sweep stays bit-identical to interactive runs and any API drift in the
+# model/loss only has one place to maintain.
+from train_standalone_profile_only_extras import (
+    train_one_epoch as _train_one_epoch_canonical,
+    validate        as _validate_canonical,
+    predict_test    as _predict_test_canonical,
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
@@ -63,66 +72,11 @@ def parse_args():
     return p.parse_args()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Training / validation / test
-# ─────────────────────────────────────────────────────────────────────────────
-def train_one_epoch(model, loader, criterion, optimizer, device,
-                    augment_noise_std=0.0):
-    model.train()
-    total = 0.0
-    n_batches = 0
-    for batch in loader:
-        x = batch['x'].to(device, non_blocking=True)
-        y = batch['profile'].to(device, non_blocking=True)
-
-        if augment_noise_std > 0:
-            # Multiplicative Gaussian noise on the spectral channels only
-            # (first 636). Geometry + extras stay clean.
-            x = x.clone()
-            x[:, :636] = x[:, :636] * (1.0 + augment_noise_std * torch.randn_like(x[:, :636]))
-
-        optimizer.zero_grad()
-        mu, sigma = model(x)
-        loss = criterion(mu, sigma, y, model)
-        loss.backward()
-        optimizer.step()
-
-        total += loss.item()
-        n_batches += 1
-    return total / max(n_batches, 1)
-
-
-def validate(model, loader, criterion, device):
-    model.eval()
-    total = 0.0
-    n_batches = 0
-    with torch.no_grad():
-        for batch in loader:
-            x = batch['x'].to(device, non_blocking=True)
-            y = batch['profile'].to(device, non_blocking=True)
-            mu, sigma = model(x)
-            total += criterion(mu, sigma, y, model).item()
-            n_batches += 1
-    return total / max(n_batches, 1)
-
-
-def predict_test(model, loader, device, n_levels):
-    """Returns dict with stacked mu, sigma, true profile (all in NORMALIZED units)."""
-    model.eval()
-    mus, sigmas, ys = [], [], []
-    with torch.no_grad():
-        for batch in loader:
-            x = batch['x'].to(device, non_blocking=True)
-            y = batch['profile'].to(device, non_blocking=True)
-            mu, sigma = model(x)
-            mus.append(mu.cpu().numpy())
-            sigmas.append(sigma.cpu().numpy())
-            ys.append(y.cpu().numpy())
-    return {
-        'mu':    np.concatenate(mus,    axis=0),
-        'sigma': np.concatenate(sigmas, axis=0),
-        'y':     np.concatenate(ys,     axis=0),
-    }
+# Canonical helpers are imported above. Keep thin local aliases so the call
+# sites below read clean.
+train_one_epoch = _train_one_epoch_canonical
+validate        = _validate_canonical
+predict_test    = _predict_test_canonical
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,34 +172,36 @@ def main():
 
     level_weights = torch.tensor(hp['level_weights'], dtype=torch.float32)
 
-    # ── Model + optimizer + criterion ───────────────────────────────────
+    # ── Model + optimizer + criterion (mirrors train_standalone_profile_only_extras) ─
     model_cfg = RetrievalConfig(
+        n_wavelengths=636,
+        n_geometry_inputs=4,
         n_levels=n_levels,
-        hidden_dims=hp['hidden_dims'],
+        hidden_dims=tuple(hp['hidden_dims']),
         dropout=hp['dropout'],
-        activation=hp['activation'],
+        activation=hp.get('activation', 'gelu'),
     )
-    # ProfileOnlyNetworkExtras takes n_extras (=3 here: tau_c, wv_above, wv_in).
-    # The dataset always exposes all three; ablation is via zeroing in
-    # create_dataloaders_extras, not by changing input dim. Sanity-check that
-    # the dataset's x dim matches what the model expects.
-    sample = base_ds[0]
-    input_dim = int(sample['x'].shape[-1])
-    expected   = model_cfg.input_dim + 3
+    N_EXTRAS = 3
+    # base_ds[idx] returns (x, profile, tau) — see LibRadtranDatasetExtras.
+    # Sanity-check dataset / model dim agreement before building the network.
+    sample    = base_ds[0]
+    input_dim = int(sample[0].shape[-1])
+    expected  = model_cfg.input_dim + N_EXTRAS
     if input_dim != expected:
         raise RuntimeError(
             f"Dataset x has {input_dim} features but the model expects "
-            f"{expected} (= {model_cfg.input_dim} base + 3 extras).")
-    model = ProfileOnlyNetworkExtras(model_cfg, n_extras=3).to(device)
+            f"{expected} (= {model_cfg.input_dim} base + {N_EXTRAS} extras).")
+    model = ProfileOnlyNetworkExtras(model_cfg, n_extras=N_EXTRAS).to(device)
 
     criterion = ProfileOnlyLoss(
-        level_weights=level_weights.to(device),
-        lambda_physics=hp.get('lambda_physics', 0.0),
+        config=model_cfg,
+        lambda_physics=hp.get('lambda_physics',      0.1),
         lambda_monotonicity=hp.get('lambda_monotonicity', 0.0),
-        lambda_adiabatic=hp.get('lambda_adiabatic', 0.0),
-        lambda_smoothness=hp.get('lambda_smoothness', 0.0),
+        lambda_adiabatic=hp.get('lambda_adiabatic',  0.1),
+        lambda_smoothness=hp.get('lambda_smoothness', 0.1),
+        level_weights=level_weights,
         sigma_floor=hp.get('sigma_floor', 0.01),
-    )
+    ).to(device)
 
     optimizer = optim.AdamW(model.parameters(),
                             lr=hp['learning_rate'],
@@ -254,33 +210,31 @@ def main():
                                   patience=hp.get('scheduler_patience', 30),
                                   factor=0.5)
 
-    # ── Training loop with warmup + early stop ─────────────────────────
+    # ── Training loop (mirrors train_standalone_profile_only_extras) ───
     n_epochs        = int(hp['n_epochs'])
     early_stop      = int(hp.get('early_stop_patience', 150))
     warmup          = int(hp.get('warmup_steps', 500))
     aug_noise       = float(hp.get('augment_noise_std', 0.0))
+    target_lr       = float(hp['learning_rate'])
 
     best_val   = float('inf')
     best_epoch = -1
     best_state = None
     no_improve = 0
     history    = {'train': [], 'val': []}
-    base_lr    = hp['learning_rate']
+    global_step = 0
 
     t0 = time.time()
     for epoch in range(1, n_epochs + 1):
-        # linear warmup over the first `warmup` STEPS — but here we count
-        # steps as epochs × len(train_loader); for small synthetic dataset,
-        # warmup of 500 steps ≈ 14 epochs at batch=256.
-        steps_so_far = epoch * len(train_loader)
-        if steps_so_far < warmup:
-            for g in optimizer.param_groups:
-                g['lr'] = base_lr * steps_so_far / max(warmup, 1)
-
-        train_loss = train_one_epoch(model, train_loader, criterion,
-                                     optimizer, device,
-                                     augment_noise_std=aug_noise)
-        val_loss   = validate(model, val_loader, criterion, device)
+        # Warmup is handled inside train_one_epoch (per-step LR ramp).
+        train_loss, global_step = train_one_epoch(
+            model, train_loader, criterion, optimizer, device,
+            augment_noise_std=aug_noise,
+            warmup_steps=warmup,
+            target_lr=target_lr,
+            global_step_start=global_step,
+        )
+        val_loss = validate(model, val_loader, criterion, device)
 
         history['train'].append(train_loss)
         history['val'].append(val_loss)
@@ -294,7 +248,7 @@ def main():
         else:
             no_improve += 1
 
-        if steps_so_far >= warmup:
+        if global_step >= warmup:
             scheduler.step(val_loss)
 
         if epoch % 10 == 0 or epoch <= 5:
@@ -310,13 +264,12 @@ def main():
 
     # ── Test on best checkpoint ─────────────────────────────────────────
     model.load_state_dict(best_state)
-    pred = predict_test(model, test_loader, device, n_levels)
-    # Denormalize for physical units (μm)
-    re_min = base_ds.re_min
-    re_max = base_ds.re_max
-    mu_um    = pred['mu']    * (re_max - re_min) + re_min
-    sigma_um = pred['sigma'] * (re_max - re_min)            # scale only
-    y_um     = pred['y']     * (re_max - re_min) + re_min
+    # predict_test returns dict with 'pred', 'pred_std', 'true' — all in μm
+    # (denormalization done inside the canonical helper).
+    pred = predict_test(model, test_loader, device, model_cfg)
+    mu_um    = pred['pred']
+    sigma_um = pred['pred_std']
+    y_um     = pred['true']
 
     err          = mu_um - y_um
     per_level_rmse = np.sqrt(np.mean(err ** 2, axis=0)).tolist()
