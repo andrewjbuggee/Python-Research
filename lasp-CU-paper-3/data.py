@@ -92,7 +92,7 @@ DEFAULT_N_LEVELS = 7
 # lie outside [0, 1], which will trigger a runtime warning in EmulatorDataset.
 WV_ABOVE_LOG10_MIN = 21.0   # log10(molec/cm²) — very dry above-cloud column
 WV_ABOVE_LOG10_MAX = 24.0   # log10(molec/cm²) — very moist above-cloud column
-WV_IN_LOG10_MIN    = 20.0   # log10(molec/cm²) — very thin / dry in-cloud layer
+WV_IN_LOG10_MIN    = 19.0   # log10(molec/cm²) — very thin / dry in-cloud layer
 WV_IN_LOG10_MAX    = 23.0   # log10(molec/cm²) — thick / moist in-cloud layer
 
 # ERA5 full vapor-concentration profile normalization (molecules/cm³, log10 scale).

@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-SPECTRA_DIR     = Path('/Users/andrewbuggee/Downloads/synthetic_dataSet_created_on_29_April_2026')
+SPECTRA_DIR     = Path('/Volumes/My Passport/neural_network_training_data/synthetic_training_data_5_May_2026/')
 SPECTRA_TO_PLOT = 3                       # capped at the number of .mat files found
 PLOT_NOISY      = False                   # True → use Refl_model_with_noise_*_hysics
 RANDOM_SEED     = None                    # None → fresh pick each run
