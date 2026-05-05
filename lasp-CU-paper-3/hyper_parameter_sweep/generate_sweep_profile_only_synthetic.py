@@ -90,7 +90,10 @@ NOISE_STD_RANGE = (0.000, 0.030)
 # Fixed across all runs
 WEIGHT_DECAY        = 1e-4
 SIGMA_FLOOR         = 0.01
-N_EPOCHS            = 1000
+N_EPOCHS            = 1500   # smoke test stalled at no-improve=46 when cap=1000;
+                              # 1500 gives slow configs ~500 extra epochs of headroom,
+                              # but most runs still self-stop near 1100-1200 via the
+                              # 150-epoch early-stop patience below.
 EARLY_STOP_PATIENCE = 150
 SCHEDULER_PATIENCE  = 30
 WARMUP_STEPS        = 500
