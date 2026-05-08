@@ -1,0 +1,12 @@
+sinteractive --account=ucb762_asc1 --partition=atesting_a100 --time=00:59:59 --ntasks=1 --nodes=1 --qos=testing --mem=8G --gres=gpu:1 --cpus-per-task=4
+
+ml anaconda
+
+conda activate dropProfs_nn
+
+python lasp-CU-paper-3/train_standalone_profile_only_extras.py \
+  --run-id 110 \
+  --h5-path /scratch/alpine/anbu8374/neural_network_training_data/synthetic_training_data_7-levels_5_May_2026.h5 \
+  --level-weights uniform \
+  --n-val-profiles 889 --n-test-profiles 889 \
+  --output-dir ./standalone_results_profile_only_extras/synthetic_test_2_889split

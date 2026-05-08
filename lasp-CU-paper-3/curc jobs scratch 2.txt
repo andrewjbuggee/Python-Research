@@ -1,0 +1,59 @@
+python train_standalone.py \
+    --run-id 50 \
+    --h5-path "/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_8-evenZ-levels_17_April_2026.h5" \
+    --level-weights deep
+
+python train_standalone.py \
+    --run-id 50 \
+    --h5-path "/Volumes/My Passport/neural_network_training_data/combined_vocals_oracles_training_data_8-evenZ-levels_17_April_2026.h5" \
+    --level-weights top
+
+sinteractive \
+    --partition=aa100 \
+    --qos=normal \
+    --account=ucb762_asc1 \
+    --time=02:00:00 \
+    --gres=gpu:1 \
+    --mem=8G \
+    --cpus-per-task=4
+
+sinteractive --account=ucb762_asc1 --partition=atesting_a100 --time=00:59:59 --ntasks=1 --nodes=1 --qos=testing --mem=8G --gres=gpu:1 --cpus-per-task=4
+
+sinteractive --account=ucb762_asc1 --partition=amilan --time=00:15:00 --ntasks=1 --nodes=1 --qos=normal --mem=8G --cpus-per-task=4
+
+
+python train_standalone.py --run-id 50 --h5-path /scratch/alpine/anbu8374/neural_network_training_data/combined_vocals_oracles_training_data_8-tauWeighted-levels_17_April_2026.h5 --level-weights top
+
+python train_standalone.py --run-id 50 --h5-path /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/training_data/combined_vocals_oracles_training_data_8-evenZ-levels_17_April_2026.h5 --level-weights top
+
+
+python plot_sweep_profiles.py --results-dir sweep_results_2 --h5-path /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/training_data/combined_vocals_oracles_training_data_10-evenZ-levels_19_April_2026.h5 --top-n 1 --n-examples 6 --device cpu
+
+python plot_sweep_profiles.py --results-dir sweep_results_2 --h5-path /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/training_data/combined_vocals_oracles_training_data_10-levels_17_April_2026.h5 --top-n 1 --n-examples 6 --selection best --show-uncert off --device cpu
+
+cp *180_sza_0_* /Volumes/My Passport/neural_network_training_data/saz0_allProfiles/
+
+
+
+python train_standalone_profile_only_extras.py \
+  --sweep-dir /projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep/sweep_results_profile_only \
+  --run-id 110 \
+  --h5-path /scratch/alpine/anbu8374/neural_network_training_data/synthetic_training_data_7-levels_5_May_2026.h5 \
+  --level-weights uniform \
+  --n-epochs 5 \
+  --output-dir ./standalone_results_profile_only_extras/synthetic_smoke_test
+
+
+python train_standalone_profile_only_extras.py \
+  --sweep-dir /projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep/sweep_results_profile_only \
+  --run-id 110 \
+  --h5-path /scratch/alpine/anbu8374/neural_network_training_data/synthetic_training_data_7-levels_5_May_2026.h5 \
+  --level-weights uniform \
+  --output-dir ./standalone_results_profile_only_extras/synthetic_test_1_May_5_2026
+
+python lasp-CU-paper-3/train_standalone_profile_only_extras.py \
+  --run-id 110 \
+  --h5-path /scratch/alpine/anbu8374/neural_network_training_data/synthetic_training_data_7-levels_5_May_2026.h5 \
+  --level-weights uniform \
+  --n-val-profiles 889 --n-test-profiles 889 \
+  --output-dir ./standalone_results_profile_only_extras/synthetic_test_2_889split
