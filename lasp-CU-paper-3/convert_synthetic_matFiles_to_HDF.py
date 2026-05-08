@@ -56,9 +56,9 @@ from pathlib import Path
 # ============================================================
 
 MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/'
-                'synthetic_training_data_5_May_2026/')
+                'synthetic_training_data_8_May_2026/')
 OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'synthetic_training_data_7-levels_5_May_2026.h5')
+                'synthetic_training_data_7-levels_8_May_2026.h5')
 FIGURES_DIR = Path(__file__).parent / 'Figures' / 'synthetic_dataset_summary'
 
 N_LEVELS      = 7      # cloud profile target grid (already 7 in the synthetic .mat)
