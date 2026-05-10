@@ -42,6 +42,305 @@ N_EXTRAS = 3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Predictor helpers (mirror train_kfold_full_coverage_profile_only.py)
+# ─────────────────────────────────────────────────────────────────────────────
+def adiabaticity_pearson_r(re_raw: np.ndarray, z_raw: np.ndarray) -> float:
+    """Pearson correlation between r_e^3 and (z - z_base) using the per-cloud
+    profile. +1 = perfectly adiabatic, 0 = uncorrelated, negative = inverted
+    (drizzle / heavy entrainment). Identical formulation to
+    `adiabaticity_pearson_r` in train_kfold_full_coverage_profile_only.py."""
+    z_base = z_raw[-1]
+    z_above = np.maximum(z_raw - z_base, 0.0)
+    mask = z_above > 1e-9
+    if mask.sum() < 3:
+        return float('nan')
+    r3 = re_raw[mask] ** 3
+    za = z_above[mask]
+    if r3.std() < 1e-9 or za.std() < 1e-9:
+        return float('nan')
+    return float(np.corrcoef(r3, za)[0, 1])
+
+
+def _pearson_r(x: np.ndarray, y: np.ndarray) -> float:
+    mask = np.isfinite(x) & np.isfinite(y)
+    if mask.sum() < 3:
+        return float('nan')
+    if x[mask].std() < 1e-12 or y[mask].std() < 1e-12:
+        return float('nan')
+    return float(np.corrcoef(x[mask], y[mask])[0, 1])
+
+
+def per_sample_predictors_synthetic(test_dataset_idx: np.ndarray,
+                                     h5_path: Path) -> dict:
+    """Pull per-sample predictors from the synthetic HDF5 for the test set.
+
+    For the synthetic dataset every row IS a unique cloud, so per-sample
+    predictors == per-cloud predictors (no fingerprint dedup needed). This
+    is the key difference from the kfold equivalent.
+    """
+    import h5py
+    sort_order   = np.argsort(test_dataset_idx)
+    unsort_order = np.argsort(sort_order)
+    sorted_idx   = test_dataset_idx[sort_order]
+
+    with h5py.File(h5_path, 'r') as f:
+        tau_c_s   = f['tau_c'][sorted_idx]
+        profs_s   = f['profiles_raw'][sorted_idx]
+        z_s       = f['profiles_raw_z'][sorted_idx]
+        nlev_s    = f['profile_n_levels'][sorted_idx]
+
+    tau_c    = tau_c_s[unsort_order]
+    profs    = profs_s[unsort_order]
+    z_arr    = z_s[unsort_order]
+    nlev_arr = nlev_s[unsort_order]
+
+    n = len(test_dataset_idx)
+    adiab          = np.full(n, np.nan, dtype=np.float32)
+    drizzle_proxy  = np.full(n, np.nan, dtype=np.float32)
+    re_top         = np.full(n, np.nan, dtype=np.float32)
+    re_base        = np.full(n, np.nan, dtype=np.float32)
+    for i in range(n):
+        nL = int(nlev_arr[i])
+        re = profs[i, :nL].astype(np.float64)
+        z  = z_arr[i, :nL].astype(np.float64)
+        adiab[i]         = adiabaticity_pearson_r(re, z)
+        drizzle_proxy[i] = float(re[int(0.7 * nL):].max())   # max in lower 30%
+        re_top[i]        = float(re[0])
+        re_base[i]       = float(re[-1])
+
+    return {
+        'tau_c':         np.asarray(tau_c,   dtype=np.float32),
+        'adiab_score':   adiab,
+        'drizzle_proxy': drizzle_proxy,
+        're_top':        re_top,
+        're_base':       re_base,
+    }
+
+
+def plot_per_level_rmse(pred: np.ndarray, true: np.ndarray,
+                        pred_std: np.ndarray, out_path: Path, dpi: int = 500):
+    """Per-level RMSE on a vertical axis with level 1 at cloud top.
+
+    Mirrors the rotated-axis convention used by compare_sweep_profile_only.py
+    (sweep_per_level_top10.png). Also overlays the median predicted σ per
+    level so calibration can be eyeballed alongside the actual error.
+    """
+    n_levels       = pred.shape[1]
+    err            = pred - true
+    rmse_per_level = np.sqrt(np.mean(err ** 2, axis=0))
+    sigma_med      = np.median(pred_std, axis=0)
+    levels         = np.arange(1, n_levels + 1)
+
+    fig, ax = plt.subplots(figsize=(7, 8))
+    ax.plot(rmse_per_level, levels, 'o-', color='#0072B2', linewidth=1.6,
+            markersize=6, label='RMSE')
+    ax.plot(sigma_med, levels, 's--', color='#D55E00', linewidth=1.3,
+            markersize=5, alpha=0.85, label='median predicted σ')
+    ax.set_xlabel(r'$r_e$ error (μm)', fontsize=11)
+    ax.set_ylabel(f'Vertical level (1 = cloud top, {n_levels} = cloud base)',
+                  fontsize=11)
+    ax.set_title(f'Per-level RMSE — test set ({pred.shape[0]} samples)',
+                 fontsize=12)
+    ax.set_yticks(levels)
+    ax.invert_yaxis()
+    ax.legend(loc='best', fontsize=9)
+    ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+def plot_calibration_scatter(pred: np.ndarray, pred_std: np.ndarray,
+                             true: np.ndarray, out_path: Path,
+                             dpi: int = 500):
+    """Predicted σ vs |actual error| — a perfectly calibrated model has
+    points scattered around y = x with mean(|err|) ≈ mean(σ).
+
+    Includes the 1:1 diagonal, a per-level summary scatter (mean σ vs
+    mean |err| at each level), and the global RMSE/σ ratio in the title.
+    """
+    err   = pred - true
+    abserr = np.abs(err)
+
+    n_lev = pred.shape[1]
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    # All points: σ vs |err|, hexbin to handle large N gracefully
+    ax = axes[0]
+    hb = ax.hexbin(pred_std.flatten(), abserr.flatten(),
+                   gridsize=60, mincnt=1, cmap='viridis', bins='log')
+    plt.colorbar(hb, ax=ax, label='log10 count')
+    lim = max(pred_std.max(), abserr.max()) * 1.05
+    ax.plot([0, lim], [0, lim], 'r--', linewidth=1, label='1:1 (calibrated)')
+    ax.set_xlabel('Predicted σ (μm)')
+    ax.set_ylabel('|Actual error| (μm)')
+    ax.set_xlim(0, lim); ax.set_ylim(0, lim)
+    ax.set_aspect('equal')
+    rmse_global  = float(np.sqrt(np.mean(err ** 2)))
+    sigma_mean   = float(pred_std.mean())
+    ax.set_title(f'All test (sample × level) — RMSE/σ = '
+                 f'{rmse_global / max(sigma_mean, 1e-9):.2f}')
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    # Per-level summary
+    ax = axes[1]
+    rmse_lvl  = np.sqrt(np.mean(err ** 2, axis=0))
+    sigma_lvl = pred_std.mean(axis=0)
+    levels    = np.arange(1, n_lev + 1)
+    ax.scatter(sigma_lvl, rmse_lvl, c=levels, cmap='plasma', s=60,
+               edgecolors='black', linewidths=0.5)
+    for i, L in enumerate(levels):
+        ax.annotate(f'L{L}', (sigma_lvl[i], rmse_lvl[i]),
+                    fontsize=8, xytext=(4, 4), textcoords='offset points')
+    lim2 = max(rmse_lvl.max(), sigma_lvl.max()) * 1.15
+    ax.plot([0, lim2], [0, lim2], 'r--', linewidth=1, label='1:1 (calibrated)')
+    ax.set_xlabel('Mean predicted σ at level (μm)')
+    ax.set_ylabel('RMSE at level (μm)')
+    ax.set_xlim(0, lim2); ax.set_ylim(0, lim2)
+    ax.set_aspect('equal')
+    ax.set_title('Per-level calibration')
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    fig.suptitle('Uncertainty calibration: predicted σ vs actual error',
+                 fontsize=13, y=1.005)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+def plot_rmse_heatmap(pred: np.ndarray, true: np.ndarray, out_path: Path,
+                      dpi: int = 500):
+    """Sorted heatmap of per-sample |error| — rows are test samples (sorted
+    by per-sample mean RMSE), columns are vertical levels (1=top → N=base).
+    Lets you visually spot whether bad-RMSE samples are bad at one level or
+    across all levels."""
+    err  = np.abs(pred - true)                              # (n_samp, n_lev)
+    per_sample_rmse = np.sqrt(np.mean((pred - true) ** 2, axis=1))
+    order = np.argsort(per_sample_rmse)
+    err_sorted = err[order]
+
+    fig, ax = plt.subplots(figsize=(11, 7))
+    im = ax.imshow(err_sorted, aspect='auto', cmap='magma',
+                   origin='lower',
+                   extent=[0.5, err.shape[1] + 0.5, 1, err.shape[0]],
+                   vmin=0,
+                   vmax=float(np.percentile(err_sorted, 99)))
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('|error|  (μm)')
+
+    ax.set_xlabel(f'Vertical level (1 = cloud top, {err.shape[1]} = cloud base)')
+    ax.set_ylabel('Test sample (sorted by mean RMSE, low → high)')
+    ax.set_xticks(np.arange(1, err.shape[1] + 1))
+    ax.set_title(f'Per-sample |error| heatmap, sorted ({err.shape[0]} samples)')
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+def plot_rmse_vs_geometry(per_sample_rmse: np.ndarray,
+                          h5_indices: np.ndarray,
+                          h5_path: Path,
+                          out_path: Path, dpi: int = 500):
+    """2x2 panel: per-sample RMSE vs each of (sza, vza, vaz, saz). Pearson r
+    in each title. Verifies the model isn't systematically biased by viewing
+    geometry."""
+    import h5py
+    sort_order   = np.argsort(h5_indices)
+    unsort_order = np.argsort(sort_order)
+    sorted_idx   = h5_indices[sort_order]
+    with h5py.File(h5_path, 'r') as f:
+        sza_s = f['sza'][sorted_idx]
+        vza_s = f['vza'][sorted_idx]
+        vaz_s = f['vaz'][sorted_idx]
+        saz_s = f['saz'][sorted_idx]
+    sza = sza_s[unsort_order]
+    vza = vza_s[unsort_order]
+    vaz = vaz_s[unsort_order]
+    saz = saz_s[unsort_order]
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+
+    def _panel(ax, x, name, color):
+        ax.scatter(x, per_sample_rmse, s=8, alpha=0.4,
+                   color=color, edgecolors='none')
+        r = _pearson_r(np.asarray(x, dtype=float), per_sample_rmse)
+        ax.set_xlabel(name + ' (deg)')
+        ax.set_ylabel('Per-sample RMSE (μm)')
+        ax.set_title(fr'RMSE vs {name}    (Pearson $r$ = {r:+.3f})')
+        ax.grid(alpha=0.3)
+
+    _panel(axes[0, 0], sza, 'SZA', '#0072B2')
+    _panel(axes[0, 1], vza, 'VZA', '#009E73')
+    _panel(axes[1, 0], vaz, 'VAZ', '#D55E00')
+    _panel(axes[1, 1], saz, 'SAZ', '#CC79A7')
+
+    fig.suptitle('Per-sample RMSE vs viewing/solar geometry', fontsize=13, y=1.005)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+def plot_per_cloud_predictors(per_sample_rmse: np.ndarray,
+                              predictors: dict,
+                              out_path: Path,
+                              dpi: int = 500):
+    """2x2 panel: per-sample RMSE vs three physical predictors + CDF.
+
+    Top-left: RMSE vs τ_c (log x-axis)
+    Top-right: RMSE vs adiabaticity score (Pearson r of r_e³ vs height-above-base)
+    Bottom-left: RMSE vs drizzle proxy (max r_e in lower 30 % of cloud)
+    Bottom-right: CDF of per-sample RMSE
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+
+    def _scatter(ax, x, name, xlog=False, color='#0072B2'):
+        valid = np.isfinite(x) & np.isfinite(per_sample_rmse)
+        ax.scatter(x[valid], per_sample_rmse[valid], s=8, alpha=0.4,
+                   color=color, edgecolors='none')
+        if xlog:
+            ax.set_xscale('log')
+        ax.set_xlabel(name)
+        ax.set_ylabel('Per-sample mean RMSE (μm)')
+        r = _pearson_r(x, per_sample_rmse)
+        ax.set_title(fr'RMSE vs {name}    (Pearson $r$ = {r:+.3f})',
+                     fontsize=11)
+        ax.grid(alpha=0.3, which='both' if xlog else 'major')
+
+    _scatter(axes[0, 0], predictors['tau_c'],         r'$\tau_c$',
+             xlog=True, color='#0072B2')
+    _scatter(axes[0, 1], predictors['adiab_score'],
+             'adiabaticity (Pearson $r$ of $r_e^3$ vs $z-z_{base}$)',
+             color='#009E73')
+    _scatter(axes[1, 0], predictors['drizzle_proxy'],
+             'drizzle proxy:  max $r_e$ in lower 30 % (μm)',
+             color='#D55E00')
+
+    # CDF
+    ax = axes[1, 1]
+    x_sorted = np.sort(per_sample_rmse[np.isfinite(per_sample_rmse)])
+    cdf = np.arange(1, len(x_sorted) + 1) / len(x_sorted)
+    ax.plot(x_sorted, cdf, color='#000000', linewidth=1.5)
+    pcts = (10, 25, 50, 75, 90)
+    pct_vals = np.percentile(x_sorted, pcts)
+    for p, v in zip(pcts, pct_vals):
+        ax.axvline(v, color='0.6', linestyle=':', linewidth=0.8)
+        ax.text(v, 1.02, f'p{p}', fontsize=8, ha='center', va='bottom')
+    ax.set_xlabel('Per-sample mean RMSE (μm)')
+    ax.set_ylabel('Cumulative fraction')
+    ax.set_title('CDF of per-sample RMSE on test set')
+    ax.set_ylim(0, 1.05)
+    ax.grid(alpha=0.3)
+
+    fig.suptitle('Per-Cloud RMSE Diagnostics (test set)',
+                 fontsize=13, y=1.005)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 def parse_args():
@@ -310,7 +609,13 @@ def main():
     out_path = results_dir / args.output_name
     plot_percentile_panel(pred, pred_std, true, z_test_km_packed,
                           selected, median_rmse_per_level, out_path)
-    print(f'\nFigure saved → {out_path}')
+    print(f'\nPercentile figure → {out_path}')
+
+    # Per-cloud predictor diagnostics (RMSE vs τ_c, adiabaticity, drizzle proxy + CDF)
+    predictors = per_sample_predictors_synthetic(test_idx_global, h5_path)
+    pred_path  = results_dir / 'per_cloud_rmse_vs_predictors.png'
+    plot_per_cloud_predictors(per_sample_rmse, predictors, pred_path)
+    print(f'Predictors figure → {pred_path}')
 
 
 if __name__ == '__main__':

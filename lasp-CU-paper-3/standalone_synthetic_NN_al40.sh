@@ -23,12 +23,12 @@
 #SBATCH --account=ucb762_asc1
 #SBATCH --partition=al40
 #SBATCH --qos=normal              # al40 uses normal QOS; testing QOS is for atesting_* only
-#SBATCH --time=02:00:00           # al40 wall budget — generous for 1500 epochs on ~42k samples
+#SBATCH --time=01:00:00           # al40 wall budget — generous for 1500 epochs on ~42k samples
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --mem=16G                 # plenty for ~42k samples + A100
+#SBATCH --mem=8G                 # plenty for ~42k samples + A100
 #SBATCH --job-name=synth_solo_test
 #SBATCH --output=logs/standalone_synth_%A.out
 #SBATCH --error=logs/standalone_synth_%A.err
@@ -50,6 +50,13 @@ H5_PATH="/scratch/alpine/anbu8374/neural_network_training_data/synthetic_trainin
 # testing window. Set to empty string to use the run config's full n_epochs.
 N_EPOCHS_OVERRIDE="1500"
 
+# K-fold mode for the trainer. 1 = single 80/10/10 split (current default).
+# K > 1 = full-coverage K-fold; the trainer trains K models, each tested on a
+# disjoint partition, and runs all aggregate diagnostic plots on the
+# concatenated predictions covering the entire dataset. Wall time scales
+# roughly linearly with K, so bump --time below if you increase this.
+N_FOLDS="1"
+
 # Output dir (per-variant + per-run, easy to identify alongside other tests).
 H5_STEM=$(basename "$H5_PATH" .h5)
 OUTPUT_DIR="/projects/anbu8374/Python-Research/lasp-CU-paper-3/standalone_results_profile_only_synthetic/${VARIANT}_run$(printf '%03d' ${RUN_ID})_${H5_STEM}_atest"
@@ -65,6 +72,7 @@ echo "Run ID:        $RUN_ID"
 echo "HDF5:          $H5_PATH"
 echo "Output dir:    $OUTPUT_DIR"
 echo "n_epochs cap:  ${N_EPOCHS_OVERRIDE:-<sweep config default>}"
+echo "n_folds:       $N_FOLDS"
 echo "============================================"
 
 # ----- Environment ----------------------------------------------------------
@@ -98,6 +106,7 @@ time python train_standalone_profile_only_synthetic.py \
     --run-id      "$RUN_ID" \
     --h5-path     "$H5_PATH" \
     --output-dir  "$OUTPUT_DIR" \
+    --n-folds     "$N_FOLDS" \
     $EXTRA_FLAGS
 
 EXIT_CODE=$?
