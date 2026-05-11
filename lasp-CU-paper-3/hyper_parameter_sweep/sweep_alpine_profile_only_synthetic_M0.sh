@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=ucb762_asc1
 #SBATCH --nodes=1
-#SBATCH --time=01:30:00            # Per-config wall budget. Single 80/10/10
+#SBATCH --time=01:59:00            # Per-config wall budget. Single 80/10/10
                                    # split, ~7 min/config on al40 from the
                                    # smoke test extrapolation; 1.5 h is a
                                    # 12× safety margin.
@@ -11,7 +11,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --job-name=pinn_synth_M0
+#SBATCH --job-name=NN_synth_sweep_M0
 #SBATCH --output=logs/sweep_synth_M0_%A_%a.out
 #SBATCH --error=logs/sweep_synth_M0_%A_%a.err
 #SBATCH --mail-type=ALL
@@ -27,7 +27,7 @@
 #   2. Upload to Alpine.
 #   3. Make sure the synthetic HDF5 is at:
 #      /scratch/alpine/anbu8374/neural_network_training_data/
-#        synthetic_training_data_7-levels_5_May_2026.h5
+#        synthetic_training_data_7-levels_8_May_2026.h5
 #
 # Submit with:
 #   cd /projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep

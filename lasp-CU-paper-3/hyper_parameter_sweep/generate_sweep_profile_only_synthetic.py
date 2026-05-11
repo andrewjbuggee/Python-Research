@@ -2,7 +2,7 @@
 generate_sweep_profile_only_synthetic.py
 
 Sweep generator for the profile-only model on the synthetic-cloud training
-dataset (`synthetic_training_data_7-levels_5_May_2026.h5`, 8,888 samples,
+dataset (`synthetic_training_data_7-levels_8_May_2026.h5`, 8,888 samples,
 7-level r_e profiles).
 
 Same axes / sampling strategy as `generate_sweep_profile_only.py` but adapted
@@ -39,7 +39,7 @@ import numpy as np
 # ─────────────────────────────────────────────────────────────────────────────
 N_LEVELS = 7
 
-H5_FILENAME = 'synthetic_training_data_7-levels_5_May_2026.h5'
+H5_FILENAME = 'synthetic_training_data_7-levels_8_May_2026.h5'
 H5_DIR_DEFAULT = '/scratch/alpine/anbu8374/neural_network_training_data'
 
 FIXED_PER_RUN = {

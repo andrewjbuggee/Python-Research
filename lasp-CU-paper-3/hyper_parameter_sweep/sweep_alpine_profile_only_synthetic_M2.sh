@@ -27,7 +27,7 @@
 #   2. Upload to Alpine.
 #   3. Make sure the synthetic HDF5 is at:
 #      /scratch/alpine/anbu8374/neural_network_training_data/
-#        synthetic_training_data_7-levels_5_May_2026.h5
+#        synthetic_training_data_7-levels_8_May_2026.h5
 #
 # Submit with:
 #   cd /projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep
