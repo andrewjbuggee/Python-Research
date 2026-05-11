@@ -119,32 +119,114 @@ def per_sample_predictors_synthetic(test_dataset_idx: np.ndarray,
 
 def plot_per_level_rmse(pred: np.ndarray, true: np.ndarray,
                         pred_std: np.ndarray, out_path: Path, dpi: int = 500):
-    """Per-level RMSE on a vertical axis with level 1 at cloud top.
+    """Per-level error metrics on a vertical axis with level 1 at cloud top.
 
-    Mirrors the rotated-axis convention used by compare_sweep_profile_only.py
-    (sweep_per_level_top10.png). Also overlays the median predicted σ per
-    level so calibration can be eyeballed alongside the actual error.
+    Three curves are plotted, all in μm, all per level, all consolidating
+    across the test samples on axis 0:
+        • Mean RMSE per level       = sqrt(mean(err², axis=samples))
+        • Median |error| per level  = median(|err|, axis=samples)
+                                      (the robust, median-based analogue of
+                                      RMSE — insensitive to outliers)
+        • Mean predicted σ          = mean(pred_std, axis=samples)
+                                      (what the network thinks the per-level
+                                      uncertainty is — useful as a calibration
+                                      cross-check next to the two error curves)
+
+    Showing the mean-based and median-based error metrics together makes it
+    immediately visible whether a level's high RMSE is driven by a few bad
+    samples (RMSE >> median |err|) or by uniformly worse performance
+    (RMSE ≈ median |err|). The previous version of this plot only showed the
+    mean RMSE and the median predicted σ, which made it tempting to misread
+    the σ curve as 'median RMSE'.
     """
     n_levels       = pred.shape[1]
     err            = pred - true
-    rmse_per_level = np.sqrt(np.mean(err ** 2, axis=0))
-    sigma_med      = np.median(pred_std, axis=0)
+    rmse_mean_lvl  = np.sqrt(np.mean(err ** 2, axis=0))     # mean-based
+    median_abserr  = np.median(np.abs(err),       axis=0)   # median-based
+    sigma_mean_lvl = np.mean(pred_std,            axis=0)   # network's σ
     levels         = np.arange(1, n_levels + 1)
 
     fig, ax = plt.subplots(figsize=(7, 8))
-    ax.plot(rmse_per_level, levels, 'o-', color='#0072B2', linewidth=1.6,
-            markersize=6, label='RMSE')
-    ax.plot(sigma_med, levels, 's--', color='#D55E00', linewidth=1.3,
-            markersize=5, alpha=0.85, label='median predicted σ')
-    ax.set_xlabel(r'$r_e$ error (μm)', fontsize=11)
+    ax.plot(rmse_mean_lvl, levels, 'o-',  color='#0072B2',
+            linewidth=1.7, markersize=6,
+            label='Mean RMSE per level (sqrt mean err²)')
+    ax.plot(median_abserr, levels, 's-',  color='#009E73',
+            linewidth=1.5, markersize=5,
+            label='Median |error| per level (median-based)')
+    ax.plot(sigma_mean_lvl, levels, 'd--', color='#D55E00',
+            linewidth=1.3, markersize=5, alpha=0.85,
+            label='Mean predicted σ per level (network)')
+
+    ax.set_xlabel(r'Per-level error metric (μm)', fontsize=11)
     ax.set_ylabel(f'Vertical level (1 = cloud top, {n_levels} = cloud base)',
                   fontsize=11)
-    ax.set_title(f'Per-level RMSE — test set ({pred.shape[0]} samples)',
+    ax.set_title(f'Per-level error — test set ({pred.shape[0]} samples)',
                  fontsize=12)
     ax.set_yticks(levels)
     ax.invert_yaxis()
+    ax.set_xlim(left=0)
     ax.legend(loc='best', fontsize=9)
     ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+
+
+def plot_rmse_distribution(per_sample_rmse: np.ndarray, out_path: Path,
+                           dpi: int = 500, n_bins: int = 50):
+    """Two-panel: top = histogram of per-sample RMSE, bottom = CDF.
+
+    Both panels share the x-axis. The median (p50) is marked with a vertical
+    line on both, and p10/p25/p75/p90 are marked on the CDF for orientation.
+    Mirrors the layout used by the kfold pipeline's per_profile_rmse_distribution.
+    """
+    x = per_sample_rmse[np.isfinite(per_sample_rmse)]
+    p10, p25, p50, p75, p90 = np.percentile(x, [10, 25, 50, 75, 90])
+
+    fig, axes = plt.subplots(2, 1, figsize=(9, 8), sharex=True,
+                              gridspec_kw={'height_ratios': [1, 1]})
+
+    # ── Top: histogram ─────────────────────────────────────────────────────
+    ax = axes[0]
+    ax.hist(x, bins=n_bins, color='#0072B2', edgecolor='white',
+            linewidth=0.5, alpha=0.85)
+    ax.axvline(p50, color='black', linewidth=1.4, linestyle='--',
+               label=f'median = {p50:.3f} μm')
+    ax.set_ylabel('Count')
+    ax.set_title(f'Per-sample mean RMSE distribution ({x.size:,} samples)')
+    ax.legend(loc='best', fontsize=9)
+    ax.grid(alpha=0.3)
+    # quick stats annotation
+    ax.text(0.98, 0.95,
+            f'mean   = {x.mean():.3f} μm\n'
+            f'std    = {x.std(ddof=1):.3f} μm\n'
+            f'p10    = {p10:.3f} μm\n'
+            f'p90    = {p90:.3f} μm',
+            transform=ax.transAxes, ha='right', va='top',
+            fontsize=9, family='monospace',
+            bbox=dict(boxstyle='round,pad=0.4',
+                      facecolor='white', alpha=0.85, edgecolor='0.7'))
+
+    # ── Bottom: CDF ────────────────────────────────────────────────────────
+    ax = axes[1]
+    x_sorted = np.sort(x)
+    cdf = np.arange(1, len(x_sorted) + 1) / len(x_sorted)
+    ax.plot(x_sorted, cdf, color='black', linewidth=1.6)
+    ax.axvline(p50, color='black', linewidth=1.4, linestyle='--',
+               label=f'median (p50) = {p50:.3f} μm')
+    for p, v, label in [(10, p10, 'p10'), (25, p25, 'p25'),
+                        (75, p75, 'p75'), (90, p90, 'p90')]:
+        ax.axvline(v, color='0.55', linewidth=0.8, linestyle=':')
+        ax.text(v, 1.02, label, fontsize=8, ha='center', va='bottom',
+                color='0.4')
+    ax.axhline(0.5, color='0.55', linewidth=0.6, linestyle=':')
+
+    ax.set_xlabel('Per-sample mean RMSE (μm)')
+    ax.set_ylabel('Cumulative fraction')
+    ax.set_ylim(0, 1.05)
+    ax.legend(loc='lower right', fontsize=9)
+    ax.grid(alpha=0.3)
+
     plt.tight_layout()
     plt.savefig(out_path, dpi=dpi, bbox_inches='tight')
     plt.close()
@@ -361,29 +443,104 @@ def parse_args():
     p.add_argument('--seed', type=int, default=42,
                    help='Must match the seed used at training time so the '
                         'profile-aware split reproduces (default 42).')
+    p.add_argument('--pick-seed', type=int, default=None,
+                   help='Optional seed for the percentile-picker jitter. '
+                        'Pass an int to randomize WHICH samples are shown in '
+                        'profiles_true_vs_pred.png within ±2.5pp of each '
+                        'requested percentile (useful for trying different '
+                        'representative draws). Default: deterministic '
+                        'closest-rank picks.')
+    p.add_argument('--h5-path', type=str, default=None,
+                   help='Full override of the HDF5 path stored in the run '
+                        "config. Use when running this script on a machine "
+                        "(e.g., your laptop) that has the data file in a "
+                        "different location than the supercomputer that "
+                        "trained the model. If omitted, the script first "
+                        "tries the path saved in config.json, then falls back "
+                        "to <repo_root>/training_data/<basename> for local "
+                        "use.")
     return p.parse_args()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HDF5 path resolver — handles "trained on supercomputer, replotting on
+# laptop" gracefully without needing a hand-edit of config.json.
+# ─────────────────────────────────────────────────────────────────────────────
+def _resolve_h5_path(saved: str, override: str | None) -> Path:
+    repo_root = Path(__file__).resolve().parent
+
+    # 1. Explicit CLI override wins
+    if override:
+        p = Path(override).expanduser().resolve()
+        if p.exists():
+            return p
+        raise FileNotFoundError(f'--h5-path was supplied but not found: {p}')
+
+    # 2. Try the path saved in config.json (works when results-dir and h5
+    #    are both on the original training machine).
+    p_saved = Path(saved).expanduser().resolve()
+    if p_saved.exists():
+        return p_saved
+
+    # 3. Local fallback — drop the supercomputer prefix and look in the repo's
+    #    training_data/ subdirectory, keyed by the basename only. This is the
+    #    common "rsynced standalone results back to laptop" case.
+    fallback = (repo_root / 'training_data' / Path(saved).name).resolve()
+    if fallback.exists():
+        print(f'  Saved h5_path ({p_saved}) not found locally — '
+              f'using fallback: {fallback}')
+        return fallback
+
+    raise FileNotFoundError(
+        f'Could not locate the HDF5 file. Tried:\n'
+        f'  1. saved config path : {p_saved}\n'
+        f'  2. local fallback    : {fallback}\n'
+        f'Pass --h5-path <path> to point at a different location.'
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Profile selection
 # ─────────────────────────────────────────────────────────────────────────────
 def select_at_percentiles(per_sample_rmse: np.ndarray,
-                          percentiles=DEFAULT_PERCENTILES) -> list[dict]:
+                          percentiles=DEFAULT_PERCENTILES,
+                          seed: int | None = None,
+                          jitter_pct: float = 2.5) -> list[dict]:
     """For each requested percentile return the sample index closest to that
-    percentile of the empirical per-sample RMSE distribution. Mirrors the
-    shape of select_profiles_at_percentiles in regenerate_kfold_figures.py.
+    percentile of the empirical per-sample RMSE distribution.
+
+    Parameters
+    ----------
+    seed : int or None
+        If None (default), the picked sample is the EXACT closest-rank sample
+        — fully deterministic. If an integer, a small uniform jitter of
+        ±jitter_pct is added to each target percentile so re-running with a
+        different seed produces visually different (but still
+        percentile-representative) example profiles. Useful for inspecting
+        multiple draws without retraining.
+    jitter_pct : float
+        Half-width of the percentile jitter, in percentile units. Default 2.5
+        (so picks fall within ±2.5 pp of the requested percentile when seeded).
     """
     sort_idx = np.argsort(per_sample_rmse)
-    n = len(per_sample_rmse)
+    n        = len(per_sample_rmse)
+    rng      = np.random.default_rng(seed) if seed is not None else None
+
     out = []
     for p in percentiles:
-        rank = int(round(p / 100.0 * (n - 1)))
+        if rng is not None:
+            p_eff = float(np.clip(p + rng.uniform(-jitter_pct, jitter_pct),
+                                  0.0, 100.0))
+        else:
+            p_eff = float(p)
+        rank = int(round(p_eff / 100.0 * (n - 1)))
         i    = int(sort_idx[rank])
         out.append({
-            'sample_idx': i,
-            'rmse_um':    float(per_sample_rmse[i]),
-            'percentile': float(p),
-            'rank':       rank,
+            'sample_idx':       i,
+            'rmse_um':          float(per_sample_rmse[i]),
+            'percentile':       float(p),         # the REQUESTED percentile
+            'percentile_eff':   p_eff,            # the (jittered) one used
+            'rank':             rank,
         })
     return out
 
@@ -393,17 +550,25 @@ def select_at_percentiles(per_sample_rmse: np.ndarray,
 # ─────────────────────────────────────────────────────────────────────────────
 def plot_percentile_panel(pred, pred_std, true_um, z_test_km,
                           selected: list[dict],
-                          median_rmse_per_level: np.ndarray,
+                          median_rmse_per_level: np.ndarray | None,   # kept for API stability; unused
                           out_path: Path,
                           dpi: int = 500):
-    """2x3 panel mirroring regenerate_kfold_figures.plot_example_profiles
-    style: depth-from-cloud-top on the inverted y-axis, r_e on the x-axis,
-    pred ± per-level median-RMSE band."""
+    """2x3 panel of true-vs-predicted droplet profiles.
+
+    Each sample's prediction is shown with its own per-sample ±1 σ error bars
+    (the network's own uncertainty estimate) — the previously-shown shaded
+    band of "median RMSE per level across the test set" was removed because
+    it conflated the per-sample network uncertainty with a population-level
+    statistic and visually dominated the plot.
+
+    `median_rmse_per_level` is retained in the signature only for backward
+    compatibility with existing call sites (pass `None` if you don't have it).
+    """
+    _ = median_rmse_per_level   # intentionally unused — see docstring
     fig, axes = plt.subplots(2, 3, figsize=(15, 9))
 
     true_color = 'black'
     pred_color = '#D55E00'   # vermillion (color-blind safe)
-    band_alpha = 0.20
 
     n_levels = pred.shape[1]
     for k, (ax, sel) in enumerate(zip(axes.flat, selected)):
@@ -414,23 +579,15 @@ def plot_percentile_panel(pred, pred_std, true_um, z_test_km,
         z_norm  = np.linspace(0.0, 1.0, n_levels)
         z_m     = z_norm * thick_m   # depth from cloud top, in meters
 
-        # True (7-level) — black markers + thin connector line
+        # True (n-level) — black markers + thin connector line
         ax.plot(true_um[i], z_m, 'o-', color=true_color, markersize=4,
                 linewidth=0.9, label=fr'True ({n_levels}-level)')
 
-        # Predicted ± median per-level RMSE band
-        lo = pred[i] - median_rmse_per_level
-        hi = pred[i] + median_rmse_per_level
-        ax.fill_betweenx(z_m, lo, hi, color=pred_color, alpha=band_alpha,
-                         linewidth=0,
-                         label=r'NN $\pm$ median RMSE per level')
-        ax.plot(pred[i], z_m, 's--', color=pred_color, markersize=4,
-                linewidth=1.3, label='NN estimate')
-
-        # Per-sample ±1σ from the network (thin error bars), shown for context.
+        # Predicted profile + per-sample ±1 σ from the network as error bars.
         ax.errorbar(pred[i], z_m, xerr=pred_std[i],
-                    fmt='none', ecolor=pred_color, elinewidth=0.7, capsize=2,
-                    alpha=0.6)
+                    fmt='s--', color=pred_color, markersize=4, linewidth=1.3,
+                    elinewidth=1.0, capsize=3,
+                    label=r'NN estimate $\pm 1\sigma$ (per-sample)')
 
         ax.invert_yaxis()
         ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.5)
@@ -478,9 +635,7 @@ def main():
         cfg = json.load(f)
     hp = cfg['hyperparams']
     extras_active = cfg['extras_active']
-    h5_path = Path(cfg['h5_path']).resolve()
-    if not h5_path.exists():
-        raise FileNotFoundError(f'HDF5 from saved config not found: {h5_path}')
+    h5_path = _resolve_h5_path(cfg['h5_path'], args.h5_path)
 
     # Device
     if args.device:
@@ -567,7 +722,10 @@ def main():
 
     # Profile selection at the requested percentiles
     selected = select_at_percentiles(per_sample_rmse,
-                                     tuple(args.percentiles))
+                                     tuple(args.percentiles),
+                                     seed=args.pick_seed)
+    if args.pick_seed is not None:
+        print(f'  (percentile picks jittered with --pick-seed {args.pick_seed})')
     print('\nSelected samples:')
     for s in selected:
         print(f'  pct {int(s["percentile"]):>2}  rank {s["rank"]:>5}  '
@@ -616,6 +774,29 @@ def main():
     pred_path  = results_dir / 'per_cloud_rmse_vs_predictors.png'
     plot_per_cloud_predictors(per_sample_rmse, predictors, pred_path)
     print(f'Predictors figure → {pred_path}')
+
+    # Additional diagnostics — same set the trainer produces in single-split
+    # mode, so a re-run here gives identical-looking outputs without retraining.
+    plvl_path = results_dir / 'per_level_rmse.png'
+    plot_per_level_rmse(pred, true, pred_std, plvl_path)
+    print(f'Per-level RMSE → {plvl_path}')
+
+    cal_path  = results_dir / 'calibration_scatter.png'
+    plot_calibration_scatter(pred, pred_std, true, cal_path)
+    print(f'Calibration → {cal_path}')
+
+    heat_path = results_dir / 'rmse_heatmap.png'
+    plot_rmse_heatmap(pred, true, heat_path)
+    print(f'RMSE heatmap → {heat_path}')
+
+    geom_path = results_dir / 'rmse_vs_geometry.png'
+    plot_rmse_vs_geometry(per_sample_rmse, test_idx_global, h5_path,
+                          geom_path)
+    print(f'RMSE vs geometry → {geom_path}')
+
+    dist_path = results_dir / 'rmse_distribution.png'
+    plot_rmse_distribution(per_sample_rmse, dist_path)
+    print(f'RMSE distribution → {dist_path}')
 
 
 if __name__ == '__main__':

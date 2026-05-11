@@ -23,15 +23,15 @@
 #SBATCH --account=ucb762_asc1
 #SBATCH --partition=al40
 #SBATCH --qos=normal              # al40 uses normal QOS; testing QOS is for atesting_* only
-#SBATCH --time=01:00:00           # al40 wall budget — generous for 1500 epochs on ~42k samples
+#SBATCH --time=13:00:00           # al40 wall budget — generous for 1500 epochs on ~42k samples
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --mem=8G                 # plenty for ~42k samples + A100
-#SBATCH --job-name=synth_solo_test
-#SBATCH --output=logs/standalone_synth_%A.out
-#SBATCH --error=logs/standalone_synth_%A.err
+#SBATCH --job-name=synth_solo_kfold
+#SBATCH --output=logs/standalone_synth_kfold_%A.out
+#SBATCH --error=logs/standalone_synth_kfold_%A.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
 
@@ -55,7 +55,7 @@ N_EPOCHS_OVERRIDE="1500"
 # disjoint partition, and runs all aggregate diagnostic plots on the
 # concatenated predictions covering the entire dataset. Wall time scales
 # roughly linearly with K, so bump --time below if you increase this.
-N_FOLDS="1"
+N_FOLDS="20"
 
 # Output dir (per-variant + per-run, easy to identify alongside other tests).
 H5_STEM=$(basename "$H5_PATH" .h5)

@@ -88,6 +88,7 @@ from plot_percentile_profiles_synthetic import (
     plot_calibration_scatter,
     plot_rmse_heatmap,
     plot_rmse_vs_geometry,
+    plot_rmse_distribution,
 )
 
 N_EXTRAS = 3   # tau_c, wv_above_cloud, wv_in_cloud (always present in the dataset)
@@ -450,6 +451,8 @@ def _run_kfold(args, hp, h5_path, output_dir, device,
                       output_dir / 'rmse_heatmap.png')
     plot_rmse_vs_geometry(per_sample_rmse, agg_h5_idx, h5_path,
                           output_dir / 'rmse_vs_geometry.png')
+    plot_rmse_distribution(per_sample_rmse,
+                          output_dir / 'rmse_distribution.png')
 
     print(f'\nK-fold artifacts written to: {output_dir}')
     print(f'  fold_01..fold_{K:02d}/  (per-fold best_model.pt + history.json)')
@@ -807,6 +810,8 @@ def main():
                      output_dir / 'rmse_heatmap.png')
     plot_rmse_vs_geometry(per_sample_rmse, test_idx_global, h5_path,
                           output_dir / 'rmse_vs_geometry.png')
+    plot_rmse_distribution(per_sample_rmse,
+                          output_dir / 'rmse_distribution.png')
 
     print(f"\nAll artifacts written to: {output_dir}")
     print(f"  best_model.pt")
