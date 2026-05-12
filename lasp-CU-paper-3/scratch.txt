@@ -1,0 +1,6 @@
+python plot_percentile_profiles_synthetic.py --results-dir /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/standalone_results_profile_only_synthetic/M0_run098_synthetic_training_data_7-levels_8_May_2026_atest
+
+
+
+python plot_percentile_profiles_synthetic.py --results-dir /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/standalone_results_profile_only_synthetic/M0_run098_synthetic_training_data_7-levels_8_May_2026_atest_rev2
+

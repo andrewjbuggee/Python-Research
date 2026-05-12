@@ -23,15 +23,15 @@
 #SBATCH --account=ucb762_asc1
 #SBATCH --partition=al40
 #SBATCH --qos=normal              # al40 uses normal QOS; testing QOS is for atesting_* only
-#SBATCH --time=20:00:00           # al40 wall budget — generous for 1500 epochs on ~42k samples
+#SBATCH --time=02:00:00           # al40 wall budget — generous for 1500 epochs on ~42k samples
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --mem=8G                 # plenty for ~42k samples + A100
-#SBATCH --job-name=synth_solo_kfold
-#SBATCH --output=logs/standalone_synth_kfold_%A.out
-#SBATCH --error=logs/standalone_synth_kfold_%A.err
+#SBATCH --job-name=synth_solo_latest_hyperparams
+#SBATCH --output=logs/standalone_synth_latest_hyperparams_%A.out
+#SBATCH --error=logs/standalone_synth_latest_hyperparams_%A.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
 
@@ -40,8 +40,9 @@
 # The trainer reads
 #   hyper_parameter_sweep/sweep_results_profile_only_synthetic_<VARIANT>/run_<RUN_ID>/summary.json
 # for hyperparameters and extras-flags.
+# The M0 variant will use the new hyperparameter sweep that trained on ~40,000 samples. The M1 and M2 variants will use the older sweep that trained on ~9,000 samples, so expect much shorter training times for those.
 VARIANT="M0"
-RUN_ID="98"
+RUN_ID="4"
 
 # Synthetic HDF5 to train on. Update once your ~42k-sample file is finalized.
 H5_PATH="/scratch/alpine/anbu8374/neural_network_training_data/synthetic_training_data_7-levels_8_May_2026.h5"
@@ -55,11 +56,11 @@ N_EPOCHS_OVERRIDE="2500"
 # disjoint partition, and runs all aggregate diagnostic plots on the
 # concatenated predictions covering the entire dataset. Wall time scales
 # roughly linearly with K, so bump --time below if you increase this.
-N_FOLDS="20"
+N_FOLDS="1"
 
 # Output dir (per-variant + per-run, easy to identify alongside other tests).
 H5_STEM=$(basename "$H5_PATH" .h5)
-OUTPUT_DIR="/projects/anbu8374/Python-Research/lasp-CU-paper-3/standalone_results_profile_only_synthetic/${VARIANT}_run$(printf '%03d' ${RUN_ID})_${H5_STEM}_atest"
+OUTPUT_DIR="/projects/anbu8374/Python-Research/lasp-CU-paper-3/standalone_results_profile_only_synthetic/${VARIANT}_run$(printf '%03d' ${RUN_ID})_${H5_STEM}"
 
 # ----- Banner ---------------------------------------------------------------
 echo "============================================"
@@ -78,7 +79,7 @@ echo "============================================"
 # ----- Environment ----------------------------------------------------------
 module purge
 module load anaconda
-conda activate dropProfs_nn
+conda activate /projects/anbu8374/software/anaconda/envs/dropProfs_nn
 
 cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
 mkdir -p logs
