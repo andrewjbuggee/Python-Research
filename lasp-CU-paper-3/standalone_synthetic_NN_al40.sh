@@ -12,7 +12,7 @@
 #     sbatch standalone_synthetic_atesting_a100.sh
 #
 # Wall-time note: with the new ~42 k-sample HDF5, a full 1500-epoch
-# training takes roughly 60–70 minutes on a single A100 — right at
+# training takes less than 60 minutes on a single A100 — right at
 # atesting_a100's 1-hour limit. By default we cap at 500 epochs (set
 # via N_EPOCHS_OVERRIDE below) so the smoke test finishes inside the
 # testing window. Bump N_EPOCHS_OVERRIDE to "" or 1500 once you want
@@ -23,7 +23,7 @@
 #SBATCH --account=ucb762_asc1
 #SBATCH --partition=al40
 #SBATCH --qos=normal              # al40 uses normal QOS; testing QOS is for atesting_* only
-#SBATCH --time=13:00:00           # al40 wall budget — generous for 1500 epochs on ~42k samples
+#SBATCH --time=20:00:00           # al40 wall budget — generous for 1500 epochs on ~42k samples
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -48,7 +48,7 @@ H5_PATH="/scratch/alpine/anbu8374/neural_network_training_data/synthetic_trainin
 
 # Cap epochs for the smoke test so a single config finishes inside the 1-hour
 # testing window. Set to empty string to use the run config's full n_epochs.
-N_EPOCHS_OVERRIDE="1500"
+N_EPOCHS_OVERRIDE="2500"
 
 # K-fold mode for the trainer. 1 = single 80/10/10 split (current default).
 # K > 1 = full-coverage K-fold; the trainer trains K models, each tested on a

@@ -118,7 +118,8 @@ def per_sample_predictors_synthetic(test_dataset_idx: np.ndarray,
 
 
 def plot_per_level_rmse(pred: np.ndarray, true: np.ndarray,
-                        pred_std: np.ndarray, out_path: Path, dpi: int = 500):
+                        pred_std: np.ndarray, out_path: Path, dpi: int = 500,
+                        show_pred_sigma: bool = True):
     """Per-level error metrics on a vertical axis with level 1 at cloud top.
 
     Three curves are plotted, all in μm, all per level, all consolidating
@@ -153,9 +154,10 @@ def plot_per_level_rmse(pred: np.ndarray, true: np.ndarray,
     ax.plot(median_abserr, levels, 's-',  color='#009E73',
             linewidth=1.5, markersize=5,
             label='Median |error| per level (median-based)')
-    ax.plot(sigma_mean_lvl, levels, 'd--', color='#D55E00',
-            linewidth=1.3, markersize=5, alpha=0.85,
-            label='Mean predicted σ per level (network)')
+    if show_pred_sigma:
+        ax.plot(sigma_mean_lvl, levels, 'd--', color='#D55E00',
+                linewidth=1.3, markersize=5, alpha=0.85,
+                label='Mean predicted σ per level (aleatoric, network)')
 
     ax.set_xlabel(r'Per-level error metric (μm)', fontsize=11)
     ax.set_ylabel(f'Vertical level (1 = cloud top, {n_levels} = cloud base)',
@@ -459,6 +461,12 @@ def parse_args():
                         "tries the path saved in config.json, then falls back "
                         "to <repo_root>/training_data/<basename> for local "
                         "use.")
+    p.add_argument('--no-pred-sigma', action='store_true',
+                   help="In per_level_rmse.png, hide the network's mean "
+                        "predicted σ per level (the aleatoric-uncertainty "
+                        "curve). Leaves only the mean RMSE and median |error| "
+                        "curves so the two error metrics can be compared "
+                        "without the σ overlay distracting the y-axis scale.")
     return p.parse_args()
 
 
@@ -778,8 +786,10 @@ def main():
     # Additional diagnostics — same set the trainer produces in single-split
     # mode, so a re-run here gives identical-looking outputs without retraining.
     plvl_path = results_dir / 'per_level_rmse.png'
-    plot_per_level_rmse(pred, true, pred_std, plvl_path)
-    print(f'Per-level RMSE → {plvl_path}')
+    plot_per_level_rmse(pred, true, pred_std, plvl_path,
+                        show_pred_sigma=not args.no_pred_sigma)
+    print(f'Per-level RMSE → {plvl_path}'
+          + ('  (predicted-σ curve hidden)' if args.no_pred_sigma else ''))
 
     cal_path  = results_dir / 'calibration_scatter.png'
     plot_calibration_scatter(pred, pred_std, true, cal_path)
