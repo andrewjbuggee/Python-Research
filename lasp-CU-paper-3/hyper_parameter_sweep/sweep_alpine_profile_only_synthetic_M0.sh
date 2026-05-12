@@ -44,7 +44,7 @@ echo "Start time:    $(date)"
 echo "============================================"
 
 module load anaconda
-conda activate dropProfs_nn
+conda activate /projects/anbu8374/software/anaconda/envs/dropProfs_nn
 
 cd /projects/anbu8374/Python-Research/lasp-CU-paper-3/hyper_parameter_sweep
 mkdir -p logs sweep_results_profile_only_synthetic_M0
