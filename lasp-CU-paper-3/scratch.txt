@@ -4,3 +4,11 @@ python plot_percentile_profiles_synthetic.py --results-dir /Users/andrewbuggee/D
 
 python plot_percentile_profiles_synthetic.py --results-dir /Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/standalone_results_profile_only_synthetic/M0_run098_synthetic_training_data_7-levels_8_May_2026_atest_rev2
 
+
+
+python plot_run004_figures.py \
+    --run-dir ./hyper_parameter_sweep/sweep_results_profile_only_synthetic_M0_rev2/run_004 \
+    --pick-seed 9 \
+    --pick-jitter-pct 1.0 \
+    --profiles-output profiles_true_vs_pred_percentiles_v5.png
+

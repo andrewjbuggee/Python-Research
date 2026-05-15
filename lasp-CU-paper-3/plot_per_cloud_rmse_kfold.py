@@ -50,6 +50,104 @@ DPI      = 500
 # 1 H2O molecule = 18.015/N_A g; 1 mm PWV = 0.1 g/cm² of liquid-equivalent.
 WV_MM_PER_MOLEC_CM2 = 2.991e-22
 
+# ─── Thermodynamic constants for Wood (2005) adiabaticity ────────────────
+G_GRAV  = 9.81       # m/s²
+R_D     = 287.04     # J/(kg K)  dry air
+R_V     = 461.5      # J/(kg K)  water vapor
+EPSILON = R_D / R_V  # ≈ 0.622
+C_P     = 1005.0     # J/(kg K)  specific heat of dry air at const. P
+L_V     = 2.50e6     # J/kg      latent heat of vaporization (T ~ 285 K)
+
+
+def saturation_vapor_pressure_Pa(T_K):
+    """Bolton (1980): e_s [Pa] as a function of T [K]."""
+    T_C = T_K - 273.15
+    return 611.2 * np.exp(17.67 * T_C / (T_C + 243.5))
+
+
+def saturation_specific_humidity(T_K, P_Pa):
+    e_s = saturation_vapor_pressure_Pa(T_K)
+    return EPSILON * e_s / (P_Pa - (1.0 - EPSILON) * e_s)
+
+
+def moist_adiabatic_lapse_rate(T_K, P_Pa):
+    """Γ_m in K/m."""
+    q_s = saturation_specific_humidity(T_K, P_Pa)
+    num = 1.0 + L_V * q_s / (R_D * T_K)
+    den = C_P + (L_V ** 2) * q_s * EPSILON / (R_D * T_K ** 2)
+    return G_GRAV * num / den
+
+
+def gamma_ad_kg_per_m4(T_K, P_Pa):
+    """Adiabatic LWC lapse rate Γ_ad in kg/m³/m  (Wood 2005, eq. 4).
+
+    Γ_ad = ρ_air · (c_p / L_v) · (Γ_d − Γ_m)
+    """
+    rho_air = P_Pa / (R_D * T_K)
+    gamma_d = G_GRAV / C_P
+    gamma_m = moist_adiabatic_lapse_rate(T_K, P_Pa)
+    return rho_air * C_P / L_V * (gamma_d - gamma_m)
+
+
+def cloud_base_T_P_from_era5(era5_T_surface_to_toa: np.ndarray,
+                              era5_P_hPa_surface_to_toa: np.ndarray,
+                              z_base_km: float) -> tuple[float, float]:
+    """Hypsometric integration of the ERA5 column to get T and P at cloud base.
+
+    Assumes the ERA5 arrays are ordered surface → TOA (P descending). Sets
+    z = 0 at the lowest ERA5 level (closest to surface) and integrates the
+    hypsometric equation upward, then interpolates at z = z_base_km · 1000.
+    """
+    P_Pa = era5_P_hPa_surface_to_toa * 100.0
+    T    = era5_T_surface_to_toa
+    n    = len(P_Pa)
+    z    = np.zeros(n)
+    for i in range(1, n):
+        T_avg = 0.5 * (T[i - 1] + T[i])
+        z[i]  = z[i - 1] + (R_D * T_avg / G_GRAV) * np.log(P_Pa[i - 1] / P_Pa[i])
+    z_base_m = z_base_km * 1000.0
+    return float(np.interp(z_base_m, z, T)), float(np.interp(z_base_m, z, P_Pa))
+
+
+def wood_adiabaticity(lwc_top_to_base_g_m3: np.ndarray,
+                       z_top_to_base_km: np.ndarray,
+                       era5_T: np.ndarray, era5_P_hPa: np.ndarray) -> float:
+    """LWP_observed / LWP_adiabatic  per Wood (2005).
+
+    LWP_obs = 1000 · ∫ LWC dz   (LWC g/m³, z km, → g/m²)
+    LWP_ad  = ½ · Γ_ad · h²     (h = z_top − z_base in m, Γ_ad in kg/m⁴ → g/m²)
+
+    Γ_ad is evaluated at cloud-base T,P from the ERA5 column. Returns NaN
+    when the cloud has degenerate thickness or yields Γ_ad ≤ 0.
+    """
+    z_top_km  = float(z_top_to_base_km[0])
+    z_base_km = float(z_top_to_base_km[-1])
+    h_m = (z_top_km - z_base_km) * 1000.0
+    if h_m <= 0:
+        return float('nan')
+
+    lwp_obs_g = 1000.0 * abs(np.trapezoid(lwc_top_to_base_g_m3,
+                                          z_top_to_base_km))   # g/m²
+
+    T_base, P_base = cloud_base_T_P_from_era5(era5_T, era5_P_hPa, z_base_km)
+    gamma_ad = gamma_ad_kg_per_m4(T_base, P_base)               # kg/m⁴
+    if gamma_ad <= 0:
+        return float('nan')
+    lwp_ad_g = 0.5 * gamma_ad * (h_m ** 2) * 1000.0             # g/m²
+    return lwp_obs_g / lwp_ad_g
+
+
+def re_linear_slope(re_top_to_base: np.ndarray,
+                    z_top_to_base_km: np.ndarray) -> float:
+    """Linear regression slope of r_e (μm) on z (km) over the profile.
+
+    Sign convention: positive = r_e grows with altitude (adiabatic shape);
+    negative = r_e decreases with altitude (drizzle / inverted).
+    """
+    if len(re_top_to_base) < 2 or np.std(z_top_to_base_km) < 1e-12:
+        return float('nan')
+    return float(np.polyfit(z_top_to_base_km, re_top_to_base, 1)[0])
+
 # CVD-safe palette (Okabe-Ito + a few from Paul Tol's "muted" set for
 # the extended figure, all distinguishable to deuteranopia/protanopia)
 COLOR_TAUC         = '#0072B2'   # blue
@@ -61,6 +159,8 @@ COLOR_DRIZZLE_TOP  = '#56B4E9'   # sky blue            (top-30 % proxy)
 COLOR_RE_MAX       = '#882255'   # deep magenta (Tol)  (max anywhere)
 COLOR_RE_RANGE     = '#117733'   # forest green (Tol)  (dynamic range)
 COLOR_ALPHA        = '#AA3377'   # purple-pink (Tol)   (α shape parameter)
+COLOR_SLOPE        = '#332288'   # indigo      (Tol)   (linear slope)
+COLOR_WOOD         = '#88CCEE'   # cyan        (Tol)   (Wood adiabaticity)
 
 
 def setup_style():
@@ -166,44 +266,55 @@ def compute_predictors(h5_idx: np.ndarray, h5_path: Path) -> dict:
     sorted_idx = h5_idx[sort_order]
 
     with h5py.File(h5_path, 'r') as f:
-        tau_c    = f['tau_c'][sorted_idx]
-        profs    = f['profiles_raw'][sorted_idx]
-        z_arr    = f['profiles_raw_z'][sorted_idx]
-        nlev_arr = f['profile_n_levels'][sorted_idx]
-        wv_above = f['wv_above_cloud'][sorted_idx]
-        wv_in    = f['wv_in_cloud'][sorted_idx]
-        alpha    = f['alpha'][sorted_idx]
+        tau_c     = f['tau_c'][sorted_idx]
+        profs     = f['profiles_raw'][sorted_idx]
+        z_arr     = f['profiles_raw_z'][sorted_idx]
+        nlev_arr  = f['profile_n_levels'][sorted_idx]
+        lwc_arr   = f['lwc'][sorted_idx]
+        wv_above  = f['wv_above_cloud'][sorted_idx]
+        wv_in     = f['wv_in_cloud'][sorted_idx]
+        alpha     = f['alpha'][sorted_idx]
+        era5_T    = f['era5_temperature'][sorted_idx]
+        era5_P    = f['era5_pressure_levels'][:]      # shape (37,)
 
     tau_c    = tau_c[unsort]
     profs    = profs[unsort]
     z_arr    = z_arr[unsort]
     nlev_arr = nlev_arr[unsort]
+    lwc_arr  = lwc_arr[unsort]
     wv_above = wv_above[unsort]
     wv_in    = wv_in[unsort]
     alpha    = alpha[unsort]
+    era5_T   = era5_T[unsort]
 
     n = len(h5_idx)
-    adiab            = np.full(n, np.nan, dtype=np.float32)
-    drizzle_proxy    = np.full(n, np.nan, dtype=np.float32)
+    adiab             = np.full(n, np.nan, dtype=np.float32)
+    drizzle_proxy     = np.full(n, np.nan, dtype=np.float32)
     drizzle_proxy_top = np.full(n, np.nan, dtype=np.float32)
-    re_max_anywhere  = np.full(n, np.nan, dtype=np.float32)
-    re_range         = np.full(n, np.nan, dtype=np.float32)
+    re_max_anywhere   = np.full(n, np.nan, dtype=np.float32)
+    re_range          = np.full(n, np.nan, dtype=np.float32)
+    re_std            = np.full(n, np.nan, dtype=np.float32)
+    slope_per_prof    = np.full(n, np.nan, dtype=np.float32)
+    wood_adiab        = np.full(n, np.nan, dtype=np.float32)
     for i in range(n):
         nL = int(nlev_arr[i])
-        re = profs[i, :nL].astype(np.float64)
-        z  = z_arr[i, :nL].astype(np.float64)
-        adiab[i]         = adiabaticity_pearson_r(re, z)
-        # Existing bottom-30 % drizzle proxy.
-        drizzle_proxy[i] = float(re[int(0.7 * nL):].max())
-        # Mirror of the bottom-30 % cut for the cloud top. Using
-        # nL - int(0.7*nL) keeps the bin size symmetric with the bottom
-        # version (3 levels for nL=7, vs the 2 you get from int(0.3*nL)).
-        n_top = max(1, nL - int(0.7 * nL))
+        re  = profs[i,   :nL].astype(np.float64)
+        z   = z_arr[i,   :nL].astype(np.float64)
+        lwc = lwc_arr[i, :nL].astype(np.float64)
+
+        adiab[i]             = adiabaticity_pearson_r(re, z)
+        drizzle_proxy[i]     = float(re[int(0.7 * nL):].max())
+        n_top                = max(1, nL - int(0.7 * nL))
         drizzle_proxy_top[i] = float(re[:n_top].max())
-        # Max anywhere in the profile (no vertical restriction).
         re_max_anywhere[i]   = float(re.max())
-        # Dynamic range (max minus min).
         re_range[i]          = float(re.max() - re.min())
+        # Vertical std of r_e across the cloud profile — a smooth scalar
+        # version of "how variable is droplet size with altitude". Differs
+        # from the dynamic range (max-min) in that it down-weights tail
+        # behavior and reflects fluctuations across all levels.
+        re_std[i]            = float(re.std(ddof=0))
+        slope_per_prof[i]    = re_linear_slope(re, z)
+        wood_adiab[i]        = wood_adiabaticity(lwc, z, era5_T[i], era5_P)
 
     return {
         'tau_c':             np.asarray(tau_c, dtype=np.float32),
@@ -212,9 +323,12 @@ def compute_predictors(h5_idx: np.ndarray, h5_path: Path) -> dict:
         'drizzle_proxy_top': drizzle_proxy_top,
         're_max':            re_max_anywhere,
         're_range':          re_range,
+        're_std':            re_std,
         'alpha':             np.asarray(alpha, dtype=np.float32),
         'wv_above_mm':       (wv_above * WV_MM_PER_MOLEC_CM2).astype(np.float32),
         'wv_in_mm':          (wv_in    * WV_MM_PER_MOLEC_CM2).astype(np.float32),
+        'linear_slope':      slope_per_prof,
+        'wood_adiab':        wood_adiab,
     }
 
 
@@ -282,8 +396,8 @@ def plot_diagnostics_3x2(per_sample_rmse: np.ndarray,
 
 def plot_diagnostics_5x2(per_sample_rmse: np.ndarray,
                          predictors: dict, out_path: Path) -> None:
-    """Extended 5x2 layout: original 3x2 + drizzle-top/max + range/alpha."""
-    fig, axes = plt.subplots(5, 2, figsize=(13, 22))
+    """Extended 6x2 layout: 3x2 base + drizzle-top/max + range/alpha + slope/Wood."""
+    fig, axes = plt.subplots(6, 2, figsize=(13, 26.4))
 
     def _scatter(ax, x, label, name, color, xlog=False):
         valid = np.isfinite(x) & np.isfinite(per_sample_rmse)
@@ -351,6 +465,15 @@ def plot_diagnostics_5x2(per_sample_rmse: np.ndarray,
              'j', r'$\alpha$ shape parameter '
                   r'($\nu_{\mathrm{eff}} = 1/(\alpha + 3)$)',
              color=COLOR_ALPHA)
+
+    # ── Row 6: linear slope + Wood (2005) adiabaticity ──────────────────
+    _scatter(axes[5, 0], predictors['linear_slope'],
+             'k', r'linear slope of $r_e(z)$ ($\mu$m/km)',
+             color=COLOR_SLOPE)
+    _scatter(axes[5, 1], predictors['wood_adiab'],
+             'l', r'Wood (2005) adiabaticity:  $\mathrm{LWP}_{\mathrm{obs}}'
+                  r'/\mathrm{LWP}_{\mathrm{ad}}$',
+             color=COLOR_WOOD)
 
     fig.suptitle(f'Per-cloud RMSE diagnostics — extended (20-fold aggregate, '
                  f'{len(per_sample_rmse):,} samples)',

@@ -42,7 +42,7 @@ DIAG_SEED  = 0          # matches RANDOM_SEED in the generator
 
 FIGURE_DPI         = 500
 FIG_WIDTH_IN_1COL  = 3.25     # IEEE single column
-FIG_HEIGHT_IN_1COL = 8.5
+FIG_HEIGHT_IN_1COL = 6.0      # 2x1 (two eigen-profile panels, no scree)
 FIG_WIDTH_IN_2COL  = 7.0      # IEEE double column (max width)
 FIG_HEIGHT_IN_2COL = 5.6
 
@@ -260,7 +260,13 @@ def plot_modes_panel(ax, u, comps, score_std, var_ratio, K_show, option,
     ax.grid(alpha=0.3)
 
 
-def make_pca_modes_figure(d, option):
+def make_pca_modes_figure(d, option, K_cap=None):
+    """2x1 figure of σ-weighted (or other) eigen-profiles.
+
+    K_cap, if given, limits the number of PCs shown in each panel to at most
+    K_cap (defaults to whatever was saved as K_re / K_lwc). Use this to
+    declutter the figure when only the top few modes are wanted in the paper.
+    """
     mu_re      = d['pca_re_mean']
     comps_re   = d['pca_re_components']
     var_re     = d['pca_re_var_ratio']
@@ -272,6 +278,9 @@ def make_pca_modes_figure(d, option):
     K_lwc      = int(d['K_lwc'])
     L_COMMON   = int(d['L_COMMON'])
 
+    K_re_show  = K_re  if K_cap is None else min(K_re,  K_cap)
+    K_lwc_show = K_lwc if K_cap is None else min(K_lwc, K_cap)
+
     score_std_re  = np.sqrt(np.diag(mvn_cov)[0:K_re])
     score_std_lwc = np.sqrt(np.diag(mvn_cov)[K_re:K_re + K_lwc])
 
@@ -279,47 +288,128 @@ def make_pca_modes_figure(d, option):
 
     fig = plt.figure(figsize=(FIG_WIDTH_IN_1COL, FIG_HEIGHT_IN_1COL))
     gs = fig.add_gridspec(
-        3, 1,
-        left=0.17, right=0.89, top=0.965, bottom=0.055, hspace=0.42,
+        2, 1,
+        left=0.17, right=0.89, top=0.96, bottom=0.075, hspace=0.42,
     )
-    axes = [fig.add_subplot(gs[i, 0]) for i in range(3)]
+    axes = [fig.add_subplot(gs[i, 0]) for i in range(2)]
 
-    # (a) Scree
-    ax = axes[0]
-    ax.plot(np.arange(1, len(var_re) + 1),  np.cumsum(var_re),  'o-',
-            color='steelblue', markersize=3,
-            label=fr'log $r_e$ (kept K={K_re})')
-    ax.plot(np.arange(1, len(var_lwc) + 1), np.cumsum(var_lwc), 's-',
-            color='darkorange', markersize=3,
-            label=f'log LWC (kept K={K_lwc})')
-    ax.axhline(VAR_TARGET, color='0.5', linestyle=':', linewidth=0.8)
-    ax.set_xlabel('Principal component')
-    ax.set_ylabel('Cumulative variance')
-    ax.set_title('PCA scree (log-space)')
-    ax.set_xlim(0, max(K_re, K_lwc) + 5)
-    ax.set_ylim(0.0, 1.01)
-    ax.legend(loc='lower right', frameon=True, framealpha=0.9,
-              handlelength=1.4, labelspacing=0.3, fontsize=7)
-    ax.grid(alpha=0.3)
-    add_panel_label(ax, '(a)')
-
-    # (b) r_e modes
+    # (a) r_e eigen-profiles (the variance-explained % is in the legend, so the
+    #     scree panel is redundant and has been dropped).
     plot_modes_panel(
-        axes[1], u, comps_re, score_std_re, var_re,
-        K_show=K_re, option=option,
+        axes[0], u, comps_re, score_std_re, var_re,
+        K_show=K_re_show, option=option,
         title=fr'Log-$r_e$ modes ({OPTION_TITLE_SUFFIX[option]})',
     )
-    add_panel_label(axes[1], '(b)')
+    add_panel_label(axes[0], '(a)', fontweight='normal')
 
-    # (c) LWC modes
+    # (b) LWC eigen-profiles.
     plot_modes_panel(
-        axes[2], u, comps_lwc, score_std_lwc, var_lwc,
-        K_show=K_lwc, option=option,
+        axes[1], u, comps_lwc, score_std_lwc, var_lwc,
+        K_show=K_lwc_show, option=option,
         title=f'Log-LWC modes ({OPTION_TITLE_SUFFIX[option]})',
     )
-    add_panel_label(axes[2], '(c)')
+    add_panel_label(axes[1], '(b)', fontweight='normal')
 
     return fig
+
+
+# ── Per-PC envelope panels for r_e in physical units (μm) ────────────────
+def plot_re_envelope_panels(d, out_path: Path, K_show: int = 6,
+                             nrows: int = 2, ncols: int = 3,
+                             n_sigma: float = 1.0,
+                             fig_w_in: float = 7.1, fig_h_in: float = 4.25):
+    """One panel per PC showing the geometric-mean r_e profile (black) plus
+    the ±n_sigma envelope of that PC reconstructed in physical microns.
+
+    For each retained mode k the envelope is
+
+        r_e^{±}(z) = exp( μ_re(z) ± n_sigma · σ_k · v_k(z) )       (μm)
+
+    where μ_re is the per-altitude mean of log r_e on the training set, v_k
+    is the unit-norm k-th PC shape, and σ_k = sqrt(diag(mvn_cov))_k is the
+    standard deviation of the k-th score across training profiles. The PCA
+    decomposition itself is untouched — only the visualization is mapped
+    back into physical units. CVD-safe colors (Okabe-Ito).
+    """
+    from matplotlib.ticker import FixedLocator, FixedFormatter, NullFormatter
+
+    mu_re     = d['pca_re_mean']
+    comps_re  = d['pca_re_components']
+    var_re    = d['pca_re_var_ratio']
+    mvn_cov   = d['mvn_cov']
+    K_re      = int(d['K_re'])
+    L_COMMON  = int(d['L_COMMON'])
+
+    K_show       = min(K_show, K_re)
+    score_std_re = np.sqrt(np.diag(mvn_cov)[0:K_re])
+    u            = np.linspace(0.0, 1.0, L_COMMON)
+    re_mean      = np.exp(mu_re)
+
+    # Okabe-Ito CVD-safe palette, one hue per PC.
+    palette = ['#0072B2', '#E69F00', '#009E73',
+               '#CC79A7', '#56B4E9', '#D55E00']
+    panel_labels = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
+
+    # Per-PC physical envelopes (no clipping — these are positive by exp()).
+    lo = np.empty((K_show, L_COMMON))
+    hi = np.empty((K_show, L_COMMON))
+    for k in range(K_show):
+        lo[k] = np.exp(mu_re - n_sigma * score_std_re[k] * comps_re[k])
+        hi[k] = np.exp(mu_re + n_sigma * score_std_re[k] * comps_re[k])
+
+    # Common log-scale x range so the eye can compare envelope widths across PCs.
+    x_min = float(min(lo.min(), re_mean.min())) * 0.92
+    x_max = float(max(hi.max(), re_mean.max())) * 1.08
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w_in, fig_h_in),
+                              sharex=True, sharey=True)
+    axes_flat = list(axes.flat)
+
+    for k, ax in enumerate(axes_flat):
+        if k >= K_show:
+            ax.set_visible(False)
+            continue
+
+        color = palette[k % len(palette)]
+        # Shaded envelope first, then the outline lines and the black mean
+        # on top so the mean is fully visible everywhere.
+        ax.fill_betweenx(u, lo[k], hi[k], color=color, alpha=0.32,
+                         linewidth=0,
+                         label=fr'PC{k + 1}  $\pm{int(n_sigma)}\sigma$')
+        ax.plot(lo[k], u, color=color, linewidth=0.7, alpha=0.85)
+        ax.plot(hi[k], u, color=color, linewidth=0.7, alpha=0.85)
+        ax.plot(re_mean, u, color='black', linewidth=1.5,
+                label='Geometric mean')
+
+        ax.set_xscale('log')
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(0.0, 1.0)
+
+        # Clean integer-label log ticks across the sub-decade range.
+        ax.xaxis.set_major_locator(FixedLocator([2, 3, 5, 10, 20]))
+        ax.xaxis.set_major_formatter(FixedFormatter(['2', '3', '5', '10', '20']))
+        ax.xaxis.set_minor_formatter(NullFormatter())
+
+        var_pct = 100.0 * var_re[k]
+        ax.set_title(fr'PC{k + 1}  ({var_pct:.0f}%)', fontsize=9.5)
+
+        if k % ncols == 0:
+            ax.set_ylabel('Normalized altitude')
+        if k >= ncols:
+            ax.set_xlabel(r'$r_e$ ($\mu$m, log)')
+
+        add_panel_label(ax, panel_labels[k], fontweight='normal')
+
+        # Legend at lower-right — the corner that's farthest from the curves
+        # for an adiabatic-like profile (high r_e at low altitude is rare).
+        ax.legend(loc='lower right', fontsize=6.5, frameon=True,
+                  framealpha=0.92, handlelength=1.4, labelspacing=0.3,
+                  handletextpad=0.4, borderaxespad=0.3)
+        ax.grid(alpha=0.3, which='both')
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=FIGURE_DPI, bbox_inches='tight')
+    plt.close(fig)
 
 
 # ── Comparison figure (2x3 in-situ vs synthetic) ──────────────────────────
@@ -516,12 +606,27 @@ def main():
     for option in (1, 2, 3):
         fig = make_pca_modes_figure(d, option)
         out_path = OUT_DIR / (
-            f'synthetic_profiles_jointMVN_pca_modes_3x1_N300001_'
+            f'synthetic_profiles_jointMVN_pca_modes_2x1_N300001_'
             f'opt{option}_{OPTION_TAG[option]}.png'
         )
         fig.savefig(out_path, dpi=FIGURE_DPI, bbox_inches='tight')
         plt.close(fig)
         print(f'pca-modes opt{option} ({OPTION_TAG[option]}) -> {out_path}')
+
+    # Top-4-modes-only σ-weighted version of opt2 for the paper figure.
+    fig_4 = make_pca_modes_figure(d, option=2, K_cap=4)
+    out_4 = OUT_DIR / (
+        f'synthetic_profiles_jointMVN_pca_modes_2x1_N300001_'
+        f'opt2_sigma_weighted_4Modes.PNG'
+    )
+    fig_4.savefig(out_4, dpi=FIGURE_DPI, bbox_inches='tight')
+    plt.close(fig_4)
+    print(f'pca-modes opt2 (sigma_weighted, top 4 only) -> {out_4}')
+
+    # 2x3 per-PC envelope panels for r_e in physical units (μm).
+    env_path = OUT_DIR / 'synthetic_profiles_jointMVN_re_envelope_panels_2x3_N300001.png'
+    plot_re_envelope_panels(d, env_path)
+    print(f'r_e envelope panels (μm) -> {env_path}')
 
     # 2x3 comparison figure (in-situ vs synthetic)
     try:

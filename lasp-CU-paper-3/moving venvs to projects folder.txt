@@ -1,0 +1,19 @@
+module load python                       # whatever python module you usually use
+python -m venv /projects/$USER/venvs/main
+source /projects/$USER/venvs/main/bin/activate
+python -m pip install --upgrade pip
+
+# Snapshot what you currently have in ~/.local so you don't lose your stack
+python -m pip list --format=freeze --path ~/.local/lib/python3.10/site-packages \
+    > /projects/$USER/venvs/main/requirements_from_home.txt
+
+# Reinstall into the venv
+pip install -r /projects/$USER/venvs/main/requirements_from_home.txt
+
+
+
+module load python
+source /projects/anbu8374/venvs/main/bin/activate
+
+
+rm -rf ~/.local/lib/python3.10
