@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import List, Dict
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.stats import spearmanr
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,42 +235,68 @@ def make_plots(summaries: List[Dict], fig_dir: Path, n_top: int = 10):
     #    here with σ-calibration ratio since we have no folds.
     all_rmse = np.array([s['mean_test_rmse_um'] for s in summaries])
 
-    def _scatter(ax, xs, color, xlabel, title, log=False):
-        ax.scatter(xs, all_rmse, alpha=0.6, c=color,
-                   edgecolors='white', s=35)
+    def _scatter(ax, xs, color, xlabel, title, label, log=False):
+        """Scatter with Pearson r + Spearman ρ in the title and a panel letter.
+
+        When log=True, Pearson r is computed on log10(x) so it reflects the
+        relationship as actually drawn on the axes. Spearman ρ is invariant to
+        any monotone rescaling of x, so it is computed on the raw values.
+        """
+        xs = np.asarray(xs, dtype=float)
+        ys = np.asarray(all_rmse, dtype=float)
+        x_for_pearson = np.log10(xs) if log else xs
+        valid = np.isfinite(x_for_pearson) & np.isfinite(ys)
+        if valid.sum() >= 3 and xs[valid].std() > 0 and ys[valid].std() > 0:
+            r = float(np.corrcoef(x_for_pearson[valid], ys[valid])[0, 1])
+            rho_val, _ = spearmanr(xs[valid], ys[valid])
+            rho = float(rho_val)
+        else:
+            r = rho = float('nan')
+
+        ax.scatter(xs, ys, alpha=0.6, c=color, edgecolors='white', s=35)
         if log:
             ax.set_xscale('log')
         ax.set_xlabel(xlabel)
         ax.set_ylabel('Mean RMSE (μm)')
-        ax.set_title(title)
+        ax.set_title(fr'({label})  {title}'  '\n'
+                     fr'Pearson $r$ = {r:+.3f},  Spearman $\rho$ = {rho:+.3f}',
+                     fontsize=11)
         ax.grid(True, alpha=0.3)
 
     fig, axes = plt.subplots(3, 3, figsize=(15, 13))
     _scatter(axes[0, 0],
              [s['hyperparams']['learning_rate']     for s in summaries],
-             '#EF4444', 'Learning rate (log)', 'Learning rate', log=True)
+             '#EF4444', 'Learning rate (log)', 'Learning rate',
+             label='a', log=True)
     _scatter(axes[0, 1],
              [s['hyperparams']['dropout']           for s in summaries],
-             '#3B82F6', 'Dropout',               'Dropout')
+             '#3B82F6', 'Dropout',               'Dropout',
+             label='b')
     _scatter(axes[0, 2],
              [s['hyperparams']['augment_noise_std'] for s in summaries],
-             '#F59E0B', 'augment_noise_std',     'Spectral noise augmentation')
+             '#F59E0B', 'augment_noise_std',     'Spectral noise augmentation',
+             label='c')
     _scatter(axes[1, 0],
              [s['hyperparams']['lambda_physics']      for s in summaries],
-             '#8B5CF6', 'λ_physics',           'λ_physics (outer physics weight)')
+             '#8B5CF6', 'λ_physics',           'λ_physics (outer physics weight)',
+             label='d')
     _scatter(axes[1, 1],
              [s['hyperparams']['lambda_monotonicity'] for s in summaries],
-             '#10B981', 'λ_monotonicity',       'λ_monotonicity')
+             '#10B981', 'λ_monotonicity',       'λ_monotonicity',
+             label='e')
     _scatter(axes[1, 2],
              [s['hyperparams']['lambda_adiabatic']    for s in summaries],
-             '#06B6D4', 'λ_adiabatic',          'λ_adiabatic')
+             '#06B6D4', 'λ_adiabatic',          'λ_adiabatic',
+             label='f')
     _scatter(axes[2, 0],
              [s['hyperparams']['lambda_smoothness']   for s in summaries],
-             '#EC4899', 'λ_smoothness',         'λ_smoothness')
+             '#EC4899', 'λ_smoothness',         'λ_smoothness',
+             label='g')
     # No cross-fold std for single-split sweep — show σ-calibration instead
     _scatter(axes[2, 1],
              [s['rmse_sigma_ratio'] for s in summaries],
-             '#6B7280', 'RMSE / σ',             'σ-calibration vs mean RMSE')
+             '#6B7280', 'RMSE / σ',             'σ-calibration vs mean RMSE',
+             label='h')
     axes[2, 1].axvline(1.0, color='0.5', linestyle='--', lw=1,
                        label='calibrated')
     axes[2, 1].legend(fontsize=8)
@@ -278,7 +305,8 @@ def make_plots(summaries: List[Dict], fig_dir: Path, n_top: int = 10):
                                  n_input=643,
                                  n_output=len(s['per_level_rmse_um']))
               for s in summaries],
-             '#D97706', 'n_params (est.)',      'Model capacity')
+             '#D97706', 'n_params (est.)',      'Model capacity',
+             label='i')
 
     fig.suptitle(
         'Continuous-Axis Sensitivity (each dot = 1 config, single split)',
