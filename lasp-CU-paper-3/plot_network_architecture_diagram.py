@@ -7,8 +7,10 @@ as a clean conceptual figure rather than a computation graph.  It mirrors the
 visual grammar of Segal-Rozenhaimer et al. (2022, Fig. 2) — input column →
 hidden layers → output/target layer — but depicts THIS network faithfully:
 
-  * Input  : 636 HySICS log10-reflectance channels (~352-2297 nm)  +  4
-             viewing-geometry angles (SZA, VZA, SAZ, VAZ)  = 640 inputs.
+  * Input  : 636 HySICS reflectance channels (~352-2297 nm), per-channel
+             min-max normalized to [0, 1] (linear reflectance, NO log10)  +  4
+             viewing-geometry angles (SZA, VZA, SAZ, VAZ), min-max normalized
+             over fixed physical ranges  = 640 inputs.
              NOTE: raw spectrum, NO PCA (unlike the reference figure).
   * Encoder: 4 hidden layers x 256 units; each block is
              Linear -> LayerNorm -> GELU -> Dropout.
@@ -173,9 +175,9 @@ def build_figure():
          "Viewing geometry\nSZA · VZA · SAZ · VAZ",
          fill="#FBF1DC", edge=GEOM_EDGE, fontsize=10.5)
 
-    # ── Preprocessing (log10 + standardize) — NOTE: no PCA ────────────────────
+    # ── Preprocessing (per-channel min-max normalize) — NOTE: no PCA ──────────
     pill(ax, x_prep, cy + 1.65, 1.9, 1.2,
-         r"$\log_{10} R$" "\n+ z-score\nstandardize", fontsize=10.5)
+         r"$R(\lambda)$" "\nmin-max\nnormalize", fontsize=10.5)
     ax.text(x_prep, cy + 0.55, "no PCA —\nfull spectrum", ha="center",
             va="center", fontsize=8.8, style="italic", color="#B23B3B")
     flow_arrow(ax, x_src + 1.25, x_prep - 0.95, cy + 1.65, lw=2.0)
@@ -286,7 +288,7 @@ def build_figure_defense():
     Slide-optimized version of build_figure() for the PhD defense.
 
     Differences from the paper figure:
-      * No input source / preprocessing boxes (HySICS, log10+scale, geometry)
+      * No input source / preprocessing boxes (HySICS, min-max normalize, geometry)
         and no "no PCA" note — the freed space lets the network draw larger.
       * No retrieved-profile glyph, and no 'cloud top' / 'cloud base' /
         'r_e (μm)' captions.
