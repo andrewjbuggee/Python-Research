@@ -3,7 +3,7 @@ models_profile_only_extras.py — Profile-only retrieval network with three
 extra scalar inputs appended to the existing 640-dim spectrum+geometry vector.
 
 Inputs (643 total):
-    640: log10(reflectance, 636 channels) ⊕ [sza, vza, saz, vaz]   (existing)
+    640: min-max normalized linear reflectance (636 channels) ⊕ min-max normalized [sza, vza, saz, vaz]   (existing)
       1: log10(tau_c)                              z-scored
       1: log10(wv_above_cloud)  [molec/cm²]        z-scored
       1: log10(wv_in_cloud)     [molec/cm²]        z-scored

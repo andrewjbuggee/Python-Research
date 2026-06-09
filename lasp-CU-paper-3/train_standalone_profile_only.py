@@ -14,11 +14,16 @@ This is the profile-only counterpart to train_standalone.py.  Differences:
 Inputs to the network
 ---------------------
 The 640-dim input vector handed to the model is already
-    [ log10(reflectance) (636 channels) ]   ⊕   [ sza, vza, saz, vaz (4 angles) ]
+    [ per-channel min-max normalized linear reflectance (636 channels) ]
+        ⊕   [ sza, vza, saz, vaz (4 angles), min-max normalized ]
 
-constructed inside data.LibRadtranDataset._normalize_input — the four
-geometry angles are present in the HDF5 (/sza, /vza, /saz, /vaz, all
-populated, no NaNs) and concatenated onto the spectrum at every sample.
+constructed inside data.LibRadtranDataset._normalize_input — reflectances are
+min-max scaled to [0, 1] per channel using the training-set per-channel min/max
+(they are already linear, ~[0, 0.8]; there is NO log10 transform), and the four
+geometry angles are min-max scaled over fixed physical ranges (SZA 0–80°,
+VZA 0–65°, SAZ/VAZ 0–180°).  The angles are present in the HDF5 (/sza, /vza,
+/saz, /vaz, all populated, no NaNs) and concatenated onto the spectrum at every
+sample.
 This script does NOT add new inputs; it just exposes the existing 640-dim
 pipeline through a one-config standalone trainer.
 
