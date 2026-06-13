@@ -62,7 +62,9 @@ import h5py
 import numpy as np
 
 REPO = Path(__file__).resolve().parent
-DEFAULT_H5 = REPO / "training_data" / "synthetic_training_data_7-levels_8_May_2026.h5"
+# DEFAULT_H5 = "/Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/training_data/synthetic_training_data_7-levels_8_May_2026.h5"
+DEFAULT_H5 = "/scratch/alpine/anbu8374/neural_network_training_data/synthetic_training_data_7-levels_8_May_2026.h5"
+
 DEFAULT_IMPORTANCE_NPZ = (REPO / "feature_importance_run004"
                           / "feature_importance_run004.npz")
 DEFAULT_OUT = REPO / "wv_core_ablation" / "wv_core_ablation_masks.npz"
