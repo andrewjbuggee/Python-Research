@@ -12,16 +12,18 @@ hidden layers → output/target layer — but depicts THIS network faithfully:
              viewing-geometry angles (SZA, VZA, SAZ, VAZ), min-max normalized
              over fixed physical ranges  = 640 inputs.
              NOTE: raw spectrum, NO PCA (unlike the reference figure).
-  * Encoder: 4 hidden layers x 256 units; each block is
-             Linear -> LayerNorm -> GELU -> Dropout.
+  * Encoder: 4 hidden layers of width 512, 512, 256, 256 (tapered); each
+             block is Linear -> LayerNorm -> GELU -> Dropout.
   * Output : a 7-level droplet effective-radius profile r_e(z) (cloud top ->
              cloud base), with a per-level 1-sigma uncertainty.  Two heads
              share the encoder: a sigmoid-bounded mean head ([1.5, 50] um) and
              a log-std head, trained with a Gaussian NLL + physics-informed
              penalties (monotonicity, adiabatic shape, smoothness).
 
-Architecture source: models_profile_only.ProfileOnlyNetwork + RetrievalConfig
-(n_wavelengths=636, n_geometry_inputs=4, n_levels=7, hidden_dims=(256,)*4).
+Architecture source: paper-3 model = synthetic sweep run_004 (variant M0_rev2;
+hyper_parameter_sweep/sweep_results_profile_only_synthetic_M0_rev2/run_004),
+hidden_dims=(512, 512, 256, 256), GELU, n_levels=7, 636 reflectance + 4 geometry
+inputs.  Mean test RMSE 0.964 um.
 
 Outputs (500 DPI PNG + vector PDF) are written to --output-dir.
 
@@ -204,17 +206,18 @@ def build_figure():
     flow_arrow(ax, x_prep + 0.95, x_in - R - 0.45, cy + 1.65, lw=2.0)
     flow_arrow(ax, x_src + 1.25, x_in - R - 0.45, cy - 1.75, lw=2.0)
 
-    # ── Hidden layers (4 x 256, GELU) ─────────────────────────────────────────
+    # ── Hidden layers (tapered widths 512, 512, 256, 256; GELU) ───────────────
+    hidden_dims = [512, 512, 256, 256]
     hid_ys = [cy + 1.85, cy + 1.1, cy + 0.35, cy - 0.95]
     hidden_cols = []
-    for j, xh in enumerate(x_h):
+    for xh, width in zip(x_h, hidden_dims):
         col = neuron_column(ax, xh, hid_ys, HIDDEN_FILL, HIDDEN_EDGE)
         vdots(ax, xh, cy - 0.35)
         hidden_cols.append(col)
-        ax.text(xh, cy - 1.75, "256", ha="center", va="center",
-                fontsize=9, color=SUBTLE)
+        ax.text(xh, cy - 1.75, str(width), ha="center", va="center",
+                fontsize=9.5, weight="bold", color=SUBTLE)
     layer_header(ax, (x_h[0] + x_h[-1]) / 2,
-                 "Hidden layers  (4 × 256, GELU)")
+                 "Hidden layers  (GELU)")
 
     # connections: input -> H1 -> H2 -> H3 -> H4
     synapses(ax, in_pts, hidden_cols[0])
@@ -295,9 +298,9 @@ def build_figure_defense():
       * No 'sigmoid-bounded r_e ∈ [1.5, 50] μm' callout.
       * Bigger neurons and fonts, ~2:1 aspect to match the slide region.
 
-    Everything kept (input neurons + their labels, 4×256 encoder, the two
-    output heads, the aleatoric-uncertainty callout, and the physics-loss
-    footer) depicts the same ProfileOnlyNetwork.
+    Everything kept (input neurons + their labels, the 512-512-256-256
+    encoder, the two output heads, the aleatoric-uncertainty callout, and the
+    physics-loss footer) depicts the same retrieval network.
     """
     fig, ax = plt.subplots(figsize=(14.0, 7.4))
     ax.set_xlim(0, 14)
@@ -339,16 +342,17 @@ def build_figure_defense():
         ax.text(x_in - 0.50, yy, lbl, ha="right", va="center",
                 fontsize=11.5, color=SUBTLE)
 
-    # ── Hidden layers ─────────────────────────────────────────────────────────
+    # ── Hidden layers (tapered widths 512, 512, 256, 256; GELU) ───────────────
+    hidden_dims = [512, 512, 256, 256]
     hid_ys = [cy + 1.95, cy + 1.28, cy + 0.61, cy - 1.15]
     hidden_cols = []
-    for xh in x_h:
+    for xh, width in zip(x_h, hidden_dims):
         col = neuron_column(ax, xh, hid_ys, HIDDEN_FILL, HIDDEN_EDGE, r=r_main)
         vdots(ax, xh, cy - 0.30)
         hidden_cols.append(col)
-        ax.text(xh, cy - 1.95, "256", ha="center", va="center",
-                fontsize=11.5, color=SUBTLE)
-    header((x_h[0] + x_h[-1]) / 2, "Hidden layers  (4 × 256, GELU)", half=2.7)
+        ax.text(xh, cy - 1.95, str(width), ha="center", va="center",
+                fontsize=13, weight="bold", color=SUBTLE)
+    header((x_h[0] + x_h[-1]) / 2, "Hidden layers  (GELU)", half=2.7)
 
     synapses(ax, in_pts, hidden_cols[0])
     for a, b in zip(hidden_cols[:-1], hidden_cols[1:]):
