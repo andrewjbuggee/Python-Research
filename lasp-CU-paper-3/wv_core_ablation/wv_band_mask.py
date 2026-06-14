@@ -61,8 +61,11 @@ from typing import Dict, List, Tuple
 import h5py
 import numpy as np
 
-REPO = Path(__file__).resolve().parent
-# DEFAULT_H5 = "/Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/training_data/synthetic_training_data_7-levels_8_May_2026.h5"
+# This module lives in repo_root/wv_core_ablation/, so the repo root (where
+# feature_importance_run004/ lives) is two levels up. DEFAULT_OUT below adds the
+# wv_core_ablation/ segment back, writing the masks next to this script.
+REPO = Path(__file__).resolve().parent.parent
+# DEFAULT_H5 = REPO / "training_data" / "synthetic_training_data_7-levels_8_May_2026.h5"   # local copy
 DEFAULT_H5 = "/scratch/alpine/anbu8374/neural_network_training_data/synthetic_training_data_7-levels_8_May_2026.h5"
 
 DEFAULT_IMPORTANCE_NPZ = (REPO / "feature_importance_run004"

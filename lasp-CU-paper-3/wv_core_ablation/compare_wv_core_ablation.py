@@ -22,7 +22,9 @@ from typing import Dict, Optional
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parent
+# This script lives in repo_root/wv_core_ablation/; REPO is the repo root (two
+# levels up). DEFAULT_ABLATION_DIR adds the wv_core_ablation/ segment back.
+REPO = Path(__file__).resolve().parent.parent
 DEFAULT_ABLATION_DIR = REPO / "wv_core_ablation"
 DEFAULT_BASELINE = (REPO / "hyper_parameter_sweep"
                     / "sweep_results_profile_only_synthetic_M0_rev2"

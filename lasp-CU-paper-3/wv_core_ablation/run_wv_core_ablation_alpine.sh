@@ -9,8 +9,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --job-name=NN_wv_core_ablation
-#SBATCH --output=logs/wv_core_ablation_%A_%a.out
-#SBATCH --error=logs/wv_core_ablation_%A_%a.err
+#SBATCH --output=/projects/anbu8374/Python-Research/lasp-CU-paper-3/wv_core_ablation/logs/wv_core_ablation_%A_%a.out
+#SBATCH --error=/projects/anbu8374/Python-Research/lasp-CU-paper-3/wv_core_ablation/logs/wv_core_ablation_%A_%a.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=andrew.buggee@colorado.edu
 #SBATCH --array=0-2                # 0=full(re-baseline) 1=wv_core 2=continuum_control
@@ -21,15 +21,20 @@
 #   against a count-matched redundant-continuum control and the published
 #   baseline. See train_wv_core_ablation.py / wv_band_mask.py.
 #
-# Before submitting:
-#   1. Build the masks once (writes wv_core_ablation/wv_core_ablation_masks.npz):
-#        python wv_band_mask.py --plot
-#   2. Confirm the synthetic HDF5 is at:
-#        /scratch/alpine/anbu8374/neural_network_training_data/
-#          synthetic_training_data_7-levels_8_May_2026.h5
+# All scripts and outputs live in this folder:
+#   /projects/anbu8374/Python-Research/lasp-CU-paper-3/wv_core_ablation/
+# The shared modules (models.py, data.py, ...) stay one level up at the repo
+# root; the scripts add that to sys.path themselves.
+#
+# Before submitting (run once, in an interactive/compile node with the env):
+#   cd /projects/anbu8374/Python-Research/lasp-CU-paper-3/wv_core_ablation
+#   mkdir -p logs                       # SLURM writes the .out/.err here at job start
+#   module load anaconda
+#   conda activate /projects/anbu8374/software/anaconda/envs/dropProfs_nn
+#   python wv_band_mask.py --plot       # writes wv_core_ablation_masks.npz here
 #
 # Submit:
-#   cd /projects/anbu8374/Python-Research/lasp-CU-paper-3
+#   cd /projects/anbu8374/Python-Research/lasp-CU-paper-3/wv_core_ablation
 #   sbatch run_wv_core_ablation_alpine.sh
 # ============================================================
 
@@ -44,23 +49,32 @@ echo "============================================"
 module load anaconda
 conda activate /projects/anbu8374/software/anaconda/envs/dropProfs_nn
 
-REPO=/projects/anbu8374/Python-Research/lasp-CU-paper-3
-cd "$REPO"
-mkdir -p logs wv_core_ablation
+# Folder holding the ablation scripts + outputs (this directory).
+ABLATION_DIR=/projects/anbu8374/Python-Research/lasp-CU-paper-3/wv_core_ablation
+cd "$ABLATION_DIR"
+mkdir -p logs
 
 MASKS=(full wv_core continuum_control)
 MASK=${MASKS[$SLURM_ARRAY_TASK_ID]}
-TRAINING_DATA_DIR="/scratch/alpine/anbu8374/neural_network_training_data/"
-MASKS_NPZ="$REPO/wv_core_ablation/wv_core_ablation_masks.npz"
 
-echo "Mask: $MASK"
+# Full path to the synthetic HDF5 (8-May file). Passed via --h5-path, NOT
+# --training-data-dir: resolve_h5_path() keeps the *filename* from the config,
+# and run_004.json still names the older 5-May file, so a dir override would
+# point at a non-existent path.
+H5_PATH="/scratch/alpine/anbu8374/neural_network_training_data/synthetic_training_data_7-levels_8_May_2026.h5"
+MASKS_NPZ="$ABLATION_DIR/wv_core_ablation_masks.npz"
+
+echo "Mask:     $MASK"
+echo "HDF5:     $H5_PATH"
+echo "Masks:    $MASKS_NPZ"
+echo "Out dir:  $ABLATION_DIR"
 echo ""
 
 python train_wv_core_ablation.py \
     --mask "$MASK" \
-    --training-data-dir "$TRAINING_DATA_DIR" \
+    --h5-path "$H5_PATH" \
     --masks-npz "$MASKS_NPZ" \
-    --output-dir "$REPO/wv_core_ablation"
+    --output-dir "$ABLATION_DIR"
 EXIT_CODE=$?
 
 echo ""

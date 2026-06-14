@@ -49,7 +49,11 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset, Subset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-REPO = Path(__file__).resolve().parent
+# This script lives in repo_root/wv_core_ablation/; REPO is the repo root (two
+# levels up) so the shared modules (models, data, ...) import and the
+# config/training_data paths resolve. wv_band_mask is imported from this script's
+# own directory, which Python adds to sys.path automatically.
+REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from models import RetrievalConfig                              # noqa: E402
