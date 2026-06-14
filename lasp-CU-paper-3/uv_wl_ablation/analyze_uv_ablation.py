@@ -30,7 +30,10 @@ import numpy as np
 import torch
 
 import sys
-REPO = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent
+REPO = HERE
+while not (REPO / 'models.py').exists() and REPO != REPO.parent:
+    REPO = REPO.parent
 sys.path.insert(0, str(REPO))
 from models import RetrievalConfig                                   # noqa: E402
 from models_profile_only_extras import ProfileOnlyNetworkExtras      # noqa: E402
@@ -68,8 +71,9 @@ def main():
     ap.add_argument('--device', choices=['cuda', 'mps', 'cpu'], default=None)
     args = ap.parse_args()
 
-    mdir = (REPO / args.model_dir).resolve() if not Path(args.model_dir).is_absolute() \
-        else Path(args.model_dir)
+    mdir = Path(args.model_dir)
+    if not mdir.is_absolute():
+        mdir = (HERE / args.model_dir).resolve()   # outputs live under this script's dir
     device = pick_device(args.device)
     summ = json.loads((mdir / 'summary.json').read_text())
     ckpt = torch.load(mdir / 'best_model.pt', map_location=device, weights_only=False)

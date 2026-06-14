@@ -26,14 +26,18 @@ shrinks from 643 to (n_kept_spectral + 4 geometry + 3 extras).
 Run BOTH for a fair comparison (ablation vs control removes train-to-train
 variance as a confound).
 
-Outputs (under standalone_results_uv_ablation/<tag>/):
+Outputs (under uv_wl_ablation/standalone_results_uv_ablation/<tag>/):
     best_model.pt   (model_state_dict + model_config + keep_idx + cutoff_nm)
     summary.json    (test metrics in the same schema as the sweep)
     history.json
+best_model.pt is rewritten every --checkpoint-every epochs as crash insurance.
 
-Run:
+Run locally (Mac/MPS, slow):
     /opt/anaconda3/bin/python3 train_uv_ablation_run004.py --cutoff-nm 500
-    /opt/anaconda3/bin/python3 train_uv_ablation_run004.py --cutoff-nm 0
+
+Run on Alpine (CUDA) — data lives in scratch, not the repo:
+    python train_uv_ablation_run004.py --cutoff-nm 500 \
+        --training-data-dir /scratch/alpine/anbu8374/neural_network_training_data/
 
 Author: Andrew J. Buggee, LASP / CU Boulder
 """
@@ -53,20 +57,27 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, Subset, DataLoader
 
-REPO = Path(__file__).resolve().parent
+# Repo root = nearest ancestor containing models.py (robust to where this
+# script is nested, e.g. uv_wl_ablation/).  HERE = this script's own folder,
+# used for outputs so the experiment stays self-contained.
+HERE = Path(__file__).resolve().parent
+REPO = HERE
+while not (REPO / 'models.py').exists() and REPO != REPO.parent:
+    REPO = REPO.parent
 sys.path.insert(0, str(REPO))
 
 from models import RetrievalConfig                                   # noqa: E402
 from models_profile_only_extras import ProfileOnlyNetworkExtras      # noqa: E402
 from models_profile_only import ProfileOnlyLoss                      # noqa: E402
-from data import (LibRadtranDatasetExtras, create_profile_aware_splits)  # noqa: E402
+from data import (LibRadtranDatasetExtras, create_profile_aware_splits,  # noqa: E402
+                  resolve_h5_path)
 # Canonical, bit-identical training helpers used by the sweep that made run_004.
 from train_standalone_profile_only_extras import (                   # noqa: E402
     train_one_epoch, validate, predict_test)
 
 RUN_004 = (REPO / 'hyper_parameter_sweep'
            / 'sweep_results_profile_only_synthetic_M0_rev2' / 'run_004')
-H5 = REPO / 'training_data' / 'synthetic_training_data_7-levels_8_May_2026.h5'
+H5_DEFAULT = REPO / 'training_data' / 'synthetic_training_data_7-levels_8_May_2026.h5'
 N_EXTRAS = 3
 N_SPECTRAL_FULL = 636
 
@@ -91,9 +102,9 @@ class ChannelDropDataset(Dataset):
         return x.index_select(0, self.keep_idx), prof, tau
 
 
-def build_keep_idx(cutoff_nm: float) -> tuple[np.ndarray, np.ndarray]:
+def build_keep_idx(cutoff_nm: float, h5_path) -> tuple[np.ndarray, np.ndarray]:
     """Return (keep_idx into 643-dim x, kept spectral wavelengths nm)."""
-    with h5py.File(H5, 'r') as f:
+    with h5py.File(h5_path, 'r') as f:
         wl = f['wavelengths'][:].astype(np.float64)               # (636,)
     spec_keep = np.where(wl >= cutoff_nm)[0]                       # indices 0..635
     geom = np.arange(N_SPECTRAL_FULL, N_SPECTRAL_FULL + 4)        # 636..639
@@ -118,6 +129,14 @@ def parse_args():
                    help='Drop spectral channels with wavelength < cutoff. '
                         '0 = keep all 636 (control). Default 500.')
     p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--h5-path', type=str, default=str(H5_DEFAULT),
+                   help='HDF5 path (default: local repo training_data/ copy).')
+    p.add_argument('--training-data-dir', type=str, default=None,
+                   help='Override ONLY the directory hosting the HDF5 (keeps '
+                        'the filename). On Alpine pass '
+                        '/scratch/alpine/anbu8374/neural_network_training_data/')
+    p.add_argument('--checkpoint-every', type=int, default=100,
+                   help='Rewrite best_model.pt every N epochs (crash insurance).')
     p.add_argument('--device', choices=['cuda', 'mps', 'cpu'], default=None)
     p.add_argument('--n-epochs', type=int, default=None,
                    help='Override n_epochs (default: run_004 value = 1500).')
@@ -129,6 +148,17 @@ def main():
     args = parse_args()
     device = pick_device(args.device)
 
+    h5_path = resolve_h5_path(args.h5_path, args.training_data_dir).resolve()
+    if not h5_path.exists():
+        raise FileNotFoundError(
+            f'HDF5 not found: {h5_path}\n  --h5-path = {args.h5_path}\n'
+            f'  --training-data-dir = {args.training_data_dir}')
+    if not (RUN_004 / 'summary.json').exists():
+        raise FileNotFoundError(
+            f'run_004 summary.json not found at {RUN_004}. It holds the '
+            f'hyperparameters; it is created where the M0_rev2 sweep was '
+            f'trained (Alpine) and is .gitignored, so make sure it is present.')
+
     # ── run_004 recipe from its summary.json ─────────────────────────────────
     summ = json.loads((RUN_004 / 'summary.json').read_text())
     hp = summ['hyperparams']
@@ -138,13 +168,13 @@ def main():
     instrument = summ['data'].get('instrument', 'hysics')
     n_epochs = args.n_epochs if args.n_epochs is not None else int(hp['n_epochs'])
 
-    keep_idx, kept_wl = build_keep_idx(args.cutoff_nm)
+    keep_idx, kept_wl = build_keep_idx(args.cutoff_nm, h5_path)
     n_kept_spectral = int((keep_idx < N_SPECTRAL_FULL).sum())
 
     tag = (args.output_dir if args.output_dir else
-           f'control_all636' if args.cutoff_nm <= 0 else
+           'control_all636' if args.cutoff_nm <= 0 else
            f'ablation_cutoff{int(args.cutoff_nm)}nm_keep{n_kept_spectral}')
-    out_dir = (REPO / 'standalone_results_uv_ablation' / tag)
+    out_dir = (HERE / 'standalone_results_uv_ablation' / tag)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print('=' * 70)
@@ -152,6 +182,7 @@ def main():
           f'(keep {n_kept_spectral}/{N_SPECTRAL_FULL} spectral)')
     print('=' * 70)
     print(f'  device     : {device}   seed {args.seed}   n_epochs {n_epochs}')
+    print(f'  HDF5       : {h5_path}')
     print(f'  kept spectral λ range: '
           f'{kept_wl.min():.1f}–{kept_wl.max():.1f} nm')
     print(f'  input dim  : {n_kept_spectral} spectral + 4 geom + {N_EXTRAS} extras '
@@ -163,7 +194,7 @@ def main():
     np.random.seed(args.seed)
 
     base_ds = LibRadtranDatasetExtras(
-        str(H5), normalize=True, instrument=instrument,
+        str(h5_path), normalize=True, instrument=instrument,
         zero_tau_c=extras['zero_tau_c'], zero_wv_above=extras['zero_wv_above'],
         zero_wv_in=extras['zero_wv_in'])
     ds = ChannelDropDataset(base_ds, keep_idx)
@@ -182,7 +213,7 @@ def main():
     mem_ds = torch.utils.data.TensorDataset(X_all, P_all)
 
     train_idx, val_idx, test_idx = create_profile_aware_splits(
-        str(H5), n_val_profiles=n_val, n_test_profiles=n_test, seed=args.seed)
+        str(h5_path), n_val_profiles=n_val, n_test_profiles=n_test, seed=args.seed)
     pin = torch.cuda.is_available()
     train_loader = DataLoader(Subset(mem_ds, train_idx), batch_size=hp['batch_size'],
                               shuffle=True, num_workers=0, pin_memory=pin)
@@ -199,7 +230,6 @@ def main():
         hidden_dims=tuple(hp['hidden_dims']), dropout=hp['dropout'],
         activation=hp.get('activation', 'gelu'))
     model = ProfileOnlyNetworkExtras(model_cfg, n_extras=N_EXTRAS).to(device)
-    # sanity: dataset feature count == model input
     assert ds[0][0].shape[-1] == model.input_dim, \
         f'{ds[0][0].shape[-1]} != {model.input_dim}'
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -224,6 +254,20 @@ def main():
     aug_noise = float(hp.get('augment_noise_std', 0.0))
     target_lr = float(hp['learning_rate'])
 
+    def save_checkpoint(state):
+        torch.save({
+            'model_state_dict': state,
+            'n_extras': N_EXTRAS,
+            'cutoff_nm': args.cutoff_nm,
+            'keep_idx': keep_idx.tolist(),
+            'kept_wavelengths_nm': kept_wl.tolist(),
+            'model_config': {
+                'n_wavelengths': n_kept_spectral, 'n_geometry_inputs': 4,
+                'n_levels': n_levels, 'hidden_dims': list(hp['hidden_dims']),
+                'dropout': hp['dropout'],
+                'activation': hp.get('activation', 'gelu')},
+        }, out_dir / 'best_model.pt')
+
     best_val, best_epoch, best_state, no_improve = float('inf'), -1, None, 0
     history = {'train': [], 'val': []}
     global_step = 0
@@ -245,6 +289,10 @@ def main():
             no_improve += 1
         if global_step >= warmup:
             scheduler.step(val_loss)
+        # crash-insurance checkpoint of the best-so-far weights + a progress file
+        if best_state is not None and epoch % args.checkpoint_every == 0:
+            save_checkpoint(best_state)
+            (out_dir / 'history.json').write_text(json.dumps(history))
         if epoch % 25 == 0 or epoch <= 5:
             print(f'  epoch {epoch:4d} | train {train_loss:7.4f} | '
                   f'val {val_loss:7.4f} | lr {optimizer.param_groups[0]["lr"]:.1e} '
@@ -286,17 +334,7 @@ def main():
     }
     (out_dir / 'summary.json').write_text(json.dumps(summary, indent=2))
     (out_dir / 'history.json').write_text(json.dumps(history))
-    torch.save({
-        'model_state_dict': best_state,
-        'n_extras': N_EXTRAS,
-        'cutoff_nm': args.cutoff_nm,
-        'keep_idx': keep_idx.tolist(),
-        'kept_wavelengths_nm': kept_wl.tolist(),
-        'model_config': {
-            'n_wavelengths': n_kept_spectral, 'n_geometry_inputs': 4,
-            'n_levels': n_levels, 'hidden_dims': list(hp['hidden_dims']),
-            'dropout': hp['dropout'], 'activation': hp.get('activation', 'gelu')},
-    }, out_dir / 'best_model.pt')
+    save_checkpoint(best_state)
 
     print('\n' + '=' * 70)
     print(f'  DONE in {train_seconds:.0f}s ({len(history["train"])} epochs)')
