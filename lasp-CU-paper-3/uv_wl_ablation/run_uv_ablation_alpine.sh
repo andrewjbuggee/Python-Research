@@ -55,7 +55,7 @@ else
 fi
 
 echo "Running with --cutoff-nm $CUTOFF"
-python uv_wl_ablation/train_uv_ablation_run004.py \
+python train_uv_ablation_run004.py \
     --cutoff-nm "$CUTOFF" \
     --training-data-dir "$DATA_DIR" \
     --device cuda
