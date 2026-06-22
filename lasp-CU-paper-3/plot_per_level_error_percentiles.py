@@ -76,14 +76,29 @@ def setup_style():
 
 def plot_per_level_error_percentiles(pred: np.ndarray, true: np.ndarray,
                                      pred_std: np.ndarray,
-                                     out_path: Path) -> dict:
-    """Single-axes per-level error figure. Returns the plotted summary stats."""
+                                     out_path: Path,
+                                     sigma_stat: str = 'mean') -> dict:
+    """Single-axes per-level error figure. Returns the plotted summary stats.
+
+    sigma_stat selects the central tendency of the per-level predicted σ
+    (aleatoric): 'mean' (default, original figure) or 'median'. The median
+    is more robust to the right-skewed σ distribution across test samples.
+    """
     abs_err   = np.abs(pred - true)                        # (n_samp, n_lev)
     n_levels  = pred.shape[1]
     levels    = np.arange(1, n_levels + 1)
 
     p05, p50, p95 = np.percentile(abs_err, PERCENTILES, axis=0)
-    sigma_mean    = pred_std.mean(axis=0)
+    if sigma_stat == 'median':
+        sigma_central = np.median(pred_std, axis=0)        # (n_lev,)
+        sigma_label   = r'Median predicted $\sigma$ (aleatoric)'
+        sigma_key     = 'median_predicted_sigma'
+    elif sigma_stat == 'mean':
+        sigma_central = pred_std.mean(axis=0)              # (n_lev,)
+        sigma_label   = r'Mean predicted $\sigma$ (aleatoric)'
+        sigma_key     = 'mean_predicted_sigma'
+    else:
+        raise ValueError(f"sigma_stat must be 'mean' or 'median', got {sigma_stat!r}")
 
     fig, ax = plt.subplots(figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
 
@@ -95,10 +110,10 @@ def plot_per_level_error_percentiles(pred: np.ndarray, true: np.ndarray,
     ax.plot(p50, levels, 'o-', color=COLOR_ERROR,
             linewidth=1.5, markersize=4.5,
             label='Median |error|')
-    # Mean predicted σ (aleatoric)
-    ax.plot(sigma_mean, levels, 'd--', color=COLOR_SIGMA,
+    # Central predicted σ (aleatoric): mean or median per level
+    ax.plot(sigma_central, levels, 'd--', color=COLOR_SIGMA,
             linewidth=1.2, markersize=4, alpha=0.95,
-            label=r'Mean predicted $\sigma$ (aleatoric)')
+            label=sigma_label)
 
     ax.set_xlabel(r'Per-level error ($\mu$m)')
     ax.set_ylabel(f'Vertical level (1 = cloud top, {n_levels} = cloud base)')
@@ -119,7 +134,8 @@ def plot_per_level_error_percentiles(pred: np.ndarray, true: np.ndarray,
         'abs_err_p05':            p05.tolist(),
         'abs_err_median':         p50.tolist(),
         'abs_err_p95':            p95.tolist(),
-        'mean_predicted_sigma':   sigma_mean.tolist(),
+        'sigma_stat':             sigma_stat,
+        sigma_key:                sigma_central.tolist(),
         'n_test_samples':         int(pred.shape[0]),
     }
 
@@ -206,6 +222,9 @@ def parse_args():
                         'config.json + best_model.pt.')
     p.add_argument('--output-name', default='per_level_error_percentiles.png',
                    help='Filename for the saved figure inside the results dir.')
+    p.add_argument('--sigma-stat', choices=['mean', 'median'], default='mean',
+                   help='Central tendency of per-level predicted sigma to '
+                        'plot (default: mean).')
     p.add_argument('--refresh', action='store_true',
                    help='Force re-inference even if pred_cache.npz exists.')
     p.add_argument('--device', choices=['cuda', 'mps', 'cpu'], default=None,
@@ -249,8 +268,9 @@ def main():
     print(f'Test set : {pred.shape[0]} samples x {pred.shape[1]} levels')
 
     out_fig = results_dir / args.output_name
-    stats = plot_per_level_error_percentiles(pred, true, pred_std, out_fig)
-    print(f'Figure   -> {out_fig}  (dpi={DPI})')
+    stats = plot_per_level_error_percentiles(pred, true, pred_std, out_fig,
+                                             sigma_stat=args.sigma_stat)
+    print(f'Figure   -> {out_fig}  (dpi={DPI}, sigma_stat={args.sigma_stat})')
 
     # Save the numeric summary alongside the figure for traceability.
     stats_path = out_fig.with_suffix('.json')
