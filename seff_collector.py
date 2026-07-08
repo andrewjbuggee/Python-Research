@@ -121,8 +121,9 @@ def main():
         try:
             result = subprocess.run(
                 ['seff', job_id],
-                capture_output=True,
-                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
                 timeout=10
             )
 
@@ -156,9 +157,10 @@ def main():
         except subprocess.TimeoutExpired:
             failed_calls.append((task_id, "timeout"))
             log("  Task {:3d}: TIMEOUT (seff call)".format(task_id))
-        except Exception as e:
+        except OSError as e:
             failed_calls.append((task_id, str(e)))
-            log("  Task {:3d}: {}".format(task_id, type(e).__name__))
+            log("  Task {:3d}: {} - {}".format(
+                task_id, type(e).__name__, e))
 
     log("\n" + "=" * 80)
     log("SUMMARY STATISTICS")
