@@ -1,0 +1,15 @@
+# Data downloaded from the ARM archive lives outside version control.
+data/
+figures/
+
+# ARM Live credentials (never commit these)
+.armlive_credentials.json
+
+# Python build/runtime artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
