@@ -18,6 +18,18 @@ import os
 from datetime import timedelta
 
 
+def _mem_to_mb(val, unit):
+    """Convert a memory value + seff unit string to MB (binary, 1 GiB = 1024 MiB)."""
+    factors_mb = {
+        'B': 1.0 / (1024 * 1024),
+        'K': 1.0 / 1024, 'KB': 1.0 / 1024, 'KIB': 1.0 / 1024,
+        'M': 1.0, 'MB': 1.0, 'MIB': 1.0,
+        'G': 1024.0, 'GB': 1024.0, 'GIB': 1024.0,
+        'T': 1024.0 * 1024, 'TB': 1024.0 * 1024, 'TIB': 1024.0 * 1024,
+    }
+    return val * factors_mb.get(unit.upper(), 1.0)
+
+
 def parse_seff_output(seff_text):
     """Extract key metrics from seff output."""
     metrics = {}
@@ -26,47 +38,30 @@ def parse_seff_output(seff_text):
     m = re.search(r'State:\s+(\S+)', seff_text)
     metrics['state'] = m.group(1) if m else None
 
-    # Parse wall time (Elapsed time: HH:MM:SS)
-    m = re.search(r'Elapsed time:\s+(\d+):(\d+):(\d+)', seff_text)
+    # Parse wall time (Job Wall-clock time: [D-]HH:MM:SS)
+    m = re.search(
+        r'Job Wall-clock time:\s+(?:(\d+)-)?(\d+):(\d+):(\d+)', seff_text)
     if m:
-        hours = int(m.group(1))
-        minutes = int(m.group(2))
-        seconds = int(m.group(3))
-        metrics['elapsed_sec'] = hours * 3600 + minutes * 60 + seconds
+        days = int(m.group(1)) if m.group(1) else 0
+        hours = int(m.group(2))
+        minutes = int(m.group(3))
+        seconds = int(m.group(4))
+        metrics['elapsed_sec'] = (
+            days * 86400 + hours * 3600 + minutes * 60 + seconds)
 
     # Parse CPU efficiency
     m = re.search(r'CPU Efficiency:\s+([\d.]+)%', seff_text)
     metrics['cpu_eff_pct'] = float(m.group(1)) if m else None
 
-    # Parse memory - requested
-    m = re.search(r'Memory Requested:\s+([\d.]+)\s+(\w+)', seff_text)
+    # Parse memory used (Memory Utilized: value unit, e.g. "75.00 GiB")
+    m = re.search(r'Memory Utilized:\s+([\d.]+)\s+(\w+)', seff_text)
     if m:
-        val = float(m.group(1))
-        unit = m.group(2)
-        if unit == 'G':
-            metrics['mem_req_mb'] = val * 1024
-        elif unit == 'M':
-            metrics['mem_req_mb'] = val
-        elif unit == 'K':
-            metrics['mem_req_mb'] = val / 1024
+        metrics['mem_used_mb'] = _mem_to_mb(float(m.group(1)), m.group(2))
 
-    # Parse memory - used
-    m = re.search(r'Memory Used:\s+([\d.]+)\s+(\w+)', seff_text)
+    # Parse memory efficiency (reported directly by seff as a percentage)
+    m = re.search(r'Memory Efficiency:\s+([\d.]+)%', seff_text)
     if m:
-        val = float(m.group(1))
-        unit = m.group(2)
-        if unit == 'G':
-            metrics['mem_used_mb'] = val * 1024
-        elif unit == 'M':
-            metrics['mem_used_mb'] = val
-        elif unit == 'K':
-            metrics['mem_used_mb'] = val / 1024
-
-    # Calculate memory efficiency (seff definition: actual used / requested)
-    if 'mem_req_mb' in metrics and 'mem_used_mb' in metrics:
-        if metrics['mem_req_mb'] > 0:
-            eff = (metrics['mem_used_mb'] / metrics['mem_req_mb']) * 100
-            metrics['mem_eff_pct'] = eff
+        metrics['mem_eff_pct'] = float(m.group(1))
 
     return metrics
 
@@ -195,6 +190,21 @@ def main():
             log("  Stdev: {:7.2f} GB".format(calc_stdev(mem_used_gbs)))
     else:
         log("\nTotal Memory Used: NO DATA")
+
+    # Memory used for COMPLETED jobs only (most useful for right-sizing
+    # requests, since OOM/timeout jobs did not run to completion)
+    completed_mem_gbs = [m['mem_used_mb'] / 1024 for m in results.values()
+                         if 'mem_used_mb' in m and m.get('state') == 'COMPLETED']
+    if completed_mem_gbs:
+        log("\nMemory Used (COMPLETED jobs only):")
+        log("  Count: {} tasks".format(len(completed_mem_gbs)))
+        log("  Min:   {:7.2f} GB".format(min(completed_mem_gbs)))
+        log("  Max:   {:7.2f} GB".format(max(completed_mem_gbs)))
+        log("  Mean:  {:7.2f} GB".format(calc_mean(completed_mem_gbs)))
+        if len(completed_mem_gbs) > 1:
+            log("  Stdev: {:7.2f} GB".format(calc_stdev(completed_mem_gbs)))
+    else:
+        log("\nMemory Used (COMPLETED jobs only): NO DATA")
 
     # Memory efficiency stats
     mem_effs = [m['mem_eff_pct'] for m in results.values()
