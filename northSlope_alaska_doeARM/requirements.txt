@@ -1,0 +1,12 @@
+# pip alternative to environment.yml (see that file for notes).
+# The core pipeline needs only numpy/pandas/xarray/netCDF4; the rest support
+# plotting, lazy multi-file loading, testing, and optional ARM tooling.
+numpy
+pandas
+xarray
+netCDF4
+dask
+matplotlib
+scipy
+act-atmos
+pytest

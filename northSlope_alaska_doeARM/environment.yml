@@ -1,0 +1,30 @@
+# Conda environment for the NSA ARM mixed-phase cloud pipeline.
+#
+# Create with:
+#   conda env create -f environment.yml
+#   conda activate nsa-arm
+#
+# Notes:
+#   - `act-atmos` (the ARM/DOE Atmospheric data Community Toolkit) is optional for
+#     this pipeline: arm_nsa/download.py talks to the ARM Live web service using
+#     only the Python standard library. ACT is included because it provides
+#     convenient discovery utilities and reference implementations of ARM QC
+#     handling, and it is the toolkit ARM staff support directly.
+#   - dask is used by xarray for lazy multi-file loading of the (large) KAZR
+#     radar files; everything else works without it.
+name: nsa-arm
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - xarray
+  - netcdf4
+  - dask
+  - matplotlib
+  - scipy
+  - act-atmos
+  - pytest
+  - pip
