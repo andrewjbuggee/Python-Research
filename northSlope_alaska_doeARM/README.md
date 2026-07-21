@@ -85,7 +85,7 @@ Shupe-Turner phase record covering approximately **2004-2019**.
 
 ## How to get the data: API vs. local download
 
-**Yes, ARM has a proper API.** Everything below is free; you need an ARM user
+**ARM has a proper API.** Everything below is free; you need an ARM user
 account (https://adc.arm.gov/armuserreg/#/new).
 
 1. **ARM Live Data Web Service** (https://adc.arm.gov/armlive/) — a REST API:

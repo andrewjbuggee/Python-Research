@@ -60,7 +60,7 @@ MAT_DIR          = Path('/Volumes/My Passport/neural_network_training_data/saz0_
 TAU_C_MIN        = 3.0          # only use clouds with cloud optical depth ≥ this
 L_COMMON         = 80           # length of the common normalized-altitude grid (≥ 60)
 N_FIXED_LEVELS   = 7            # every synthetic profile is on this fixed grid
-N_SAMPLES        = 300001
+N_SAMPLES        = 100
 
 VAR_TARGET       = 0.99         # cumulative variance target for picking K_RE, K_LWC, K_T, K_VAPOR
 K_RE_MAX         = 6           # hard cap on number of re modes kept
@@ -187,6 +187,11 @@ def load_era5_fields(d):
 # ── Load ORACLES profiles with tau_c ≥ TAU_C_MIN ───────────────────────────────
 mat_files = sorted(f for f in MAT_DIR.glob('*.mat') if not f.name.startswith('._'))
 print(f'Found {len(mat_files)} .mat files in {MAT_DIR}')
+if not mat_files:
+    raise SystemExit(
+        f'No .mat files found in {MAT_DIR}. '
+        f'Is the external drive mounted? (exists={MAT_DIR.exists()})'
+    )
 
 profiles_re   = []   # raw arrays (top → base)
 profiles_lwc  = []

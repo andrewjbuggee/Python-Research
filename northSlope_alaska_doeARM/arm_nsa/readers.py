@@ -46,9 +46,13 @@ def files_in_range(key: str, start_date: str, end_date: str) -> List[Path]:
 
     A one-day pad is applied at the front because an ARM daily file stamped
     2022-01-31 can contain records running into 2022-02-01 00:00.
+
+    Dates are parsed with strptime (not datetime.fromisoformat) so that
+    non-zero-padded fields like "2018-01-1" are tolerated -- fromisoformat
+    rejects them, which is a common footgun when passing dates on the CLI.
     """
-    start = dt.datetime.fromisoformat(start_date) - dt.timedelta(days=1)
-    end = dt.datetime.fromisoformat(end_date) + dt.timedelta(days=1)
+    start = dt.datetime.strptime(start_date, "%Y-%m-%d") - dt.timedelta(days=1)
+    end = dt.datetime.strptime(end_date, "%Y-%m-%d") + dt.timedelta(days=1)
     selected: List[Path] = []
     for path in local_files(key):
         stamp = file_timestamp(path)
