@@ -407,3 +407,25 @@ def get_spec(key: str) -> DatastreamSpec:
 def raw_dir_for(datastream: str) -> Path:
     """Directory where raw files for an ARM datastream are stored locally."""
     return RAW_DATA_DIR / datastream
+
+
+def set_data_root(root: "str | os.PathLike[str]") -> Path:
+    """Repoint the pipeline's data tree at `root` at runtime.
+
+    Recomputes DATA_ROOT / RAW_DATA_DIR / PROCESSED_DATA_DIR from `root` and
+    rebinds these module globals in place. Because raw_dir_for() and the reader
+    modules read these names at call time (not import time), any code that runs
+    *after* this call -- downloads and reads alike -- uses the new location.
+
+    This is the programmatic equivalent of exporting ARM_NSA_DATA_ROOT before
+    import, and is what the scripts' --data-root flag calls to send data to (or
+    read it back from) an external drive. FIGURE_DIR is deliberately left inside
+    the repo, so figures stay with the code even when the data lives elsewhere.
+
+    Returns the resolved DATA_ROOT.
+    """
+    global DATA_ROOT, RAW_DATA_DIR, PROCESSED_DATA_DIR
+    DATA_ROOT = Path(root).expanduser().resolve()
+    RAW_DATA_DIR = DATA_ROOT / "raw"
+    PROCESSED_DATA_DIR = DATA_ROOT / "processed"
+    return DATA_ROOT

@@ -33,6 +33,7 @@ Design notes
 from __future__ import annotations
 
 import json
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -199,8 +200,10 @@ def download_datastream(
         arm_names = config.get_spec(key).datastreams
 
     local_paths: List[Path] = []
+    total_in_archive = 0
     for arm_name in arm_names:
         filenames = query_files(arm_name, start_date, end_date, creds)
+        total_in_archive += len(filenames)
         if verbose:
             print(f"{arm_name}: {len(filenames)} file(s) in archive for "
                   f"{start_date}..{end_date}")
@@ -210,7 +213,46 @@ def download_datastream(
             local_paths.append(path)
             if verbose and (i % 25 == 0 or i == len(filenames)):
                 print(f"  [{i}/{len(filenames)}] {filename}")
+
+    # A spec with several names (KAZR eras, QCRAD c2/c1) legitimately gets 0
+    # from the "wrong" era, so only shout when EVERY name came back empty.
+    if total_in_archive == 0:
+        _warn_no_files(key, arm_names, start_date, end_date)
     return local_paths
+
+
+def _warn_no_files(
+    key: str,
+    arm_names: Sequence[str],
+    start_date: str,
+    end_date: str,
+) -> None:
+    """Loudly flag a datastream that the ARM Live API served zero files for.
+
+    A zero-file result is NOT an HTTP error: the ARM Live query endpoint returns
+    a normal "success" response with an empty file list both when (a) the date
+    range is outside the product's coverage, and (b) the datastream is not served
+    by the real-time web service at all -- notably PI-contributed products such
+    as the Shupe-Turner cloud microphysics ("nsamicrobase2shupeturnC1.c1"), which
+    per ARM's docs "have to go through the regular ordering process." Either way
+    the loop downloads nothing, and the quiet "0 file(s)" line is easy to miss --
+    so make it impossible to overlook here.
+    """
+    names = ", ".join(arm_names)
+    print(
+        f"\nWARNING: datastream key '{key}' ({names}) returned 0 files from the "
+        f"ARM Live API for {start_date}..{end_date}; nothing was downloaded.\n"
+        "  This is a 'success' response with an empty file list, not a crash. "
+        "Likely causes:\n"
+        "    - the date range is outside the product's archive coverage; or\n"
+        "    - the datastream is not served by the ARM Live web service. Many\n"
+        "      PI-contributed products (including the Shupe-Turner microphysics\n"
+        "      used for cloud phase) must instead be ORDERED via ARM Data\n"
+        "      Discovery (https://adc.arm.gov/discovery) or requested from\n"
+        "      adc@arm.gov -- they cannot be fetched through this downloader.\n"
+        "  Verify the datastream name and its coverage before re-running.",
+        file=sys.stderr,
+    )
 
 
 def local_files(key: str) -> List[Path]:

@@ -56,6 +56,7 @@ data/processed/phase_radiation_stats_<...>.csv per-scene statistics table
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from _plot_common import finish_figure, use_headless_backend_if_needed
 
@@ -86,6 +87,20 @@ def main() -> int:
         help="max scene-to-flux time offset when pairing (default 3min)",
     )
     parser.add_argument("--no-show", action="store_true", help="save only")
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Root directory to read data from (expects raw/ underneath, as "
+            "written by download_nsa_data.py --data-root). Use this to read "
+            "data stored on an external drive, e.g. --data-root "
+            "/Volumes/ARM_NSA/data. Overrides ARM_NSA_DATA_ROOT; default is "
+            "<repo>/data. Note: processed outputs are written under this root "
+            "too."
+        ),
+    )
     args = parser.parse_args()
     use_headless_backend_if_needed(show=not args.no_show)
 
@@ -103,6 +118,15 @@ def main() -> int:
         scene_occurrence,
     )
     from arm_nsa.surface import read_qcrad
+
+    if args.data_root is not None:
+        root = config.set_data_root(args.data_root)
+        if not root.exists():
+            raise SystemExit(
+                f"error: data root {root} does not exist -- is the external "
+                f"drive mounted? (check with `ls /Volumes`)"
+            )
+        print(f"Data root: {root}")
 
     months = tuple(int(m) for m in args.months.split(","))
 
