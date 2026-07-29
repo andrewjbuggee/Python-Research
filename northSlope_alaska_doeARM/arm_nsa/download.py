@@ -32,7 +32,11 @@ Design notes
 
 from __future__ import annotations
 
+import errno
+import http.client
 import json
+import shutil
+import ssl
 import sys
 import time
 import urllib.error
@@ -48,6 +52,73 @@ ARM_LIVE_BASE_URL = "https://adc.arm.gov/armlive"
 _CHUNK_SIZE_BYTES = 1024 * 1024
 _MAX_RETRIES = 4
 _RETRY_BASE_DELAY_S = 5.0
+
+# Socket timeout for bulk file downloads. This is a STALL timeout, not a cap on
+# total transfer time: Python applies it to each individual socket read, so a
+# large file that keeps making progress is never cut off, while a connection
+# that goes silent raises TimeoutError after this long and drops into the retry
+# loop in download_file(). Kept well below the 600 s used previously because no
+# legitimate 1 MB chunk takes two minutes, and because the failure this guards
+# against -- a laptop sleeping mid-download -- leaves a half-open TCP
+# connection that never sends a RST. Without a timeout the read simply blocks
+# forever, which is exactly what an overnight run was observed to do.
+_STALL_TIMEOUT_S = 120.0
+
+# Faults that mean "the network misbehaved", i.e. worth retrying. A long
+# sequential job over thousands of files WILL hit these: the server closes a
+# keep-alive connection, an SSL session is torn down mid-stream, a response is
+# truncated. Enumerated deliberately rather than caught as a blanket OSError,
+# because URLError, ConnectionError, TimeoutError and ssl.SSLError are all
+# OSError subclasses and so is a full disk -- and retrying a full disk four
+# times just buries the real cause under a misleading "failed after retries".
+#   urllib.error.URLError      DNS / connect failures (HTTPError subclasses it)
+#   http.client.HTTPException  IncompleteRead, BadStatusLine, RemoteDisconnected
+#                              -- note these are NOT OSError subclasses
+#   ConnectionError            BrokenPipeError, ConnectionResetError, aborts
+#   TimeoutError               the _STALL_TIMEOUT_S read timeout above
+#   ssl.SSLError               SSLEOFError and friends, mid-stream TLS aborts
+_TRANSIENT_NETWORK_ERRORS = (
+    urllib.error.URLError,
+    http.client.HTTPException,
+    ConnectionError,
+    TimeoutError,
+    ssl.SSLError,
+)
+
+
+def _warn_if_insufficient_space(out_dir: Path, n_missing: int) -> None:
+    """Warn before a bulk download that looks unlikely to fit on disk.
+
+    The per-file size is estimated from files already in `out_dir`, so the
+    estimate self-calibrates per datastream (THERMOCLDPHASE files are ~70 MB,
+    QCRAD ~0.5 MB) and costs no extra network calls. Stays silent when there is
+    too little local data to measure. This only warns -- a partial download is
+    still useful, and the caller may be deliberately filling the disk.
+    """
+    if n_missing <= 0:
+        return
+    local = [p for p in out_dir.glob("*") if p.suffix in (".nc", ".cdf")]
+    if len(local) < 5:
+        return
+    sample = local[-50:]
+    mean_bytes = sum(p.stat().st_size for p in sample) / len(sample)
+    needed = mean_bytes * n_missing
+    free = shutil.disk_usage(out_dir).free
+    gib = 1024**3
+    if needed <= free * 0.95:
+        return
+    affordable = int(free * 0.95 / mean_bytes) if mean_bytes else 0
+    print(
+        f"\nWARNING: not enough free disk space to finish this datastream.\n"
+        f"  {n_missing} file(s) still to fetch x ~{mean_bytes / 1e6:.0f} MB "
+        f"each = ~{needed / gib:.0f} GiB needed\n"
+        f"  free space on this volume:            ~{free / gib:.0f} GiB\n"
+        f"  the download will stop after roughly {affordable} more file(s), "
+        f"when the disk fills.\n"
+        f"  Consider --data-root to send this datastream to an external drive, "
+        f"or narrow --start/--end.\n",
+        file=sys.stderr,
+    )
 
 
 def _http_get(url: str, timeout_s: float = 120.0) -> bytes:
@@ -142,7 +213,7 @@ def download_file(
     last_err: Optional[Exception] = None
     for attempt in range(_MAX_RETRIES):
         try:
-            with urllib.request.urlopen(url, timeout=600.0) as resp, open(
+            with urllib.request.urlopen(url, timeout=_STALL_TIMEOUT_S) as resp, open(
                 part_path, "wb"
             ) as fh:
                 while True:
@@ -152,12 +223,34 @@ def download_file(
                     fh.write(chunk)
             part_path.rename(local_path)
             return local_path
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as err:
+        except _TRANSIENT_NETWORK_ERRORS as err:
             last_err = err
             part_path.unlink(missing_ok=True)
             if isinstance(err, urllib.error.HTTPError) and 400 <= err.code < 500:
                 break
-            time.sleep(_RETRY_BASE_DELAY_S * 2**attempt)
+            # Say so rather than stalling silently: a long run that hits a bad
+            # patch of network should show why it slowed down, not look hung.
+            if attempt + 1 < _MAX_RETRIES:
+                print(
+                    f"  retrying {filename} "
+                    f"(attempt {attempt + 2}/{_MAX_RETRIES}): {err}",
+                    file=sys.stderr,
+                )
+                time.sleep(_RETRY_BASE_DELAY_S * 2**attempt)
+        except OSError as err:
+            # Reached only for OSErrors that are NOT in the transient tuple
+            # above, i.e. local filesystem faults rather than network ones.
+            # Retrying cannot clear a full disk or a permissions problem, so
+            # fail immediately and name the real cause.
+            part_path.unlink(missing_ok=True)
+            if err.errno == errno.ENOSPC:
+                raise RuntimeError(
+                    f"Out of disk space while writing {part_path}.\n"
+                    f"  Free space, or re-run with --data-root pointing at a "
+                    f"drive with room. Files already downloaded are complete "
+                    f"and will be skipped when you resume."
+                ) from err
+            raise
     raise RuntimeError(
         f"Failed to download {filename} after retries.\n  -> {last_err}"
     )
@@ -208,6 +301,12 @@ def download_datastream(
             print(f"{arm_name}: {len(filenames)} file(s) in archive for "
                   f"{start_date}..{end_date}")
         out_dir = config.raw_dir_for(arm_name)
+        if filenames:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            _warn_if_insufficient_space(
+                out_dir,
+                sum(1 for f in filenames if not (out_dir / f).exists()),
+            )
         for i, filename in enumerate(filenames, start=1):
             path = download_file(filename, out_dir, creds, overwrite=overwrite)
             local_paths.append(path)

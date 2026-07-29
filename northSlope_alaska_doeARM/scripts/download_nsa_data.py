@@ -16,9 +16,28 @@ python scripts/download_nsa_data.py --datastreams met qcrad \
     --start 2022-01-01 --end 2022-01-31
 
 # The Shupe-Turner phase product + QCRAD for the phase/radiation analysis
-# (product coverage is approximately 2004-2019):
+# (product coverage is approximately 2004-2019). NOTE: 'shupeturn' is a
+# PI-contributed product that the ARM Live web service does NOT serve -- it
+# returns 0 files and must be ordered through ARM Data Discovery. Use
+# 'thermocldphase' below for cloud phase you can actually download:
 python scripts/download_nsa_data.py --datastreams shupeturn qcrad \
     --start 2015-01-01 --end 2015-03-31
+
+# THERMOCLDPHASE + QCRAD -- the routine ARM cloud-phase VAP (same Shupe 2007
+# classifier as the Shupe-Turner product, 30 s / 30 m, c1 covers 2011-2020 and
+# c0 covers 2014-2026; both are fetched, and they overlap 2014-2020):
+python scripts/download_nsa_data.py --datastreams thermocldphase qcrad \
+    --start 2018-01-01 --end 2018-03-31
+
+# Pin one data level instead of both -- the downloader also accepts a raw ARM
+# datastream name anywhere a pipeline key is accepted:
+python scripts/download_nsa_data.py --datastreams nsathermocldphaseC1.c1 \
+    --start 2018-01-01 --end 2018-03-31
+
+# ACRED, the nine-member cloud microphysics retrieval ensemble (hourly, 45 m;
+# NSA coverage 1999-2008, and its SHUPE_TURNER member only ~2004-2007):
+python scripts/download_nsa_data.py --datastreams acred \
+    --start 2005-01-01 --end 2005-03-31
 
 # Store the data on an external drive instead of inside the repo (raw/ and
 # processed/ are created under the given root; pass the same --data-root to the
@@ -30,6 +49,9 @@ Data volume guidance (approximate, per day):
     sonde  ~1-2 MB     mwr   ~5 MB      ceil      ~5-10 MB
     met    ~1 MB       qcrad ~5 MB      shupeturn ~10-50 MB
     kazr   ~0.5-2 GB  (!)
+    thermocldphase: not measured here; 30 s x 30 m time-height fields, so
+        expect the same order as shupeturn (tens of MB/day). Try a few days
+        first and check before committing to a multi-year pull.
 A full 12-winter KAZR archive is on the order of 1 TB: for that scale, use
 ARM's co-located computing (Data Workbench / Cumulus cluster, see README)
 instead of downloading locally, or download month-by-month and process with

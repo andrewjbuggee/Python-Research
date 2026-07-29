@@ -157,6 +157,114 @@ SHUPETURN_APPROX_END = "2019-12-31"
 BERTRAND_WINTER_MONTHS = (12, 1, 2, 3)
 
 # ---------------------------------------------------------------------------
+# THERMOCLDPHASE cloud phase VAP (routine replacement for the PI-only product)
+# ---------------------------------------------------------------------------
+
+# Archive coverage per ARM Data Discovery (checked 2026-07-27); the two data
+# levels overlap, and c0 -- despite being the "intermediate" level -- currently
+# runs much later than c1:
+#   nsathermocldphaseC1.c1: 2011-11-11 .. 2020-01-31
+#   nsathermocldphaseC1.c0: 2014-02-09 .. 2026-01-20
+THERMOCLDPHASE_C1_START = "2011-11-11"
+THERMOCLDPHASE_C1_END = "2020-01-31"
+THERMOCLDPHASE_C0_START = "2014-02-09"
+THERMOCLDPHASE_C0_END = "2026-01-20"
+
+# Pixel-level phase codes, read from the flag_values / flag_meanings attributes
+# of cloud_phase_mplgr / cloud_phase_hsrl in nsathermocldphaseC1.c0 files. They
+# are NOT tabulated anywhere in the VAP report (all 17 pages of
+# DOE/SC-ARM-TR-325 were checked -- Table 4 gives variable names only), so the
+# file attributes are the authority.
+#
+# !! THESE DIFFER FROM THE ST_*_CODES ABOVE. Liquid and ice are swapped and
+# snow moves from 2 to 7:
+#     THERMOCLDPHASE: 0 clear, 1 liquid, 2 ice, 3 mixed, 4 drizzle,
+#                     5 liquid_drizzle, 6 rain, 7 snow, 8 unknown
+#     Shupe-Turner:   0 clear, 1 ice, 2 snow, 3 liquid, 4 drizzle,
+#                     5 liquid+drizzle, 6 rain, 7 mixed
+# Applying ST_LIQUID_CODES / ST_ICE_CODES to this product would silently
+# exchange the liquid and ice populations. Keep the two sets separate.
+THERMO_CLEAR_CODE = 0
+THERMO_LIQUID_CODES = (1,)  # liquid only
+THERMO_ICE_CODES = (2,)  # ice only
+THERMO_MIXED_CODES = (3,)
+THERMO_UNKNOWN_CODE = 8
+# Precipitating liquid (drizzle, liquid+drizzle, rain) and frozen precipitation
+# (snow) -- excluded from the strict "pure" definitions above, available for an
+# inclusive one.
+THERMO_LIQUID_PRECIP_CODES = (4, 5, 6)
+THERMO_FROZEN_PRECIP_CODES = (7,)
+THERMO_PHASE_MEANINGS = {
+    0: "clear_sky",
+    1: "liquid",
+    2: "ice",
+    3: "mixed_phase",
+    4: "drizzle",
+    5: "liquid_drizzle",
+    6: "rain",
+    7: "snow",
+    8: "unknown",
+}
+# The VAP's own layer rule is driven by frc_ice, the fraction of ICE-CONTAINING
+# pixels within a layer -- ice, mixed-phase, OR snow (report Sect. 2, following
+# Wang et al. 2024) -- with 0.1 and 0.9 separating liquid / mixed / ice layers.
+# The files publish only the resulting layer label, never frc_ice itself, so any
+# finer split of the mixed range must recompute the fraction from the pixel mask.
+THERMO_ICE_CONTAINING_CODES = (2, 3, 7)
+THERMO_FRC_ICE_LIQUID_MAX = 0.1
+THERMO_FRC_ICE_ICE_MIN = 0.9
+
+# The per-LAYER fields (cloud_phase_layer_*) use a SHORTER, different scale:
+# 0 clear_sky, 1 liquid, 2 ice, 3 mixed_phase -- assigned by the fraction of
+# ice-containing pixels in the layer (report Sect. 2: liquid < 0.1, mixed
+# 0.1-0.9, ice > 0.9). Do not mix these with the pixel codes above.
+THERMO_LAYER_PHASE_MEANINGS = {0: "clear_sky", 1: "liquid", 2: "ice", 3: "mixed_phase"}
+
+# Vertical grid of the pixel-level fields: 596 levels, 0.16-18.01 km, 30 m
+# spacing. NOTE the height coordinate is stored in KILOMETRES, not metres.
+THERMO_HEIGHT_UNITS = "km"
+THERMO_TIME_STEP_S = 30.0
+
+# Companion data DOI for the NSA record (report reference list):
+# Zhang & Levin 2024, THERMOCLDPHASE 2017-03-01 to 2024-07-01, NSA C1,
+# doi:10.5439/1871014
+
+# ---------------------------------------------------------------------------
+# ACRED cloud retrieval ensemble (DOE/SC-ARM-TR-099, Zhao et al. 2011)
+# ---------------------------------------------------------------------------
+
+# ACRED assembles NINE independent ground-based cloud retrievals onto one grid
+# so the spread between them estimates retrieval uncertainty. At NSA C1 the
+# ensemble members are MICROBASE, SHUPE_TURNER, WANG, and DENG (their Table 1)
+# -- i.e. this product carries Shupe-Turner-derived microphysics through a
+# routine, downloadable datastream, though only LWC/IWC/r_e/LWP/IWP, NOT the
+# CloudPhaseMask that the scene classification needs.
+ACRED_APPROX_START = "1999-01-01"  # nsaacredC1.c1 per ARM Data Discovery
+ACRED_APPROX_END = "2008-12-31"
+
+# Hourly means on 512 layers of 45 m. Every geophysical variable comes as a
+# mean, a standard deviation, and a QC flag, and carries a retrieval-method
+# dimension (3-D fields vary with time/height/method, 2-D with time/method).
+ACRED_N_LAYERS = 512
+ACRED_LAYER_THICKNESS_M = 45.0
+ACRED_MISSING_VALUE = -9999.0
+
+# ACRED QC flags are NOT ARM's bit-packed convention -- they encode what
+# fraction of the sub-hourly samples were valid (report Sect. 4.5), so qc.py's
+# apply_qc() does not apply to this product:
+#    0 = more than 50% of the data valid over the hour
+#   -1 = 30-50% valid      -2 = 10-30% valid
+#   -3 = under 10% valid   -4 = missing data point
+ACRED_QC_MEANINGS = {
+    0: "more than 50% valid over the hour",
+    -1: "30-50% valid",
+    -2: "10-30% valid",
+    -3: "less than 10% valid",
+    -4: "missing data point",
+}
+ACRED_QC_GOOD = (0,)
+
+# ---------------------------------------------------------------------------
 # Sonde-coordinated averaging (Hartig26 Sect. 2)
 # ---------------------------------------------------------------------------
 
@@ -342,6 +450,98 @@ DATASTREAMS: Dict[str, DatastreamSpec] = {
             "iwp_g_m2": ("Avg_IWP", "iwp"),
         },
         role="bertrand25-core",
+    ),
+    "thermocldphase": DatastreamSpec(
+        key="thermocldphase",
+        datastreams=(
+            # Both levels are registered so the full 2011-2026 span is
+            # reachable; they OVERLAP 2014-2020 (see the coverage constants
+            # above). The readers concatenate every file of a spec and then
+            # de-duplicate by timestamp, so a range inside the overlap silently
+            # mixes two data levels -- pass a single raw datastream name to the
+            # downloader/readers (both accept one, e.g.
+            # "nsathermocldphaseC1.c1") when a run must be reproducible.
+            "nsathermocldphaseC1.c1",
+            "nsathermocldphaseC1.c0",
+        ),
+        description=(
+            "THERMOCLDPHASE VAP (Zhang, Levin, Shupe & Goldberger 2025, "
+            "DOE/SC-ARM-TR-325; doi:10.5439/3022391): vertically resolved "
+            "thermodynamic cloud phase at 30 s / 30 m, classifying each pixel "
+            "as liquid, drizzle, liquid+drizzle, rain, ice, snow, mixed-phase, "
+            "unknown, or clear, plus a per-layer phase (liquid/mixed/ice) for "
+            "up to 10 ARSCL cloud layers. Built from MPL or HSRL backscatter "
+            "and depolarization, ARSCL radar moments, MWRRET LWP, and "
+            "INTERPSONDE temperature. Applies the SAME Shupe (2007) multi-"
+            "sensor classifier as the Shupe-Turner product, so this is the "
+            "routine, ARM-Live-downloadable substitute for the PI-only "
+            "'shupeturn' key -- but the two use different variable names AND "
+            "apparently different integer phase codes, so they are not "
+            "drop-in interchangeable."
+        ),
+        variables={
+            # Table 4 of DOE/SC-ARM-TR-325. The MPL-gradient variant is listed
+            # first because MPL runs at every site for the whole record, while
+            # ARM operates only three HSRLs and the report states the HSRL
+            # fields are simply absent where no HSRL is deployed. The two agree
+            # closely (report Sect. 5); read "cloud_phase_hsrl" directly from
+            # the file when the calibrated-lidar version is specifically wanted.
+            "phase_code": ("cloud_phase_mplgr", "cloud_phase_hsrl"),
+        },
+        role="extension",
+    ),
+    "acred": DatastreamSpec(
+        key="acred",
+        datastreams=("nsaacredC1.c1",),
+        description=(
+            "ACRED, the ARM Cloud Retrieval Ensemble Data Set (Zhao et al. "
+            "2011, DOE/SC-ARM-TR-099; doi:10.5439/1995948): NINE independent "
+            "ground-based cloud microphysical retrievals assembled onto one "
+            "common grid -- hourly means, 512 layers of 45 m -- so the spread "
+            "across members estimates retrieval uncertainty rather than "
+            "asserting one answer. Carries liquid/ice effective radius, LWC/"
+            "IWC, LWP/IWP, liquid/ice optical depth, and cloud fraction, each "
+            "as a mean, a standard deviation, and a QC flag. At NSA C1 the "
+            "members are MICROBASE, SHUPE_TURNER, WANG, and DENG, so the "
+            "Shupe-Turner microphysics are reachable here through a routine "
+            "datastream -- but ACRED carries NO phase mask, so it cannot "
+            "replace 'shupeturn'/'thermocldphase' for scene classification. "
+            "Flagged by ARM as evaluation data; NSA coverage 1999-2008, and "
+            "the SHUPE_TURNER member only spans roughly 2004-2007 (report "
+            "Table 1). Note the retrieval-method dimension: these variables "
+            "are NOT plain (time, height) fields."
+        ),
+        variables={
+            # Names confirmed against the ARM Data Discovery variable list for
+            # nsaacredC1.c1 -- NOT from DOE/SC-ARM-TR-099, which describes
+            # ACRED's contents only in prose and never tabulates netCDF names
+            # (its "lwc_orig"/"lwp_layer_orig" identifiers are pseudocode for
+            # the INPUT retrievals, not ACRED's own fields). Note "liquid_re",
+            # not the "liq_re" the surrounding code's abbreviations would
+            # suggest. Canonical names deliberately match the "shupeturn"
+            # entry so the two products stay comparable field-for-field.
+            #
+            # Two caveats before using these:
+            #  * UNITS ARE UNVERIFIED. The g/m^3 and g/m^2 suffixes follow this
+            #    registry's convention and the usual ARM one; the report does
+            #    not state ACRED's units. Check the `units` attribute on first
+            #    read and rename here if they differ.
+            #  * These are ACRED's hourly MEANS. Per report Sect. 2 every
+            #    variable also ships a standard deviation and a QC flag, and
+            #    the files additionally hold liquid/ice optical depth and
+            #    cloud fraction; those names are not yet confirmed, so they are
+            #    left out rather than guessed. Every field carries the
+            #    retrieval-method dimension, and missing values are -9999 under
+            #    the non-ARM QC convention in ACRED_QC_MEANINGS above
+            #    (qc.apply_qc does NOT apply to this product).
+            "liquid_re_um": ("liquid_re",),
+            "ice_re_um": ("ice_re",),
+            "lwc_g_m3": ("lwc",),
+            "iwc_g_m3": ("iwc",),
+            "lwp_g_m2": ("lwp",),
+            "iwp_g_m2": ("iwp",),
+        },
+        role="extension",
     ),
     "mettwr": DatastreamSpec(
         key="mettwr",

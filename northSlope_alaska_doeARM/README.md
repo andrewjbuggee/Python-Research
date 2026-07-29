@@ -166,7 +166,6 @@ python scripts/plot_downwelling_radiation.py --start 2022-01-01 --end 2022-01-31
 python scripts/plot_surface_temperature.py   --start 2022-01-01 --end 2022-01-31
 python scripts/plot_sonde_day.py    --date 2022-01-05
 python scripts/plot_kazr_quicklook.py --date 2022-01-05
-
 # 4. build the sonde-coordinated multi-instrument library (Hartig26 Sect. 2)
 python scripts/build_sonde_library.py --start 2022-01-01 --end 2022-01-31
 #    (add --skip-radar while the KAZR archive is still partial)
