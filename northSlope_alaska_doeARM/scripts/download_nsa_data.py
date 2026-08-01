@@ -49,9 +49,10 @@ Data volume guidance (approximate, per day):
     sonde  ~1-2 MB     mwr   ~5 MB      ceil      ~5-10 MB
     met    ~1 MB       qcrad ~5 MB      shupeturn ~10-50 MB
     kazr   ~0.5-2 GB  (!)
-    thermocldphase: not measured here; 30 s x 30 m time-height fields, so
-        expect the same order as shupeturn (tens of MB/day). Try a few days
-        first and check before committing to a multi-year pull.
+    thermocldphase ~70 MB/day (measured) -- the full 2014-2026 NSA record is
+        ~280 GiB, so plan on an external drive via --data-root. The downloader
+        estimates the shortfall from local file sizes and warns before it
+        starts.
 A full 12-winter KAZR archive is on the order of 1 TB: for that scale, use
 ARM's co-located computing (Data Workbench / Cumulus cluster, see README)
 instead of downloading locally, or download month-by-month and process with
@@ -71,6 +72,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from arm_nsa import config  # noqa: E402
+from arm_nsa.cli import add_data_root_argument, apply_data_root  # noqa: E402
 from arm_nsa.download import download_datastream  # noqa: E402
 
 HARTIG_CORE_KEYS = ["sonde", "mwr", "ceil", "kazr"]
@@ -124,18 +126,7 @@ def main() -> int:
         action="store_true",
         help="re-download files that already exist locally",
     )
-    parser.add_argument(
-        "--data-root",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help=(
-            "Root directory for downloaded data; raw/ and processed/ are "
-            "created under it. Point this at an external drive to store data "
-            "off the internal disk, e.g. --data-root /Volumes/ARM_NSA/data. "
-            "Overrides the ARM_NSA_DATA_ROOT env var; default is <repo>/data."
-        ),
-    )
+    add_data_root_argument(parser)
     args = parser.parse_args()
 
     keys = args.datastreams
@@ -143,7 +134,8 @@ def main() -> int:
         keys = HARTIG_CORE_KEYS
 
     if args.data_root is not None:
-        root = config.set_data_root(args.data_root)
+        # require_raw=False: this is the one entry point that creates raw/.
+        root = apply_data_root(args.data_root, require_raw=False, quiet=True)
         verify_writable_root(root)
 
     print(f"Data root: {config.DATA_ROOT}")

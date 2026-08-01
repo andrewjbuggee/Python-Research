@@ -15,7 +15,12 @@ from __future__ import annotations
 
 import argparse
 
-from _plot_common import finish_figure, use_headless_backend_if_needed
+from _plot_common import (
+    add_data_root_argument,
+    apply_data_root,
+    finish_figure,
+    use_headless_backend_if_needed,
+)
 
 
 def main() -> int:
@@ -24,7 +29,9 @@ def main() -> int:
     parser.add_argument("--zmax-km", type=float, default=5.0,
                         help="top of plotted height axis [km], default 5")
     parser.add_argument("--no-show", action="store_true", help="save only")
+    add_data_root_argument(parser)
     args = parser.parse_args()
+    apply_data_root(args.data_root)
     use_headless_backend_if_needed(show=not args.no_show)
 
     import matplotlib.pyplot as plt

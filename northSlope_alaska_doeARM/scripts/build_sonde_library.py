@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from arm_nsa.cli import add_data_root_argument, apply_data_root  # noqa: E402
 from arm_nsa.coordinate import build_library, save_library  # noqa: E402
 from arm_nsa.phase import classify_phase, phase_occurrence  # noqa: E402
 
@@ -47,7 +48,9 @@ def main() -> int:
     parser.add_argument(
         "--output", default=None, help="output filename (default: auto-named)"
     )
+    add_data_root_argument(parser)
     args = parser.parse_args()
+    apply_data_root(args.data_root)
 
     library = build_library(
         args.start,

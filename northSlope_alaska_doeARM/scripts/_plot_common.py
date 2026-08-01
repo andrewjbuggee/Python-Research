@@ -14,6 +14,10 @@ import matplotlib  # noqa: E402
 
 from arm_nsa import config  # noqa: E402
 
+# Re-exported so the plotting scripts need only one import line, and so the
+# sys.path bootstrap above is guaranteed to have run before arm_nsa is touched.
+from arm_nsa.cli import add_data_root_argument, apply_data_root  # noqa: E402,F401
+
 
 def finish_figure(fig, filename: str, show: bool) -> Path:
     """Save `fig` into figures/ (always) and optionally display it."""

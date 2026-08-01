@@ -124,7 +124,12 @@ from pathlib import Path
 # Make the repo importable when running straight from a checkout.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _plot_common import finish_figure, use_headless_backend_if_needed  # noqa: E402
+from _plot_common import (  # noqa: E402
+    add_data_root_argument,
+    apply_data_root,
+    finish_figure,
+    use_headless_backend_if_needed,
+)
 
 # Column categories produced by the classifiers.
 COLUMN_CODES = {
@@ -728,17 +733,7 @@ def main() -> int:
     )
     parser.add_argument("--no-show", action="store_true", help="save only")
     parser.add_argument("--verbose", action="store_true", help="list every file read")
-    parser.add_argument(
-        "--data-root",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help=(
-            "Root directory to read data from (expects raw/ underneath). Use "
-            "to read data stored on an external drive, e.g. --data-root "
-            "/Volumes/ARM_NSA/data. Overrides ARM_NSA_DATA_ROOT."
-        ),
-    )
+    add_data_root_argument(parser)
     args = parser.parse_args()
     use_headless_backend_if_needed(show=not args.no_show)
 
@@ -750,14 +745,7 @@ def main() -> int:
     from arm_nsa.shupe_turner import pair_scene_with_flux
     from arm_nsa.surface import read_qcrad
 
-    if args.data_root is not None:
-        root = config.set_data_root(args.data_root)
-        if not root.exists():
-            raise SystemExit(
-                f"error: data root {root} does not exist -- is the external "
-                f"drive mounted? (check with `ls /Volumes`)"
-            )
-        print(f"Data root: {root}")
+    apply_data_root(args.data_root)
 
     liquid_codes, ice_codes = phase_code_sets(args.strictness)
     meanings = config.THERMO_PHASE_MEANINGS
