@@ -9,7 +9,7 @@
 #SBATCH --qos=gpu-normal
 #SBATCH --mem=8G
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:l40:1           # al40 requires the GRES type spelled out
 #SBATCH --cpus-per-task=4
 #SBATCH --job-name=NN_synth_sweep_PT
 #SBATCH --output=logs/sweep_synth_PT_%A_%a.out
