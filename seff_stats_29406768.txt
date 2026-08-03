@@ -1,0 +1,619 @@
+
+Collecting seff data for job array 29406768 tasks 1-567
+================================================================================
+  Task   1  [COMPLETED   ]  mem_used=  2.51GB  mem_eff=  3.3%  wall=0:09:07  cpu_eff=  1.2%
+  Task   2  [COMPLETED   ]  mem_used=  2.50GB  mem_eff=  3.3%  wall=0:05:36  cpu_eff=  2.0%
+  Task   3  [COMPLETED   ]  mem_used=  2.49GB  mem_eff=  3.3%  wall=0:05:02  cpu_eff=  2.2%
+  Task   4  [COMPLETED   ]  mem_used=  1.73GB  mem_eff=  2.3%  wall=0:04:02  cpu_eff=  2.7%
+  Task   5  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:04:16  cpu_eff=  2.6%
+  Task   6  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:04:34  cpu_eff=  2.4%
+  Task   7  [COMPLETED   ]  mem_used= 61.98GB  mem_eff= 82.6%  wall=1:29:19  cpu_eff= 52.1%
+  Task   8  [COMPLETED   ]  mem_used=  1.72GB  mem_eff=  2.3%  wall=0:05:12  cpu_eff=  2.3%
+  Task   9  [COMPLETED   ]  mem_used=  1.72GB  mem_eff=  2.3%  wall=0:05:21  cpu_eff=  2.1%
+  Task  10  [COMPLETED   ]  mem_used=  1.73GB  mem_eff=  2.3%  wall=0:05:35  cpu_eff=  2.3%
+  Task  11  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:05:47  cpu_eff=  2.2%
+  Task  12  [COMPLETED   ]  mem_used=  2.50GB  mem_eff=  3.3%  wall=0:06:28  cpu_eff=  1.7%
+  Task  13  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:09:09  cpu_eff=  1.2%
+  Task  14  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:09:02  cpu_eff=  1.4%
+  Task  15  [COMPLETED   ]  mem_used=  2.50GB  mem_eff=  3.3%  wall=0:12:54  cpu_eff=  1.0%
+  Task  16  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:11:36  cpu_eff=  1.1%
+  Task  17  [COMPLETED   ]  mem_used=  2.50GB  mem_eff=  3.3%  wall=0:10:37  cpu_eff=  1.1%
+  Task  18  [COMPLETED   ]  mem_used=  2.88GB  mem_eff=  3.8%  wall=0:11:21  cpu_eff=  1.0%
+  Task  19  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:08:21  cpu_eff=  1.4%
+  Task  20  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:08:30  cpu_eff=  1.4%
+  Task  21  [COMPLETED   ]  mem_used=  2.48GB  mem_eff=  3.3%  wall=0:10:14  cpu_eff=  1.2%
+  Task  22  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:09:03  cpu_eff=  1.4%
+  Task  23  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:08:56  cpu_eff=  1.3%
+  Task  24  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:09:22  cpu_eff=  1.3%
+  Task  25  [COMPLETED   ]  mem_used=  2.47GB  mem_eff=  3.3%  wall=0:10:56  cpu_eff=  1.0%
+  Task  26  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:09:29  cpu_eff=  1.1%
+  Task  27  [COMPLETED   ]  mem_used=  2.06GB  mem_eff=  2.8%  wall=0:10:51  cpu_eff=  1.2%
+  Task  28  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:10:19  cpu_eff=  1.1%
+  Task  29  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:10:28  cpu_eff=  1.1%
+  Task  30  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:10:32  cpu_eff=  1.1%
+  Task  31  [COMPLETED   ]  mem_used=  2.48GB  mem_eff=  3.3%  wall=0:12:06  cpu_eff=  1.1%
+  Task  32  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:11:04  cpu_eff=  1.1%
+  Task  33  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:11:19  cpu_eff=  1.1%
+  Task  34  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:11:42  cpu_eff=  1.0%
+  Task  35  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:11:57  cpu_eff=  1.0%
+  Task  36  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:12:05  cpu_eff=  0.9%
+  Task  37  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:13:18  cpu_eff=  0.9%
+  Task  38  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:12:39  cpu_eff=  0.8%
+  Task  39  [COMPLETED   ]  mem_used=  2.08GB  mem_eff=  2.8%  wall=0:15:57  cpu_eff=  0.8%
+  Task  40  [COMPLETED   ]  mem_used=  2.07GB  mem_eff=  2.8%  wall=0:16:29  cpu_eff=  0.7%
+  Task  41  [COMPLETED   ]  mem_used=  1.73GB  mem_eff=  2.3%  wall=0:03:23  cpu_eff=  3.9%
+  Task  42  [COMPLETED   ]  mem_used=  2.00GB  mem_eff=  2.7%  wall=0:04:07  cpu_eff=  2.8%
+  Task  43  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:04:06  cpu_eff=  3.6%
+  Task  44  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:04:17  cpu_eff=  3.0%
+  Task  45  [COMPLETED   ]  mem_used=  1.69GB  mem_eff=  2.2%  wall=0:04:45  cpu_eff=  2.8%
+  Task  46  [COMPLETED   ]  mem_used=  1.71GB  mem_eff=  2.3%  wall=0:04:50  cpu_eff=  2.5%
+  Task  47  [COMPLETED   ]  mem_used=  1.72GB  mem_eff=  2.3%  wall=0:04:47  cpu_eff=  2.2%
+  Task  48  [COMPLETED   ]  mem_used=  1.86GB  mem_eff=  2.5%  wall=0:07:48  cpu_eff=  1.6%
+  Task  49  [COMPLETED   ]  mem_used=  2.07GB  mem_eff=  2.8%  wall=0:08:54  cpu_eff=  1.4%
+  Task  50  [COMPLETED   ]  mem_used=  1.70GB  mem_eff=  2.3%  wall=0:08:04  cpu_eff=  1.5%
+  Task  51  [COMPLETED   ]  mem_used=  1.72GB  mem_eff=  2.3%  wall=0:07:18  cpu_eff=  1.7%
+  Task  52  [COMPLETED   ]  mem_used= 65.96GB  mem_eff= 88.0%  wall=7:23:13  cpu_eff= 47.5%
+  Task  53  [COMPLETED   ]  mem_used= 69.12GB  mem_eff= 92.2%  wall=12:08:19  cpu_eff= 47.1%
+  Task  54  [COMPLETED   ]  mem_used= 68.09GB  mem_eff= 90.8%  wall=13:37:45  cpu_eff= 48.4%
+  Task  55  [COMPLETED   ]  mem_used= 67.13GB  mem_eff= 89.5%  wall=14:11:38  cpu_eff= 45.6%
+  Task  56  [COMPLETED   ]  mem_used= 65.25GB  mem_eff= 87.0%  wall=13:51:30  cpu_eff= 45.4%
+  Task  57  [COMPLETED   ]  mem_used= 67.17GB  mem_eff= 89.6%  wall=13:52:11  cpu_eff= 44.2%
+  Task  58  [COMPLETED   ]  mem_used= 68.29GB  mem_eff= 91.0%  wall=11:35:55  cpu_eff= 42.1%
+  Task  59  [COMPLETED   ]  mem_used= 68.02GB  mem_eff= 90.7%  wall=12:59:02  cpu_eff= 45.3%
+  Task  60  [COMPLETED   ]  mem_used= 67.21GB  mem_eff= 89.6%  wall=11:54:05  cpu_eff= 46.4%
+  Task  61  [COMPLETED   ]  mem_used= 67.41GB  mem_eff= 89.9%  wall=14:21:26  cpu_eff= 45.2%
+  Task  62  [COMPLETED   ]  mem_used= 68.70GB  mem_eff= 91.6%  wall=11:32:08  cpu_eff= 45.7%
+  Task  63  [COMPLETED   ]  mem_used= 66.53GB  mem_eff= 88.7%  wall=12:30:30  cpu_eff= 45.2%
+  Task  64  [COMPLETED   ]  mem_used= 67.81GB  mem_eff= 90.4%  wall=13:45:18  cpu_eff= 44.7%
+  Task  65  [COMPLETED   ]  mem_used= 68.91GB  mem_eff= 91.9%  wall=13:47:08  cpu_eff= 44.4%
+  Task  66  [COMPLETED   ]  mem_used= 66.90GB  mem_eff= 89.2%  wall=13:39:43  cpu_eff= 45.1%
+  Task  67  [COMPLETED   ]  mem_used= 67.85GB  mem_eff= 90.5%  wall=13:38:16  cpu_eff= 44.9%
+  Task  68  [COMPLETED   ]  mem_used= 68.77GB  mem_eff= 91.7%  wall=14:05:26  cpu_eff= 45.0%
+  Task  69  [COMPLETED   ]  mem_used= 67.79GB  mem_eff= 90.4%  wall=13:27:32  cpu_eff= 44.0%
+  Task  70  [COMPLETED   ]  mem_used= 68.20GB  mem_eff= 90.9%  wall=13:18:20  cpu_eff= 42.5%
+  Task  71  [COMPLETED   ]  mem_used= 68.64GB  mem_eff= 91.5%  wall=12:54:45  cpu_eff= 46.3%
+  Task  72  [COMPLETED   ]  mem_used= 67.91GB  mem_eff= 90.5%  wall=12:19:16  cpu_eff= 44.6%
+  Task  73  [COMPLETED   ]  mem_used= 68.58GB  mem_eff= 91.4%  wall=12:53:07  cpu_eff= 46.7%
+  Task  74  [COMPLETED   ]  mem_used= 68.77GB  mem_eff= 91.7%  wall=13:35:41  cpu_eff= 42.9%
+  Task  75  [COMPLETED   ]  mem_used= 69.95GB  mem_eff= 93.3%  wall=11:04:29  cpu_eff= 40.5%
+  Task  76  [COMPLETED   ]  mem_used= 68.76GB  mem_eff= 91.7%  wall=12:56:15  cpu_eff= 45.7%
+  Task  77  [COMPLETED   ]  mem_used= 68.13GB  mem_eff= 90.8%  wall=13:21:15  cpu_eff= 44.3%
+  Task  78  [COMPLETED   ]  mem_used= 68.29GB  mem_eff= 91.0%  wall=12:03:00  cpu_eff= 42.1%
+  Task  79  [COMPLETED   ]  mem_used= 68.55GB  mem_eff= 91.4%  wall=12:53:33  cpu_eff= 44.3%
+  Task  80  [COMPLETED   ]  mem_used= 68.65GB  mem_eff= 91.5%  wall=13:17:26  cpu_eff= 42.4%
+  Task  81  [COMPLETED   ]  mem_used= 69.15GB  mem_eff= 92.2%  wall=12:40:17  cpu_eff= 44.2%
+  Task  82  [COMPLETED   ]  mem_used= 68.68GB  mem_eff= 91.6%  wall=12:58:51  cpu_eff= 46.7%
+  Task  83  [COMPLETED   ]  mem_used= 69.22GB  mem_eff= 92.3%  wall=12:22:54  cpu_eff= 47.1%
+  Task  84  [COMPLETED   ]  mem_used= 68.41GB  mem_eff= 91.2%  wall=11:58:17  cpu_eff= 47.0%
+  Task  85  [COMPLETED   ]  mem_used= 68.59GB  mem_eff= 91.5%  wall=12:44:36  cpu_eff= 44.6%
+  Task  86  [COMPLETED   ]  mem_used= 68.86GB  mem_eff= 91.8%  wall=13:06:19  cpu_eff= 43.7%
+  Task  87  [COMPLETED   ]  mem_used= 68.17GB  mem_eff= 90.9%  wall=12:33:50  cpu_eff= 45.8%
+  Task  88  [COMPLETED   ]  mem_used= 68.71GB  mem_eff= 91.6%  wall=12:44:59  cpu_eff= 46.4%
+  Task  89  [COMPLETED   ]  mem_used= 69.21GB  mem_eff= 92.3%  wall=13:07:16  cpu_eff= 45.4%
+  Task  90  [COMPLETED   ]  mem_used= 68.46GB  mem_eff= 91.3%  wall=12:52:52  cpu_eff= 46.2%
+  Task  91  [COMPLETED   ]  mem_used= 68.77GB  mem_eff= 91.7%  wall=10:59:09  cpu_eff= 39.6%
+  Task  92  [COMPLETED   ]  mem_used= 67.61GB  mem_eff= 90.1%  wall=9:49:55  cpu_eff= 49.8%
+  Task  93  [TIMEOUT     ]  mem_used= 67.09GB  mem_eff= 89.5%  wall=1 day, 0:00:03  cpu_eff= 22.3%
+  Task  94  [TIMEOUT     ]  mem_used= 65.45GB  mem_eff= 87.3%  wall=1 day, 0:00:28  cpu_eff= 22.2%
+  Task  95  [TIMEOUT     ]  mem_used= 67.43GB  mem_eff= 89.9%  wall=1 day, 0:00:28  cpu_eff= 23.3%
+  Task  96  [TIMEOUT     ]  mem_used= 67.95GB  mem_eff= 90.6%  wall=1 day, 0:00:26  cpu_eff= 21.5%
+  Task  97  [TIMEOUT     ]  mem_used= 67.63GB  mem_eff= 90.2%  wall=1 day, 0:00:17  cpu_eff= 15.3%
+  Task  98  [TIMEOUT     ]  mem_used= 65.32GB  mem_eff= 87.1%  wall=1 day, 0:00:17  cpu_eff= 16.3%
+  Task  99  [TIMEOUT     ]  mem_used= 66.68GB  mem_eff= 88.9%  wall=1 day, 0:00:16  cpu_eff= 16.7%
+  Task 100  [TIMEOUT     ]  mem_used= 69.15GB  mem_eff= 92.2%  wall=1 day, 0:00:16  cpu_eff= 14.7%
+  Task 101  [TIMEOUT     ]  mem_used= 68.49GB  mem_eff= 91.3%  wall=1 day, 0:00:06  cpu_eff= 14.3%
+  Task 102  [TIMEOUT     ]  mem_used= 66.90GB  mem_eff= 89.2%  wall=1 day, 0:00:04  cpu_eff= 14.6%
+  Task 103  [TIMEOUT     ]  mem_used= 64.57GB  mem_eff= 86.1%  wall=1 day, 0:00:08  cpu_eff= 14.8%
+  Task 104  [TIMEOUT     ]  mem_used= 67.72GB  mem_eff= 90.3%  wall=1 day, 0:00:08  cpu_eff= 15.3%
+  Task 105  [TIMEOUT     ]  mem_used= 68.12GB  mem_eff= 90.8%  wall=1 day, 0:00:08  cpu_eff= 15.0%
+  Task 106  [TIMEOUT     ]  mem_used= 67.27GB  mem_eff= 89.7%  wall=1 day, 0:00:08  cpu_eff= 13.8%
+  Task 107  [TIMEOUT     ]  mem_used= 67.47GB  mem_eff= 90.0%  wall=1 day, 0:00:08  cpu_eff= 14.8%
+  Task 108  [TIMEOUT     ]  mem_used= 65.89GB  mem_eff= 87.9%  wall=1 day, 0:00:08  cpu_eff= 13.1%
+  Task 109  [TIMEOUT     ]  mem_used= 66.26GB  mem_eff= 88.3%  wall=1 day, 0:00:08  cpu_eff= 14.3%
+  Task 110  [TIMEOUT     ]  mem_used= 70.45GB  mem_eff= 93.9%  wall=1 day, 0:00:08  cpu_eff= 13.9%
+  Task 111  [TIMEOUT     ]  mem_used= 68.90GB  mem_eff= 91.9%  wall=1 day, 0:00:08  cpu_eff= 14.4%
+  Task 112  [TIMEOUT     ]  mem_used= 66.72GB  mem_eff= 89.0%  wall=1 day, 0:00:08  cpu_eff= 14.3%
+  Task 113  [TIMEOUT     ]  mem_used= 67.66GB  mem_eff= 90.2%  wall=1 day, 0:00:08  cpu_eff= 12.4%
+  Task 114  [TIMEOUT     ]  mem_used= 66.48GB  mem_eff= 88.7%  wall=1 day, 0:00:08  cpu_eff= 14.2%
+  Task 115  [TIMEOUT     ]  mem_used= 68.62GB  mem_eff= 91.5%  wall=1 day, 0:00:08  cpu_eff= 13.0%
+  Task 116  [TIMEOUT     ]  mem_used= 66.69GB  mem_eff= 88.9%  wall=1 day, 0:00:08  cpu_eff= 12.2%
+  Task 117  [TIMEOUT     ]  mem_used= 68.59GB  mem_eff= 91.5%  wall=1 day, 0:00:08  cpu_eff= 13.9%
+  Task 118  [TIMEOUT     ]  mem_used= 66.45GB  mem_eff= 88.6%  wall=1 day, 0:00:08  cpu_eff= 15.7%
+  Task 119  [TIMEOUT     ]  mem_used= 68.47GB  mem_eff= 91.3%  wall=1 day, 0:00:08  cpu_eff= 13.6%
+  Task 120  [TIMEOUT     ]  mem_used= 67.03GB  mem_eff= 89.4%  wall=1 day, 0:00:08  cpu_eff= 13.6%
+  Task 121  [TIMEOUT     ]  mem_used= 68.63GB  mem_eff= 91.5%  wall=1 day, 0:00:08  cpu_eff= 15.6%
+  Task 122  [TIMEOUT     ]  mem_used= 67.24GB  mem_eff= 89.7%  wall=1 day, 0:00:08  cpu_eff= 14.9%
+  Task 123  [TIMEOUT     ]  mem_used= 67.72GB  mem_eff= 90.3%  wall=1 day, 0:00:08  cpu_eff= 15.5%
+  Task 124  [TIMEOUT     ]  mem_used= 68.69GB  mem_eff= 91.6%  wall=1 day, 0:00:08  cpu_eff= 15.2%
+  Task 125  [TIMEOUT     ]  mem_used= 66.99GB  mem_eff= 89.3%  wall=1 day, 0:00:08  cpu_eff= 14.4%
+  Task 126  [TIMEOUT     ]  mem_used= 66.33GB  mem_eff= 88.4%  wall=1 day, 0:00:08  cpu_eff= 14.5%
+  Task 127  [TIMEOUT     ]  mem_used= 67.22GB  mem_eff= 89.6%  wall=1 day, 0:00:08  cpu_eff= 15.1%
+  Task 128  [TIMEOUT     ]  mem_used= 68.90GB  mem_eff= 91.9%  wall=1 day, 0:00:08  cpu_eff= 14.1%
+  Task 129  [TIMEOUT     ]  mem_used= 66.22GB  mem_eff= 88.3%  wall=1 day, 0:00:08  cpu_eff= 14.1%
+  Task 130  [TIMEOUT     ]  mem_used= 69.09GB  mem_eff= 92.1%  wall=1 day, 0:00:08  cpu_eff= 14.7%
+  Task 131  [TIMEOUT     ]  mem_used= 68.67GB  mem_eff= 91.6%  wall=1 day, 0:00:08  cpu_eff= 13.9%
+  Task 132  [TIMEOUT     ]  mem_used= 66.94GB  mem_eff= 89.3%  wall=1 day, 0:00:08  cpu_eff= 14.2%
+  Task 133  [TIMEOUT     ]  mem_used= 71.29GB  mem_eff= 95.1%  wall=1 day, 0:00:01  cpu_eff= 17.5%
+  Task 134  [TIMEOUT     ]  mem_used= 71.39GB  mem_eff= 95.2%  wall=1 day, 0:00:01  cpu_eff= 18.3%
+  Task 135  [TIMEOUT     ]  mem_used= 71.49GB  mem_eff= 95.3%  wall=1 day, 0:00:01  cpu_eff= 17.1%
+  Task 136  [TIMEOUT     ]  mem_used= 69.62GB  mem_eff= 92.8%  wall=1 day, 0:00:00  cpu_eff= 19.4%
+  Task 137  [TIMEOUT     ]  mem_used= 70.02GB  mem_eff= 93.4%  wall=1 day, 0:00:07  cpu_eff= 16.4%
+  Task 138  [TIMEOUT     ]  mem_used= 68.99GB  mem_eff= 92.0%  wall=1 day, 0:00:07  cpu_eff= 17.0%
+  Task 139  [TIMEOUT     ]  mem_used= 71.64GB  mem_eff= 95.5%  wall=1 day, 0:00:06  cpu_eff= 17.7%
+  Task 140  [TIMEOUT     ]  mem_used= 68.19GB  mem_eff= 90.9%  wall=1 day, 0:00:05  cpu_eff= 18.1%
+  Task 141  [TIMEOUT     ]  mem_used= 69.39GB  mem_eff= 92.5%  wall=1 day, 0:00:27  cpu_eff= 17.7%
+  Task 142  [TIMEOUT     ]  mem_used= 68.86GB  mem_eff= 91.8%  wall=1 day, 0:00:24  cpu_eff= 16.3%
+  Task 143  [TIMEOUT     ]  mem_used= 68.79GB  mem_eff= 91.7%  wall=1 day, 0:00:25  cpu_eff= 17.4%
+  Task 144  [TIMEOUT     ]  mem_used= 69.47GB  mem_eff= 92.6%  wall=1 day, 0:00:25  cpu_eff= 18.6%
+  Task 145  [TIMEOUT     ]  mem_used= 71.20GB  mem_eff= 94.9%  wall=1 day, 0:00:25  cpu_eff= 15.6%
+  Task 146  [TIMEOUT     ]  mem_used= 69.21GB  mem_eff= 92.3%  wall=1 day, 0:00:25  cpu_eff= 17.9%
+  Task 147  [TIMEOUT     ]  mem_used= 68.56GB  mem_eff= 91.4%  wall=1 day, 0:00:25  cpu_eff= 19.4%
+  Task 148  [TIMEOUT     ]  mem_used= 66.76GB  mem_eff= 89.0%  wall=1 day, 0:00:25  cpu_eff= 16.0%
+  Task 149  [TIMEOUT     ]  mem_used= 69.92GB  mem_eff= 93.2%  wall=1 day, 0:00:25  cpu_eff= 16.5%
+  Task 150  [TIMEOUT     ]  mem_used= 67.69GB  mem_eff= 90.2%  wall=1 day, 0:00:25  cpu_eff= 15.7%
+  Task 151  [TIMEOUT     ]  mem_used= 67.65GB  mem_eff= 90.2%  wall=1 day, 0:00:25  cpu_eff= 15.6%
+  Task 152  [TIMEOUT     ]  mem_used= 69.99GB  mem_eff= 93.3%  wall=1 day, 0:00:25  cpu_eff= 14.7%
+  Task 153  [TIMEOUT     ]  mem_used= 67.49GB  mem_eff= 90.0%  wall=1 day, 0:00:25  cpu_eff= 15.9%
+  Task 154  [TIMEOUT     ]  mem_used= 69.35GB  mem_eff= 92.5%  wall=1 day, 0:00:25  cpu_eff= 16.1%
+  Task 155  [TIMEOUT     ]  mem_used= 70.70GB  mem_eff= 94.3%  wall=1 day, 0:00:25  cpu_eff= 17.9%
+  Task 156  [TIMEOUT     ]  mem_used= 70.95GB  mem_eff= 94.6%  wall=1 day, 0:00:25  cpu_eff= 16.5%
+  Task 157  [TIMEOUT     ]  mem_used= 69.68GB  mem_eff= 92.9%  wall=1 day, 0:00:25  cpu_eff= 15.6%
+  Task 158  [TIMEOUT     ]  mem_used= 70.56GB  mem_eff= 94.1%  wall=1 day, 0:00:25  cpu_eff= 18.2%
+  Task 159  [TIMEOUT     ]  mem_used= 69.07GB  mem_eff= 92.1%  wall=1 day, 0:00:25  cpu_eff= 15.8%
+  Task 160  [TIMEOUT     ]  mem_used= 71.02GB  mem_eff= 94.7%  wall=1 day, 0:00:25  cpu_eff= 15.3%
+  Task 161  [TIMEOUT     ]  mem_used= 66.47GB  mem_eff= 88.6%  wall=1 day, 0:00:25  cpu_eff= 16.5%
+  Task 162  [TIMEOUT     ]  mem_used= 70.44GB  mem_eff= 93.9%  wall=1 day, 0:00:25  cpu_eff= 16.4%
+  Task 163  [TIMEOUT     ]  mem_used= 68.55GB  mem_eff= 91.4%  wall=1 day, 0:00:25  cpu_eff= 15.7%
+  Task 164  [TIMEOUT     ]  mem_used= 69.68GB  mem_eff= 92.9%  wall=1 day, 0:00:25  cpu_eff= 15.2%
+  Task 165  [TIMEOUT     ]  mem_used= 67.73GB  mem_eff= 90.3%  wall=1 day, 0:00:25  cpu_eff= 15.5%
+  Task 166  [TIMEOUT     ]  mem_used= 69.37GB  mem_eff= 92.5%  wall=1 day, 0:00:25  cpu_eff= 16.7%
+  Task 167  [TIMEOUT     ]  mem_used= 66.20GB  mem_eff= 88.3%  wall=1 day, 0:00:25  cpu_eff= 15.7%
+  Task 168  [TIMEOUT     ]  mem_used= 69.12GB  mem_eff= 92.2%  wall=1 day, 0:00:25  cpu_eff= 15.8%
+  Task 169  [TIMEOUT     ]  mem_used= 69.92GB  mem_eff= 93.2%  wall=1 day, 0:00:25  cpu_eff= 14.7%
+  Task 170  [TIMEOUT     ]  mem_used= 70.07GB  mem_eff= 93.4%  wall=1 day, 0:00:25  cpu_eff= 18.3%
+  Task 171  [TIMEOUT     ]  mem_used= 71.07GB  mem_eff= 94.8%  wall=1 day, 0:00:25  cpu_eff= 14.7%
+  Task 172  [TIMEOUT     ]  mem_used= 68.10GB  mem_eff= 90.8%  wall=1 day, 0:00:25  cpu_eff= 16.9%
+  Task 173  [TIMEOUT     ]  mem_used= 72.11GB  mem_eff= 96.2%  wall=1 day, 0:00:17  cpu_eff= 26.7%
+  Task 174  [TIMEOUT     ]  mem_used= 74.82GB  mem_eff= 99.8%  wall=1 day, 0:00:17  cpu_eff= 27.0%
+  Task 175  [COMPLETED   ]  mem_used= 73.09GB  mem_eff= 97.5%  wall=22:08:16  cpu_eff= 26.6%
+  Task 176  [COMPLETED   ]  mem_used= 74.84GB  mem_eff= 99.8%  wall=23:37:08  cpu_eff= 27.7%
+  Task 177  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=20:27:10  cpu_eff= 29.8%
+  Task 178  [COMPLETED   ]  mem_used= 72.72GB  mem_eff= 97.0%  wall=20:35:21  cpu_eff= 29.9%
+  Task 179  [COMPLETED   ]  mem_used= 74.86GB  mem_eff= 99.8%  wall=21:07:07  cpu_eff= 30.7%
+  Task 180  [COMPLETED   ]  mem_used= 73.94GB  mem_eff= 98.6%  wall=21:16:35  cpu_eff= 30.8%
+  Task 181  [COMPLETED   ]  mem_used= 74.64GB  mem_eff= 99.5%  wall=20:32:41  cpu_eff= 30.7%
+  Task 182  [COMPLETED   ]  mem_used= 73.74GB  mem_eff= 98.3%  wall=21:48:09  cpu_eff= 27.2%
+  Task 183  [COMPLETED   ]  mem_used= 72.56GB  mem_eff= 96.8%  wall=21:20:26  cpu_eff= 28.1%
+  Task 184  [COMPLETED   ]  mem_used= 72.52GB  mem_eff= 96.7%  wall=22:25:14  cpu_eff= 29.4%
+  Task 185  [COMPLETED   ]  mem_used= 73.66GB  mem_eff= 98.2%  wall=22:49:42  cpu_eff= 27.8%
+  Task 186  [COMPLETED   ]  mem_used= 74.19GB  mem_eff= 98.9%  wall=22:21:48  cpu_eff= 29.2%
+  Task 187  [COMPLETED   ]  mem_used= 74.00GB  mem_eff= 98.7%  wall=23:08:27  cpu_eff= 30.5%
+  Task 188  [COMPLETED   ]  mem_used= 73.44GB  mem_eff= 97.9%  wall=20:16:30  cpu_eff= 31.5%
+  Task 189  [FAILED      ]  mem_used= 72.74GB  mem_eff= 97.0%  wall=17:50:29  cpu_eff= 30.0%
+  Task 190  [COMPLETED   ]  mem_used= 74.17GB  mem_eff= 98.9%  wall=20:15:19  cpu_eff= 29.7%
+  Task 191  [COMPLETED   ]  mem_used= 72.84GB  mem_eff= 97.1%  wall=21:24:40  cpu_eff= 28.1%
+  Task 192  [COMPLETED   ]  mem_used= 72.02GB  mem_eff= 96.0%  wall=21:49:38  cpu_eff= 30.0%
+  Task 193  [COMPLETED   ]  mem_used= 73.71GB  mem_eff= 98.3%  wall=21:54:32  cpu_eff= 29.3%
+  Task 194  [COMPLETED   ]  mem_used= 74.91GB  mem_eff= 99.9%  wall=21:30:47  cpu_eff= 30.1%
+  Task 195  [COMPLETED   ]  mem_used= 72.76GB  mem_eff= 97.0%  wall=22:25:12  cpu_eff= 27.7%
+  Task 196  [COMPLETED   ]  mem_used= 73.67GB  mem_eff= 98.2%  wall=20:53:16  cpu_eff= 31.6%
+  Task 197  [COMPLETED   ]  mem_used= 71.64GB  mem_eff= 95.5%  wall=22:31:11  cpu_eff= 28.0%
+  Task 198  [COMPLETED   ]  mem_used= 71.70GB  mem_eff= 95.6%  wall=22:32:23  cpu_eff= 29.5%
+  Task 199  [COMPLETED   ]  mem_used= 73.83GB  mem_eff= 98.4%  wall=22:18:24  cpu_eff= 29.4%
+  Task 200  [COMPLETED   ]  mem_used= 74.49GB  mem_eff= 99.3%  wall=22:27:08  cpu_eff= 29.4%
+  Task 201  [COMPLETED   ]  mem_used= 72.16GB  mem_eff= 96.2%  wall=22:01:06  cpu_eff= 29.8%
+  Task 202  [COMPLETED   ]  mem_used= 73.74GB  mem_eff= 98.3%  wall=22:21:08  cpu_eff= 29.9%
+  Task 203  [COMPLETED   ]  mem_used= 72.99GB  mem_eff= 97.3%  wall=22:24:35  cpu_eff= 28.7%
+  Task 204  [COMPLETED   ]  mem_used= 72.85GB  mem_eff= 97.1%  wall=21:39:25  cpu_eff= 30.7%
+  Task 205  [COMPLETED   ]  mem_used= 72.68GB  mem_eff= 96.9%  wall=21:13:29  cpu_eff= 28.3%
+  Task 206  [COMPLETED   ]  mem_used= 72.31GB  mem_eff= 96.4%  wall=18:44:28  cpu_eff= 28.6%
+  Task 207  [COMPLETED   ]  mem_used= 72.95GB  mem_eff= 97.3%  wall=22:20:44  cpu_eff= 29.9%
+  Task 208  [COMPLETED   ]  mem_used= 73.09GB  mem_eff= 97.5%  wall=22:41:02  cpu_eff= 30.2%
+  Task 209  [COMPLETED   ]  mem_used= 72.85GB  mem_eff= 97.1%  wall=22:45:33  cpu_eff= 29.6%
+  Task 210  [COMPLETED   ]  mem_used= 73.81GB  mem_eff= 98.4%  wall=21:16:44  cpu_eff= 27.7%
+  Task 211  [COMPLETED   ]  mem_used= 74.90GB  mem_eff= 99.9%  wall=20:53:41  cpu_eff= 31.8%
+  Task 212  [COMPLETED   ]  mem_used= 73.18GB  mem_eff= 97.6%  wall=22:56:28  cpu_eff= 30.4%
+  Task 213  [COMPLETED   ]  mem_used= 74.22GB  mem_eff= 99.0%  wall=16:42:53  cpu_eff= 38.8%
+  Task 214  [COMPLETED   ]  mem_used= 74.88GB  mem_eff= 99.8%  wall=17:36:12  cpu_eff= 38.6%
+  Task 215  [COMPLETED   ]  mem_used= 74.37GB  mem_eff= 99.2%  wall=16:29:04  cpu_eff= 37.9%
+  Task 216  [COMPLETED   ]  mem_used= 74.53GB  mem_eff= 99.4%  wall=17:12:46  cpu_eff= 38.3%
+  Task 217  [COMPLETED   ]  mem_used= 74.51GB  mem_eff= 99.3%  wall=16:17:54  cpu_eff= 39.0%
+  Task 218  [COMPLETED   ]  mem_used= 73.19GB  mem_eff= 97.6%  wall=16:32:03  cpu_eff= 40.3%
+  Task 219  [COMPLETED   ]  mem_used= 74.16GB  mem_eff= 98.9%  wall=17:31:02  cpu_eff= 38.8%
+  Task 220  [COMPLETED   ]  mem_used= 73.31GB  mem_eff= 97.8%  wall=16:05:30  cpu_eff= 40.0%
+  Task 221  [COMPLETED   ]  mem_used= 74.26GB  mem_eff= 99.0%  wall=17:21:28  cpu_eff= 41.8%
+  Task 222  [COMPLETED   ]  mem_used= 74.81GB  mem_eff= 99.8%  wall=16:53:39  cpu_eff= 41.3%
+  Task 223  [COMPLETED   ]  mem_used= 74.38GB  mem_eff= 99.2%  wall=16:24:14  cpu_eff= 41.2%
+  Task 224  [COMPLETED   ]  mem_used= 74.42GB  mem_eff= 99.2%  wall=18:02:59  cpu_eff= 40.0%
+  Task 225  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=16:42:22  cpu_eff= 39.3%
+  Task 226  [COMPLETED   ]  mem_used= 73.74GB  mem_eff= 98.3%  wall=15:58:38  cpu_eff= 38.7%
+  Task 227  [OUT_OF_MEMORY]  mem_used= 74.93GB  mem_eff= 99.9%  wall=15:20:19  cpu_eff= 41.6%
+  Task 228  [COMPLETED   ]  mem_used= 73.47GB  mem_eff= 98.0%  wall=15:34:12  cpu_eff= 38.3%
+  Task 229  [COMPLETED   ]  mem_used= 74.19GB  mem_eff= 98.9%  wall=16:58:17  cpu_eff= 39.2%
+  Task 230  [COMPLETED   ]  mem_used= 74.02GB  mem_eff= 98.7%  wall=16:21:54  cpu_eff= 39.9%
+  Task 231  [COMPLETED   ]  mem_used= 73.88GB  mem_eff= 98.5%  wall=17:28:57  cpu_eff= 37.8%
+  Task 232  [COMPLETED   ]  mem_used= 74.24GB  mem_eff= 99.0%  wall=16:05:40  cpu_eff= 40.2%
+  Task 233  [COMPLETED   ]  mem_used= 74.99GB  mem_eff=100.0%  wall=13:15:40  cpu_eff= 38.0%
+  Task 234  [COMPLETED   ]  mem_used= 74.97GB  mem_eff=100.0%  wall=15:17:07  cpu_eff= 36.2%
+  Task 235  [COMPLETED   ]  mem_used= 74.48GB  mem_eff= 99.3%  wall=16:14:15  cpu_eff= 40.4%
+  Task 236  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=14:20:44  cpu_eff= 39.4%
+  Task 237  [COMPLETED   ]  mem_used= 74.26GB  mem_eff= 99.0%  wall=16:54:52  cpu_eff= 40.1%
+  Task 238  [COMPLETED   ]  mem_used= 74.86GB  mem_eff= 99.8%  wall=15:51:31  cpu_eff= 39.8%
+  Task 239  [COMPLETED   ]  mem_used= 73.76GB  mem_eff= 98.3%  wall=17:21:02  cpu_eff= 39.2%
+  Task 240  [COMPLETED   ]  mem_used= 74.74GB  mem_eff= 99.7%  wall=14:43:57  cpu_eff= 37.3%
+  Task 241  [COMPLETED   ]  mem_used= 73.70GB  mem_eff= 98.3%  wall=16:10:53  cpu_eff= 39.4%
+  Task 242  [COMPLETED   ]  mem_used= 74.55GB  mem_eff= 99.4%  wall=17:14:31  cpu_eff= 38.5%
+  Task 243  [COMPLETED   ]  mem_used= 74.17GB  mem_eff= 98.9%  wall=15:48:53  cpu_eff= 41.5%
+  Task 244  [COMPLETED   ]  mem_used= 74.28GB  mem_eff= 99.0%  wall=15:05:38  cpu_eff= 39.2%
+  Task 245  [COMPLETED   ]  mem_used= 74.71GB  mem_eff= 99.6%  wall=15:49:34  cpu_eff= 40.4%
+  Task 246  [COMPLETED   ]  mem_used= 74.18GB  mem_eff= 98.9%  wall=17:25:24  cpu_eff= 40.2%
+  Task 247  [COMPLETED   ]  mem_used= 73.67GB  mem_eff= 98.2%  wall=16:36:14  cpu_eff= 38.9%
+  Task 248  [COMPLETED   ]  mem_used= 74.44GB  mem_eff= 99.2%  wall=16:47:35  cpu_eff= 39.1%
+  Task 249  [COMPLETED   ]  mem_used= 73.14GB  mem_eff= 97.5%  wall=16:26:35  cpu_eff= 39.5%
+  Task 250  [OUT_OF_MEMORY]  mem_used= 74.94GB  mem_eff= 99.9%  wall=15:27:11  cpu_eff= 37.8%
+  Task 251  [COMPLETED   ]  mem_used= 73.68GB  mem_eff= 98.2%  wall=16:33:46  cpu_eff= 38.3%
+  Task 252  [COMPLETED   ]  mem_used= 72.72GB  mem_eff= 97.0%  wall=15:59:49  cpu_eff= 38.2%
+  Task 253  [TIMEOUT     ]  mem_used= 74.97GB  mem_eff=100.0%  wall=1 day, 0:00:17  cpu_eff= 24.1%
+  Task 254  [TIMEOUT     ]  mem_used= 74.93GB  mem_eff= 99.9%  wall=1 day, 0:00:11  cpu_eff= 24.6%
+  Task 255  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=22:52:28  cpu_eff= 22.1%
+  Task 256  [COMPLETED   ]  mem_used= 74.46GB  mem_eff= 99.3%  wall=23:57:46  cpu_eff= 19.9%
+  Task 257  [TIMEOUT     ]  mem_used= 74.75GB  mem_eff= 99.7%  wall=1 day, 0:00:02  cpu_eff= 21.1%
+  Task 258  [TIMEOUT     ]  mem_used= 74.93GB  mem_eff= 99.9%  wall=1 day, 0:00:18  cpu_eff= 24.9%
+  Task 259  [TIMEOUT     ]  mem_used= 74.99GB  mem_eff=100.0%  wall=1 day, 0:00:10  cpu_eff= 24.6%
+  Task 260  [TIMEOUT     ]  mem_used= 74.95GB  mem_eff= 99.9%  wall=1 day, 0:00:10  cpu_eff= 21.8%
+  Task 261  [TIMEOUT     ]  mem_used= 74.98GB  mem_eff=100.0%  wall=1 day, 0:00:29  cpu_eff= 24.8%
+  Task 262  [TIMEOUT     ]  mem_used= 72.53GB  mem_eff= 96.7%  wall=1 day, 0:00:18  cpu_eff= 24.4%
+  Task 263  [OUT_OF_MEMORY]  mem_used= 74.93GB  mem_eff= 99.9%  wall=23:49:46  cpu_eff= 25.5%
+  Task 264  [TIMEOUT     ]  mem_used= 74.94GB  mem_eff= 99.9%  wall=1 day, 0:00:02  cpu_eff= 25.0%
+  Task 265  [TIMEOUT     ]  mem_used= 74.10GB  mem_eff= 98.8%  wall=1 day, 0:00:28  cpu_eff= 24.8%
+  Task 266  [COMPLETED   ]  mem_used= 73.93GB  mem_eff= 98.6%  wall=23:10:47  cpu_eff= 21.9%
+  Task 267  [COMPLETED   ]  mem_used= 74.94GB  mem_eff= 99.9%  wall=23:28:47  cpu_eff= 23.7%
+  Task 268  [TIMEOUT     ]  mem_used= 74.67GB  mem_eff= 99.6%  wall=1 day, 0:00:08  cpu_eff= 24.6%
+  Task 269  [TIMEOUT     ]  mem_used= 74.97GB  mem_eff=100.0%  wall=1 day, 0:00:20  cpu_eff= 25.7%
+  Task 270  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=22:55:21  cpu_eff= 23.4%
+  Task 271  [TIMEOUT     ]  mem_used= 74.96GB  mem_eff= 99.9%  wall=1 day, 0:00:29  cpu_eff= 25.6%
+  Task 272  [TIMEOUT     ]  mem_used= 74.55GB  mem_eff= 99.4%  wall=1 day, 0:00:13  cpu_eff= 25.1%
+  Task 273  [TIMEOUT     ]  mem_used= 74.76GB  mem_eff= 99.7%  wall=1 day, 0:00:16  cpu_eff= 25.2%
+  Task 274  [TIMEOUT     ]  mem_used= 74.94GB  mem_eff= 99.9%  wall=1 day, 0:00:09  cpu_eff= 25.9%
+  Task 275  [OUT_OF_MEMORY]  mem_used= 74.93GB  mem_eff= 99.9%  wall=23:24:16  cpu_eff= 24.1%
+  Task 276  [COMPLETED   ]  mem_used= 74.97GB  mem_eff=100.0%  wall=23:26:43  cpu_eff= 19.5%
+  Task 277  [TIMEOUT     ]  mem_used= 74.96GB  mem_eff= 99.9%  wall=1 day, 0:00:02  cpu_eff= 15.4%
+  Task 278  [COMPLETED   ]  mem_used= 74.08GB  mem_eff= 98.8%  wall=23:34:09  cpu_eff= 19.9%
+  Task 279  [TIMEOUT     ]  mem_used= 74.64GB  mem_eff= 99.5%  wall=1 day, 0:00:06  cpu_eff= 25.5%
+  Task 280  [COMPLETED   ]  mem_used= 73.79GB  mem_eff= 98.4%  wall=23:41:44  cpu_eff= 25.2%
+  Task 281  [COMPLETED   ]  mem_used= 74.81GB  mem_eff= 99.8%  wall=23:53:57  cpu_eff= 20.5%
+  Task 282  [TIMEOUT     ]  mem_used= 73.03GB  mem_eff= 97.4%  wall=1 day, 0:00:13  cpu_eff= 20.8%
+  Task 283  [TIMEOUT     ]  mem_used= 74.21GB  mem_eff= 99.0%  wall=1 day, 0:00:01  cpu_eff= 26.4%
+  Task 284  [COMPLETED   ]  mem_used= 74.96GB  mem_eff= 99.9%  wall=22:54:35  cpu_eff= 21.0%
+  Task 285  [COMPLETED   ]  mem_used= 73.69GB  mem_eff= 98.3%  wall=23:16:24  cpu_eff= 27.3%
+  Task 286  [COMPLETED   ]  mem_used= 73.79GB  mem_eff= 98.4%  wall=23:15:37  cpu_eff= 26.9%
+  Task 287  [TIMEOUT     ]  mem_used= 74.94GB  mem_eff= 99.9%  wall=1 day, 0:00:10  cpu_eff= 21.2%
+  Task 288  [OUT_OF_MEMORY]  mem_used= 74.95GB  mem_eff= 99.9%  wall=23:35:18  cpu_eff= 21.2%
+  Task 289  [OUT_OF_MEMORY]  mem_used= 74.93GB  mem_eff= 99.9%  wall=22:45:45  cpu_eff= 25.5%
+  Task 290  [OUT_OF_MEMORY]  mem_used= 74.93GB  mem_eff= 99.9%  wall=23:33:58  cpu_eff= 27.8%
+  Task 291  [TIMEOUT     ]  mem_used= 74.94GB  mem_eff= 99.9%  wall=1 day, 0:00:02  cpu_eff= 25.8%
+  Task 292  [OUT_OF_MEMORY]  mem_used= 74.92GB  mem_eff= 99.9%  wall=23:02:19  cpu_eff= 25.1%
+  Task 293  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=8:45:53  cpu_eff= 32.5%
+  Task 294  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=8:24:27  cpu_eff= 33.1%
+  Task 295  [OUT_OF_MEMORY]  mem_used= 74.96GB  mem_eff=100.0%  wall=8:45:30  cpu_eff= 35.2%
+  Task 296  [OUT_OF_MEMORY]  mem_used= 74.97GB  mem_eff=100.0%  wall=7:21:28  cpu_eff= 28.8%
+  Task 297  [OUT_OF_MEMORY]  mem_used= 74.97GB  mem_eff=100.0%  wall=7:20:21  cpu_eff= 31.7%
+  Task 298  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=7:11:46  cpu_eff= 31.4%
+  Task 299  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=7:07:19  cpu_eff= 29.0%
+  Task 300  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=7:10:54  cpu_eff= 34.4%
+  Task 301  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=7:03:43  cpu_eff= 31.2%
+  Task 302  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=7:02:28  cpu_eff= 30.5%
+  Task 303  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=7:07:50  cpu_eff= 34.2%
+  Task 304  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=7:03:01  cpu_eff= 31.6%
+  Task 305  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=7:09:29  cpu_eff= 29.8%
+  Task 306  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:19:07  cpu_eff= 27.7%
+  Task 307  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=6:46:47  cpu_eff= 29.1%
+  Task 308  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:39:05  cpu_eff= 32.2%
+  Task 309  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:18:37  cpu_eff= 29.2%
+  Task 310  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:11:48  cpu_eff= 32.5%
+  Task 311  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:06:37  cpu_eff= 26.3%
+  Task 312  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:16:37  cpu_eff= 31.7%
+  Task 313  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:01:36  cpu_eff= 30.8%
+  Task 314  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=5:58:59  cpu_eff= 29.2%
+  Task 315  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:19:03  cpu_eff= 25.1%
+  Task 316  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=5:55:51  cpu_eff= 27.4%
+  Task 317  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=6:08:28  cpu_eff= 25.7%
+  Task 318  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=5:46:24  cpu_eff= 25.9%
+  Task 319  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=5:11:23  cpu_eff= 20.9%
+  Task 320  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=5:19:08  cpu_eff= 20.9%
+  Task 321  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=5:30:54  cpu_eff= 23.6%
+  Task 322  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=5:20:06  cpu_eff= 27.6%
+  Task 323  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=5:07:17  cpu_eff= 22.8%
+  Task 324  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=5:06:32  cpu_eff= 23.0%
+  Task 325  [OUT_OF_MEMORY]  mem_used= 74.98GB  mem_eff=100.0%  wall=5:09:57  cpu_eff= 27.3%
+  Task 326  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=5:04:04  cpu_eff= 21.9%
+  Task 327  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=4:50:56  cpu_eff= 27.7%
+  Task 328  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=4:46:37  cpu_eff= 27.7%
+  Task 329  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=4:32:59  cpu_eff= 19.2%
+  Task 330  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=4:41:13  cpu_eff= 24.8%
+  Task 331  [OUT_OF_MEMORY]  mem_used= 74.99GB  mem_eff=100.0%  wall=4:23:32  cpu_eff= 21.6%
+  Task 332  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=4:10:11  cpu_eff= 19.8%
+  Task 333  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:56  cpu_eff= 20.4%
+  Task 334  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:51  cpu_eff= 20.8%
+  Task 335  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:55:09  cpu_eff= 20.2%
+  Task 336  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:44  cpu_eff= 18.4%
+  Task 337  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:15:59  cpu_eff= 10.9%
+  Task 338  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:49:52  cpu_eff= 16.9%
+  Task 339  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:53:18  cpu_eff= 14.6%
+  Task 340  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:59:40  cpu_eff= 13.8%
+  Task 341  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:30  cpu_eff= 15.7%
+  Task 342  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:39:42  cpu_eff= 18.9%
+  Task 343  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:55:28  cpu_eff= 14.8%
+  Task 344  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:58:08  cpu_eff= 13.7%
+  Task 345  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:06  cpu_eff= 14.6%
+  Task 346  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:03  cpu_eff= 15.0%
+  Task 347  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:01:50  cpu_eff= 11.6%
+  Task 348  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:44  cpu_eff= 13.8%
+  Task 349  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:48:13  cpu_eff= 13.6%
+  Task 350  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:58:38  cpu_eff= 14.0%
+  Task 351  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:56  cpu_eff= 17.1%
+  Task 352  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:21  cpu_eff= 16.9%
+  Task 353  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:46:29  cpu_eff= 16.1%
+  Task 354  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:51:33  cpu_eff= 13.8%
+  Task 355  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:48  cpu_eff= 13.8%
+  Task 356  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:55:19  cpu_eff= 11.8%
+  Task 357  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:55:07  cpu_eff= 11.5%
+  Task 358  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:54  cpu_eff= 12.8%
+  Task 359  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:57:54  cpu_eff= 10.3%
+  Task 360  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:55:07  cpu_eff= 15.3%
+  Task 361  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:18  cpu_eff= 12.6%
+  Task 362  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:18  cpu_eff= 12.8%
+  Task 363  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:20  cpu_eff= 13.2%
+  Task 364  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:11  cpu_eff= 12.8%
+  Task 365  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:23  cpu_eff= 18.5%
+  Task 366  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:57  cpu_eff= 16.4%
+  Task 367  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:11  cpu_eff= 11.2%
+  Task 368  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:43:51  cpu_eff= 19.5%
+  Task 369  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:42:03  cpu_eff= 17.1%
+  Task 370  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:39:07  cpu_eff= 19.6%
+  Task 371  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:42:45  cpu_eff= 18.2%
+  Task 372  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:44:56  cpu_eff= 14.6%
+  Task 373  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:28  cpu_eff= 16.2%
+  Task 374  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:49:04  cpu_eff= 11.2%
+  Task 375  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:55:50  cpu_eff= 11.0%
+  Task 376  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:35:24  cpu_eff= 16.4%
+  Task 377  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:38:54  cpu_eff= 16.7%
+  Task 378  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:05  cpu_eff= 14.8%
+  Task 379  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:52:09  cpu_eff= 13.3%
+  Task 380  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:44:00  cpu_eff= 12.1%
+  Task 381  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:43:41  cpu_eff= 14.2%
+  Task 382  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:22  cpu_eff= 13.0%
+  Task 383  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:59:35  cpu_eff= 11.5%
+  Task 384  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:09:07  cpu_eff=  9.6%
+  Task 385  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:49:36  cpu_eff= 22.3%
+  Task 386  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:00:24  cpu_eff= 11.3%
+  Task 387  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:51:39  cpu_eff=  8.4%
+  Task 388  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:03:36  cpu_eff= 10.9%
+  Task 389  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:30  cpu_eff=  9.2%
+  Task 390  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:44:32  cpu_eff= 13.2%
+  Task 391  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:01:12  cpu_eff= 11.4%
+  Task 392  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:06:53  cpu_eff= 10.7%
+  Task 393  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:52:33  cpu_eff= 13.9%
+  Task 394  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:46:42  cpu_eff= 13.7%
+  Task 395  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:16  cpu_eff= 11.2%
+  Task 396  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:36  cpu_eff=  9.3%
+  Task 397  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:59:26  cpu_eff=  9.0%
+  Task 398  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:58:32  cpu_eff= 12.1%
+  Task 399  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:34:56  cpu_eff=  6.9%
+  Task 400  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:34:56  cpu_eff=  6.7%
+  Task 401  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:42:24  cpu_eff= 14.4%
+  Task 402  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:01:34  cpu_eff= 12.9%
+  Task 403  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:58:16  cpu_eff= 13.3%
+  Task 404  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:27  cpu_eff= 13.2%
+  Task 405  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:49:02  cpu_eff= 12.9%
+  Task 406  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:00:41  cpu_eff= 11.2%
+  Task 407  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:53:48  cpu_eff= 11.7%
+  Task 408  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:48:17  cpu_eff= 16.2%
+  Task 409  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:48:37  cpu_eff= 14.4%
+  Task 410  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:40:40  cpu_eff= 14.2%
+  Task 411  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:21:17  cpu_eff= 10.0%
+  Task 412  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:33:35  cpu_eff=  7.4%
+  Task 413  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:03:08  cpu_eff= 10.2%
+  Task 414  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:58:59  cpu_eff= 12.1%
+  Task 415  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:02:45  cpu_eff= 10.9%
+  Task 416  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:39:16  cpu_eff=  6.8%
+  Task 417  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:49:32  cpu_eff=  7.1%
+  Task 418  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:03:20  cpu_eff= 13.5%
+  Task 419  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:55:24  cpu_eff=  9.6%
+  Task 420  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:49:45  cpu_eff= 13.0%
+  Task 421  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:02:04  cpu_eff= 11.4%
+  Task 422  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:51  cpu_eff= 12.3%
+  Task 423  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:41  cpu_eff= 13.7%
+  Task 424  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:51:57  cpu_eff= 11.9%
+  Task 425  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:57:22  cpu_eff= 11.6%
+  Task 426  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:27  cpu_eff=  9.0%
+  Task 427  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:44:10  cpu_eff= 15.9%
+  Task 428  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:02  cpu_eff= 12.8%
+  Task 429  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:11:55  cpu_eff=  9.8%
+  Task 430  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:51:45  cpu_eff= 12.9%
+  Task 431  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:36:17  cpu_eff=  9.0%
+  Task 432  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:21:00  cpu_eff=  8.7%
+  Task 433  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:46  cpu_eff= 11.2%
+  Task 434  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:51:28  cpu_eff= 13.9%
+  Task 435  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:20  cpu_eff= 11.5%
+  Task 436  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:31:35  cpu_eff=  6.3%
+  Task 437  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:55:22  cpu_eff= 11.5%
+  Task 438  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=2:45:19  cpu_eff= 10.6%
+  Task 439  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:13:49  cpu_eff=  9.7%
+  Task 440  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:17:51  cpu_eff=  9.3%
+  Task 441  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:51  cpu_eff= 14.3%
+  Task 442  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:59:50  cpu_eff= 12.8%
+  Task 443  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:51  cpu_eff= 11.3%
+  Task 444  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:08:58  cpu_eff= 10.8%
+  Task 445  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:00:23  cpu_eff= 12.5%
+  Task 446  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:12:32  cpu_eff= 10.1%
+  Task 447  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:57:22  cpu_eff= 12.2%
+  Task 448  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:06:26  cpu_eff= 11.2%
+  Task 449  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:02  cpu_eff= 11.6%
+  Task 450  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:17:56  cpu_eff=  9.1%
+  Task 451  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:45:41  cpu_eff= 13.2%
+  Task 452  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:11:13  cpu_eff=  8.2%
+  Task 453  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:00:10  cpu_eff= 10.7%
+  Task 454  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:03:06  cpu_eff= 10.6%
+  Task 455  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:57:35  cpu_eff=  5.5%
+  Task 456  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:58  cpu_eff= 13.3%
+  Task 457  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:01:03  cpu_eff=  9.8%
+  Task 458  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:12:58  cpu_eff=  9.7%
+  Task 459  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:10:44  cpu_eff=  9.4%
+  Task 460  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:33:11  cpu_eff=  6.8%
+  Task 461  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:33:11  cpu_eff=  6.8%
+  Task 462  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:01:36  cpu_eff=  9.7%
+  Task 463  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:57:36  cpu_eff=  5.5%
+  Task 464  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:30:01  cpu_eff=  6.4%
+  Task 465  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:28:17  cpu_eff=  6.6%
+  Task 466  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=2:54:23  cpu_eff=  3.2%
+  Task 467  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:15:38  cpu_eff=  8.6%
+  Task 468  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:08:32  cpu_eff= 10.4%
+  Task 469  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:50:34  cpu_eff=  6.2%
+  Task 470  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:09:04  cpu_eff=  8.9%
+  Task 471  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:16:54  cpu_eff=  7.0%
+  Task 472  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:14:12  cpu_eff=  7.5%
+  Task 473  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:12:15  cpu_eff=  9.9%
+  Task 474  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:00:53  cpu_eff= 10.9%
+  Task 475  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:10:25  cpu_eff=  9.6%
+  Task 476  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:06:37  cpu_eff=  9.3%
+  Task 477  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=2:18:08  cpu_eff=  4.7%
+  Task 478  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:09:34  cpu_eff=  9.8%
+  Task 479  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:57:08  cpu_eff= 10.0%
+  Task 480  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:10:08  cpu_eff= 10.3%
+  Task 481  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:19:25  cpu_eff=  8.7%
+  Task 482  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:06:13  cpu_eff=  9.1%
+  Task 483  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:07:48  cpu_eff=  9.6%
+  Task 484  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:09:19  cpu_eff=  9.9%
+  Task 485  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:02:21  cpu_eff= 11.1%
+  Task 486  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:58:28  cpu_eff= 11.6%
+  Task 487  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:30  cpu_eff= 11.7%
+  Task 488  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:39:35  cpu_eff=  6.7%
+  Task 489  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:58:21  cpu_eff= 12.3%
+  Task 490  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:14  cpu_eff=  9.8%
+  Task 491  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=2:16:58  cpu_eff=  4.5%
+  Task 492  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:01:11  cpu_eff= 10.7%
+  Task 493  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:00:34  cpu_eff=  8.9%
+  Task 494  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:21  cpu_eff= 10.7%
+  Task 495  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:02  cpu_eff= 10.9%
+  Task 496  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:09  cpu_eff= 11.1%
+  Task 497  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:37  cpu_eff= 12.0%
+  Task 498  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:53  cpu_eff= 11.6%
+  Task 499  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:42:09  cpu_eff= 16.1%
+  Task 500  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:40:36  cpu_eff= 16.7%
+  Task 501  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:53:01  cpu_eff= 12.3%
+  Task 502  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:39:42  cpu_eff= 14.5%
+  Task 503  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:28  cpu_eff= 13.0%
+  Task 504  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:00  cpu_eff= 11.6%
+  Task 505  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:06:48  cpu_eff=  8.4%
+  Task 506  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:21:59  cpu_eff=  7.7%
+  Task 507  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:21:59  cpu_eff=  7.6%
+  Task 508  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:21:57  cpu_eff=  7.7%
+  Task 509  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:00:52  cpu_eff= 11.3%
+  Task 510  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:05:38  cpu_eff= 11.1%
+  Task 511  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:32:02  cpu_eff=  6.6%
+  Task 512  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:31:56  cpu_eff=  6.7%
+  Task 513  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:15:25  cpu_eff= 10.6%
+  Task 514  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:02:21  cpu_eff= 10.9%
+  Task 515  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:35:31  cpu_eff=  6.9%
+  Task 516  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:10:08  cpu_eff=  9.7%
+  Task 517  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:08:10  cpu_eff=  9.7%
+  Task 518  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:11:34  cpu_eff= 10.9%
+  Task 519  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:21:01  cpu_eff=  9.6%
+  Task 520  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:18:05  cpu_eff=  9.2%
+  Task 521  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:53:43  cpu_eff= 13.5%
+  Task 522  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:34:28  cpu_eff= 18.4%
+  Task 523  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:38:13  cpu_eff= 15.6%
+  Task 524  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:03:46  cpu_eff= 10.7%
+  Task 525  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:00:47  cpu_eff= 11.0%
+  Task 526  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:39:34  cpu_eff= 14.7%
+  Task 527  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:06:45  cpu_eff=  8.6%
+  Task 528  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:46:55  cpu_eff= 13.6%
+  Task 529  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:43:27  cpu_eff= 15.3%
+  Task 530  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:06:35  cpu_eff= 10.1%
+  Task 531  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:03:10  cpu_eff= 10.4%
+  Task 532  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:04:08  cpu_eff= 10.6%
+  Task 533  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:42:30  cpu_eff= 15.0%
+  Task 534  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:49:40  cpu_eff= 11.8%
+  Task 535  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:04:18  cpu_eff= 11.2%
+  Task 536  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:08:30  cpu_eff= 10.1%
+  Task 537  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:10:44  cpu_eff=  9.7%
+  Task 538  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:10:00  cpu_eff=  8.9%
+  Task 539  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:12:15  cpu_eff=  9.1%
+  Task 540  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:04:20  cpu_eff= 10.2%
+  Task 541  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:07:29  cpu_eff=  9.5%
+  Task 542  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:17:40  cpu_eff=  8.4%
+  Task 543  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:25:00  cpu_eff=  8.2%
+  Task 544  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:07:14  cpu_eff= 10.1%
+  Task 545  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:53:39  cpu_eff= 11.1%
+  Task 546  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:04:09  cpu_eff= 11.7%
+  Task 547  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:06:22  cpu_eff=  8.8%
+  Task 548  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:15:07  cpu_eff=  9.4%
+  Task 549  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:01  cpu_eff= 12.3%
+  Task 550  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:01:52  cpu_eff= 12.2%
+  Task 551  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:01  cpu_eff= 11.5%
+  Task 552  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:59:40  cpu_eff= 10.5%
+  Task 553  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:50:40  cpu_eff= 12.4%
+  Task 554  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:57:46  cpu_eff= 11.0%
+  Task 555  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:02:08  cpu_eff= 10.9%
+  Task 556  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:58:51  cpu_eff= 11.1%
+  Task 557  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:53:35  cpu_eff= 11.2%
+  Task 558  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:16:03  cpu_eff=  7.4%
+  Task 559  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:16:01  cpu_eff=  7.3%
+  Task 560  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:15:41  cpu_eff=  7.4%
+  Task 561  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:51:58  cpu_eff= 12.3%
+  Task 562  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:56:03  cpu_eff= 14.0%
+  Task 563  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:49:34  cpu_eff= 12.8%
+  Task 564  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=1:12:16  cpu_eff=  7.6%
+  Task 565  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:54:35  cpu_eff= 10.4%
+  Task 566  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:47:39  cpu_eff= 13.1%
+  Task 567  [OUT_OF_MEMORY]  mem_used= 75.00GB  mem_eff=100.0%  wall=0:27:52  cpu_eff= 10.3%
+
+================================================================================
+SUMMARY STATISTICS
+================================================================================
+
+Completion States (567 jobs with seff data):
+  OUT_OF_MEMORY    288  ( 50.8%)
+  COMPLETED        174  ( 30.7%)
+  TIMEOUT          104  ( 18.3%)
+  FAILED             1  (  0.2%)
+
+Total Memory Used:
+  Count: 567 tasks
+  Min:      1.69 GB
+  Max:     75.00 GB
+  Mean:    66.92 GB
+  Stdev:   20.42 GB
+
+Memory Used (COMPLETED jobs only):
+  Count: 174 tasks
+  Min:      1.69 GB
+  Max:     74.99 GB
+  Mean:    51.77 GB
+  Stdev:   31.85 GB
+
+Memory Efficiency (used / requested):
+  Count: 567 tasks
+  Min:      2.25%
+  Max:    100.00%
+  Mean:    89.22%
+  Stdev:   27.23%
+
+Wall Time:
+  Count: 567 tasks
+  Min:   0:03:23
+  Max:   1 day, 0:00:29
+  Mean:  9:33:31
+  Stdev: 9:51:57
+
+CPU Efficiency:
+  Count: 567 tasks
+  Min:      0.66%
+  Max:     52.11%
+  Mean:    19.00%
+  Stdev:   12.37%
+
+Summary: 567 successful seff calls, 0 failures
+================================================================================
+

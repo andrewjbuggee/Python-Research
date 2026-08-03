@@ -6,7 +6,7 @@
                                    # 42k-sample HDF5 took 3017 s (50 min); the
                                    # tau head adds ~nothing. 2.5 h is ~3x margin.
 #SBATCH --partition=al40
-#SBATCH --qos=normal
+#SBATCH --qos=gpu-normal
 #SBATCH --mem=8G
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
