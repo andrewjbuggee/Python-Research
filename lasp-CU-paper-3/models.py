@@ -700,10 +700,15 @@ class CombinedLoss(nn.Module):
                  measurement_uncertainty: Optional[torch.Tensor] = None,
                  level_weights: Optional[torch.Tensor] = None,
                  sigma_floor: float = 0.01,
+                 tau_weight: float = 1.0,
                  ):
         super().__init__()
 
-        self.supervised = SupervisedLoss(tau_weight=1.0, level_weights=level_weights,
+        # tau_weight scales the τ NLL relative to the profile NLL.  Note the
+        # profile term is a MEAN over levels, so tau_weight=1.0 gives τ the
+        # same gradient weight as the entire profile (7× a single level on the
+        # 7-level grid).  Default 1.0 preserves the historical behaviour.
+        self.supervised = SupervisedLoss(tau_weight=tau_weight, level_weights=level_weights,
                                          sigma_floor=sigma_floor)
         self.physics = PhysicsLoss(
             lambda_monotonicity=lambda_monotonicity,
