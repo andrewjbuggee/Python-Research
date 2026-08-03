@@ -55,10 +55,10 @@ from pathlib import Path
 # Configuration
 # ============================================================
 
-MAT_DIR  = Path('/Volumes/My Passport/neural_network_training_data/'
+MAT_DIR  = Path('/Volumes/My Passport/CU_Boulder/neural_network_training_data/'
                 'synthetic_training_data_8_May_2026/')
-OUT_PATH = Path('/Volumes/My Passport/neural_network_training_data/'
-                'synthetic_training_data_7-levels_8_May_2026.h5')
+OUT_PATH = Path('/Volumes/My Passport/CU_Boulder/neural_network_training_data/'
+                'synthetic_training_data_7-levels_2_Aug_2026.h5')
 FIGURES_DIR = Path(__file__).parent / 'Figures' / 'synthetic_dataset_summary'
 
 N_LEVELS      = 7      # cloud profile target grid (already 7 in the synthetic .mat)
@@ -66,7 +66,7 @@ N_GEOMETRIES  = 1      # one (SZA, SAZ, VZA, VAZ) per cloud
 N_WAVELENGTHS = 636    # HySICS spectral channels
 
 # Files with tau_c below this are skipped — should already be filtered by 06.
-TAU_C_MIN = 0.0        # set non-zero only if you want defense-in-depth
+TAU_C_MIN = 3.0        # set non-zero only if you want defense-in-depth
 
 REQUIRED_KEYS = {
     'Refl_model_allStateVectors',
@@ -79,7 +79,7 @@ REQUIRED_KEYS = {
 # regenerate from the clean Refl_model_allStateVectors so the HDF5 has
 # consistent statistics with the original training data.
 NOISE_HYSICS = 0.003   # 0.3% Gaussian
-NOISE_EMIT   = 0.02    # 2% Gaussian (was 4% in some legacy runs; matches recent)
+NOISE_EMIT   = 0.015    # 1.5% Gaussian (was 4% in some legacy runs; matches recent)
 NOISE_FM     = 0.0     # forward-model noise budget
 
 R_DRY = 287.05         # J/(kg·K), dry-air specific gas constant

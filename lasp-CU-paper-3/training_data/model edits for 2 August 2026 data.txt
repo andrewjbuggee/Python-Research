@@ -1,0 +1,22 @@
+Done.
+  Output: /Volumes/My Passport/CU_Boulder/neural_network_training_data/synthetic_training_data_7-levels_2_Aug_2026.h5
+  Total samples: 108923 (108923 clouds × 1 geometry)
+
+============================================================
+WATER VAPOUR BOUNDS — update these in data.py if needed
+============================================================
+  Above-cloud WV column (molec/cm²):
+    min = 7.5232e+20   log10 = 20.88
+    max = 3.6987e+23   log10 = 23.57
+  In-cloud WV column (molec/cm²):
+    min = 1.9517e+19   log10 = 19.29
+    max = 3.6267e+22   log10 = 22.56
+  ERA5 vapor concentration (molec/cm³):
+    surface max = 6.5346e+17   log10 = 17.82
+
+  Suggested bounds for data.py:
+    WV_ABOVE_LOG10_MIN = 20.0
+    WV_ABOVE_LOG10_MAX = 24.0
+    WV_IN_LOG10_MIN    = 19.0
+    WV_IN_LOG10_MAX    = 23.0
+    ERA5_VAP_LOG10_MAX = 18.0
