@@ -101,6 +101,17 @@ def parse_args():
                    help='Seeds torch/numpy AND the profile-aware split. At the '
                         'default 42 the M0_rev2 889-profile test set is a '
                         'strict subset of this sweep\'s 4,199-profile test set.')
+    p.add_argument('--n-epochs',          type=int, default=None,
+                   help='Override hyperparams["n_epochs"] from the config. '
+                        'Use for standalone re-training of a chosen sweep '
+                        'config with a longer epoch budget (the sweep cap of '
+                        '1500 was binding for the top runs — best epochs '
+                        '~1430-1495 with no early stop triggered).')
+    p.add_argument('--early-stop-patience', type=int, default=None,
+                   help='Override hyperparams["early_stop_patience"] (sweep '
+                        'default 150). For long re-trains a larger value '
+                        '(e.g. 300) avoids stopping during the slow late-'
+                        'training improvement phase after several LR halvings.')
     return p.parse_args()
 
 
@@ -288,6 +299,12 @@ def main():
         device = torch.device('cpu')
 
     hp            = cfg['hyperparams']
+    # CLI overrides land in hp BEFORE anything reads it, so summary.json's
+    # hyperparams block records what was actually used.
+    if args.n_epochs is not None:
+        hp['n_epochs'] = int(args.n_epochs)
+    if args.early_stop_patience is not None:
+        hp['early_stop_patience'] = int(args.early_stop_patience)
     variant       = cfg.get('variant', 'PT')
     tau_weight    = float(hp.get('tau_weight', 1.0))
     tau_transform = hp.get('tau_transform', 'linear')
@@ -314,6 +331,10 @@ def main():
     print(f"  tau_weight    : {tau_weight:.4f}")
     print(f"  tau_transform : {tau_transform}  (τ bounds {TAU_MIN}–{TAU_MAX})")
     print(f"  early stop on : val {early_stop_metric}")
+    print(f"  n_epochs      : {hp['n_epochs']}"
+          + ("  (CLI override)" if args.n_epochs is not None else '')
+          + f"  |  patience {hp.get('early_stop_patience', 150)}"
+          + ("  (CLI override)" if args.early_stop_patience is not None else ''))
     print()
 
     torch.manual_seed(args.seed)

@@ -8,6 +8,13 @@ synthetic sweep is single-split so each `summary.json` carries one value
 (`mean_test_rmse_um`) plus a list (`per_level_rmse_um`). This script knows
 that schema.
 
+If a sweep ALSO retrieved cloud optical thickness (summaries carry
+`tau_test_rmse` — written by sweep_train_profile_tau_synthetic.py), the
+printed table, CSV and JSON gain τ columns (τ RMSE plus the tau_weight /
+tau_transform hyperparameters).  Ranking is ALWAYS by mean per-profile RMSE,
+with or without a τ head — across the PT sweep the two metrics are positively
+correlated, so the profile ranking is a reasonable joint ranking.
+
 Usage:
     python compare_sweep_profile_only_synthetic.py \\
         --sweep-dir sweep_results_profile_only_synthetic_M0
@@ -81,31 +88,53 @@ def _estimate_n_params(hidden_dims, n_input=643, n_output=7) -> int:
 # Ranking + table
 # ─────────────────────────────────────────────────────────────────────────────
 def print_table(summaries: List[Dict], top_n: int = 20):
-    """Print a compact ranked table (top_n by RMSE)."""
-    sorted_runs = sorted(summaries, key=lambda s: s['mean_test_rmse_um'])
+    """Print a compact ranked table (top_n by mean per-profile RMSE).
 
-    print(f"\n{'=' * 92}")
+    If the sweep also retrieved optical thickness (any summary carries
+    'tau_test_rmse'), a τ-RMSE metric column plus the two τ hyperparameter
+    columns (tau_weight, tau_transform) are appended.  Ranking is unchanged.
+    """
+    sorted_runs = sorted(summaries, key=lambda s: s['mean_test_rmse_um'])
+    has_tau = any('tau_test_rmse' in s for s in sorted_runs)
+
+    header = (f"{'rk':>3}  {'run':>5}  {'rmse μm':>7}  {'σ μm':>6}  {'r/σ':>5}"
+              + (f"  {'τ rmse':>6}" if has_tau else '')
+              + f"  {'arch':>14} {'act':>5} {'lr':>9} {'drop':>5} {'lw':>8}"
+              + (f" {'τ_w':>5} {'τ_tf':>6}" if has_tau else '')
+              + f" {'epoch★':>6} {'sec':>5}")
+    width = len(header)
+
+    print(f"\n{'=' * width}")
     print(f"  Synthetic sweep ranking — {len(summaries)} runs, "
-          f"showing top {min(top_n, len(summaries))}")
-    print(f"{'=' * 92}")
-    print(f"{'rk':>3}  {'run':>5}  {'rmse μm':>7}  {'σ μm':>6}  {'r/σ':>5}  "
-          f"{'arch':>14} {'act':>5} {'lr':>9} {'drop':>5} {'lw':>8} "
-          f"{'epoch★':>6} {'sec':>5}")
-    print('-' * 92)
+          f"showing top {min(top_n, len(summaries))}"
+          + ('   [profile + τ_c model]' if has_tau else ''))
+    print(f"{'=' * width}")
+    print(header)
+    print('-' * width)
     for rank, s in enumerate(sorted_runs[:top_n], start=1):
         hp = s['hyperparams']
-        print(f"{rank:>3}  {s['run_id']:>5}  "
-              f"{s['mean_test_rmse_um']:>7.3f}  "
-              f"{s['mean_test_sigma_um']:>6.3f}  "
-              f"{s['rmse_sigma_ratio']:>5.2f}  "
-              f"{_arch_str(hp['hidden_dims']):>14} "
-              f"{hp['activation']:>5} "
-              f"{hp['learning_rate']:>9.1e} "
-              f"{hp['dropout']:>5.3f} "
-              f"{hp['level_weights_name']:>8} "
-              f"{s['best_epoch']:>6} "
-              f"{s['train_seconds']:>5.0f}")
-    print('-' * 92)
+        tau_rmse = s.get('tau_test_rmse')
+        tau_w    = s.get('tau_weight',    hp.get('tau_weight'))
+        tau_tf   = s.get('tau_transform', hp.get('tau_transform'))
+        row = (f"{rank:>3}  {s['run_id']:>5}  "
+               f"{s['mean_test_rmse_um']:>7.3f}  "
+               f"{s['mean_test_sigma_um']:>6.3f}  "
+               f"{s['rmse_sigma_ratio']:>5.2f}")
+        if has_tau:
+            row += (f"  {tau_rmse:>6.3f}" if tau_rmse is not None
+                    else f"  {'—':>6}")
+        row += (f"  {_arch_str(hp['hidden_dims']):>14} "
+                f"{hp['activation']:>5} "
+                f"{hp['learning_rate']:>9.1e} "
+                f"{hp['dropout']:>5.3f} "
+                f"{hp['level_weights_name']:>8}")
+        if has_tau:
+            row += (f" {tau_w:>5.2f}" if tau_w is not None else f" {'—':>5}")
+            row += (f" {tau_tf:>6}"   if tau_tf is not None else f" {'—':>6}")
+        row += (f" {s['best_epoch']:>6} "
+                f"{s['train_seconds']:>5.0f}")
+        print(row)
+    print('-' * width)
     rmses = np.array([s['mean_test_rmse_um'] for s in sorted_runs])
     print(f"  spread        : {rmses.min():.3f} → {rmses.max():.3f} μm "
           f"(median {np.median(rmses):.3f})")
@@ -114,19 +143,41 @@ def print_table(summaries: List[Dict], top_n: int = 20):
     pl = sorted_runs[0]['per_level_rmse_um']
     print(f"  best per-lev  : "
           + '  '.join(f'L{i+1:02d}={r:.2f}' for i, r in enumerate(pl)))
+    if has_tau:
+        taus = np.array([s.get('tau_test_rmse', np.nan) for s in sorted_runs])
+        print(f"  τ RMSE spread : {np.nanmin(taus):.3f} → {np.nanmax(taus):.3f} "
+              f"(median {np.nanmedian(taus):.3f})")
+        if sorted_runs[0].get('tau_test_rmse') is not None:
+            print(f"  best-run τ    : {sorted_runs[0]['tau_test_rmse']:.3f}  "
+                  f"(R² = {sorted_runs[0].get('tau_test_r2', float('nan')):.3f})")
+        bt_idx = int(np.nanargmin(taus))
+        bt = sorted_runs[bt_idx]
+        print(f"  best τ run    : {bt['run_id']} "
+              f"(τ RMSE {taus[bt_idx]:.3f}, profile {bt['mean_test_rmse_um']:.3f} μm, "
+              f"profile rank {bt_idx + 1})")
+
+
+# τ metric keys copied verbatim from summary.json into the CSV/JSON when the
+# sweep has a τ head (all written by sweep_train_profile_tau_synthetic.py).
+TAU_METRIC_KEYS = ['tau_test_rmse', 'tau_test_bias', 'tau_test_mape_pct',
+                   'tau_test_r2', 'tau_test_sigma', 'tau_rmse_sigma_ratio']
 
 
 def save_csv(summaries: List[Dict], path: Path):
     sorted_runs = sorted(summaries, key=lambda s: s['mean_test_rmse_um'])
     n_lev = len(sorted_runs[0]['per_level_rmse_um'])
+    has_tau = any('tau_test_rmse' in s for s in sorted_runs)
 
+    tau_cols = (TAU_METRIC_KEYS + ['tau_weight', 'tau_transform']
+                if has_tau else [])
     cols = (['rank', 'run_id', 'tag', 'variant',
-             'mean_test_rmse_um', 'mean_test_sigma_um', 'rmse_sigma_ratio',
-             'best_epoch', 'epochs_trained', 'train_seconds',
-             'hidden_dims', 'activation', 'learning_rate', 'dropout',
-             'lambda_physics', 'lambda_monotonicity',
-             'lambda_adiabatic', 'lambda_smoothness',
-             'level_weights_name', 'batch_size', 'augment_noise_std']
+             'mean_test_rmse_um', 'mean_test_sigma_um', 'rmse_sigma_ratio']
+            + tau_cols
+            + ['best_epoch', 'epochs_trained', 'train_seconds',
+               'hidden_dims', 'activation', 'learning_rate', 'dropout',
+               'lambda_physics', 'lambda_monotonicity',
+               'lambda_adiabatic', 'lambda_smoothness',
+               'level_weights_name', 'batch_size', 'augment_noise_std']
             + [f'rmse_L{i+1:02d}_um' for i in range(n_lev)])
 
     with path.open('w', newline='') as f:
@@ -136,14 +187,18 @@ def save_csv(summaries: List[Dict], path: Path):
             hp = s['hyperparams']
             row = [rank, s['run_id'], s.get('tag', ''), s.get('variant', ''),
                    s['mean_test_rmse_um'], s['mean_test_sigma_um'],
-                   s['rmse_sigma_ratio'],
-                   s['best_epoch'], s['epochs_trained'], s['train_seconds'],
-                   '|'.join(str(h) for h in hp['hidden_dims']),
-                   hp['activation'], hp['learning_rate'], hp['dropout'],
-                   hp.get('lambda_physics', 0), hp.get('lambda_monotonicity', 0),
-                   hp.get('lambda_adiabatic', 0), hp.get('lambda_smoothness', 0),
-                   hp['level_weights_name'], hp['batch_size'],
-                   hp.get('augment_noise_std', 0)]
+                   s['rmse_sigma_ratio']]
+            if has_tau:
+                row += [s.get(k, '') for k in TAU_METRIC_KEYS]
+                row += [s.get('tau_weight',    hp.get('tau_weight', '')),
+                        s.get('tau_transform', hp.get('tau_transform', ''))]
+            row += [s['best_epoch'], s['epochs_trained'], s['train_seconds'],
+                    '|'.join(str(h) for h in hp['hidden_dims']),
+                    hp['activation'], hp['learning_rate'], hp['dropout'],
+                    hp.get('lambda_physics', 0), hp.get('lambda_monotonicity', 0),
+                    hp.get('lambda_adiabatic', 0), hp.get('lambda_smoothness', 0),
+                    hp['level_weights_name'], hp['batch_size'],
+                    hp.get('augment_noise_std', 0)]
             row += list(s['per_level_rmse_um'])
             w.writerow(row)
 
@@ -152,7 +207,7 @@ def save_json(summaries: List[Dict], path: Path):
     sorted_runs = sorted(summaries, key=lambda s: s['mean_test_rmse_um'])
     aggregate = []
     for rank, s in enumerate(sorted_runs, start=1):
-        aggregate.append({
+        entry = {
             'rank':              rank,
             'run_id':            s['run_id'],
             'tag':               s.get('tag', ''),
@@ -165,7 +220,16 @@ def save_json(summaries: List[Dict], path: Path):
             'best_val_loss':     s['best_val_loss'],
             'train_seconds':     s['train_seconds'],
             'hyperparams':       s['hyperparams'],
-        })
+        }
+        if 'tau_test_rmse' in s:
+            hp = s['hyperparams']
+            for k in TAU_METRIC_KEYS:
+                entry[k] = s.get(k)
+            entry['tau_weight']    = s.get('tau_weight',
+                                           hp.get('tau_weight'))
+            entry['tau_transform'] = s.get('tau_transform',
+                                           hp.get('tau_transform'))
+        aggregate.append(entry)
     with path.open('w') as f:
         json.dump(aggregate, f, indent=2)
 
@@ -386,7 +450,8 @@ def make_cross_variant_plot(per_variant: Dict[str, List[Dict]],
     same-config comparison if the variants share run_ids."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    cmap = {'M0': 'steelblue', 'M1': 'darkorange', 'M2': 'seagreen'}
+    cmap = {'M0': 'steelblue', 'M1': 'darkorange', 'M2': 'seagreen',
+            'PT': 'firebrick'}
 
     # (a) Rank curves overlaid
     ax = axes[0]
