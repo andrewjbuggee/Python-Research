@@ -77,12 +77,16 @@ def setup_style():
 def plot_per_level_error_percentiles(pred: np.ndarray, true: np.ndarray,
                                      pred_std: np.ndarray,
                                      out_path: Path,
-                                     sigma_stat: str = 'mean') -> dict:
+                                     sigma_stat: str = 'mean',
+                                     show_sigma: bool = True) -> dict:
     """Single-axes per-level error figure. Returns the plotted summary stats.
 
     sigma_stat selects the central tendency of the per-level predicted σ
     (aleatoric): 'mean' (default, original figure) or 'median'. The median
     is more robust to the right-skewed σ distribution across test samples.
+
+    show_sigma=False omits the predicted-σ curve from the figure (error
+    band + median only); the σ statistics are still computed and returned.
     """
     abs_err   = np.abs(pred - true)                        # (n_samp, n_lev)
     n_levels  = pred.shape[1]
@@ -111,9 +115,10 @@ def plot_per_level_error_percentiles(pred: np.ndarray, true: np.ndarray,
             linewidth=1.5, markersize=4.5,
             label='Median |error|')
     # Central predicted σ (aleatoric): mean or median per level
-    ax.plot(sigma_central, levels, 'd--', color=COLOR_SIGMA,
-            linewidth=1.2, markersize=4, alpha=0.95,
-            label=sigma_label)
+    if show_sigma:
+        ax.plot(sigma_central, levels, 'd--', color=COLOR_SIGMA,
+                linewidth=1.2, markersize=4, alpha=0.95,
+                label=sigma_label)
 
     ax.set_xlabel(r'Per-level error ($\mu$m)')
     ax.set_ylabel(f'Vertical level (1 = cloud top, {n_levels} = cloud base)')

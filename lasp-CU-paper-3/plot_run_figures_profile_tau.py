@@ -304,11 +304,18 @@ def main():
 
     print_droplet_size_correlation_table(predictors)
 
-    # (2) Per-level error percentiles (IEEE single column)
+    # (2) Per-level error percentiles (IEEE single column) — two versions:
+    # with the aleatoric-σ curve, and error-only.
     setup_style_ieee_1col()
     out_per_level = run_dir / 'per_level_error_percentiles.png'
-    stats = plot_per_level_error_percentiles(pred, true, pred_std, out_per_level)
+    stats = plot_per_level_error_percentiles(pred, true, pred_std, out_per_level,
+                                             show_sigma=True)
     print(f'(2)  per-level error    -> {out_per_level}')
+
+    out_per_level_ns = run_dir / 'per_level_error_percentiles_no_sigma.png'
+    plot_per_level_error_percentiles(pred, true, pred_std, out_per_level_ns,
+                                     show_sigma=False)
+    print(f'(2b) per-level, no σ    -> {out_per_level_ns}')
 
     print()
     print('Per-level absolute error (test set, μm):')
