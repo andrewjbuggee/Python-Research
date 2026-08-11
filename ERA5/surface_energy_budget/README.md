@@ -11,9 +11,30 @@ Equation (1) of:
 
 | File | Purpose |
 | --- | --- |
-| `download_era5_seb.py` | CLI downloader. Chunking, resume, retries, run manifest. |
+| `download_era5_seb.py` | CLI downloader, hourly/daily/monthly. Chunking, resume, retries, manifest. |
 | `era5_seb_variables.py` | Variable registry (units + Eq. 1 role) and Arctic regions. |
 | `seb_terms.py` | Post-processing: maps ERA5 fields onto Eq. (1), fixing the sign flip. |
+| `seb_analysis_common.py` | Shared loading, ocean/ice masking, flux terms, area weights (analysis side). |
+| `plot_turbulent_flux_maps.py` | 1×3 spatial maps of net / sensible / latent flux, time-mean over a range. |
+| `plot_turbulent_flux_pdfs.py` | 1×3 probability density functions of the same three quantities. |
+| `plot_monthly_flux_maps.py` | Month-by-component grid of maps, with the sea-ice edge contoured. |
+
+Note the analysis scripts keep the **native ERA5 positive-downward** convention,
+unlike `seb_terms.py` which flips the turbulent terms to Sledd's positive-upward.
+Both are documented in their module docstrings; do not mix their outputs.
+
+All three plotting scripts take the same data-source options as the downloader:
+
+```bash
+python plot_turbulent_flux_maps.py --storage external --region barrow --mask all-ocean
+```
+
+`--storage local` (default) reads `data/` beside the scripts; `--storage external`
+reads `EXTERNAL_ROOT` from `download_era5_seb.py`. Those roots are imported from
+the downloader rather than duplicated, so editing that one constant moves both
+the writing and the reading side. `--data-root PATH` overrides both. If a region
+is missing from the chosen disk but present on the other, the error says so and
+names the flag to use.
 
 ## Status
 
@@ -69,6 +90,160 @@ applies the conversion in one place — use it rather than repeating the flip.
 Source: [ECMWF, surface fluxes of sensible heat — positive downwards](https://sites.ecmwf.int/era/40-atlas/docs/section_B/parameter_sfoshpd.html),
 [latent heat](https://sites.ecmwf.int/era/40-atlas/docs/section_B/parameter_sfolhpd.html).
 
+## Choosing a temporal resolution
+
+`--frequency` selects one of three CDS datasets. All three carry the same
+45-variable catalogue, so any `--var-set` works at any frequency.
+
+| `--frequency` | Dataset | Extra options |
+| --- | --- | --- |
+| `hourly` (default) | `reanalysis-era5-single-levels` | — |
+| `daily` | `derived-era5-single-levels-daily-statistics` | `--daily-statistic` |
+| `monthly` | `reanalysis-era5-single-levels-monthly-means` | `--monthly-product` |
+
+```bash
+python download_era5_seb.py --frequency monthly --region arctic_circle --start 2000-01-01 --end 2025-12-31
+```
+
+Files land in `<region>_<frequency>/` (hourly stays in plain `<region>/`, so
+existing downloads still resume). Chunking defaults to one file per day, month,
+and year respectively.
+
+### Monthly means are ~260× smaller and numerically equivalent
+
+Verified on the Barrow strip, January–March 2026, by comparing the monthly-means
+product against the monthly average of the hourly files:
+
+| Field | Agreement (complete months) |
+| --- | --- |
+| `skt`, `t2m`, `siconc` | within 0.003% |
+| `msdwlwrf` | within 0.1% |
+| `msshf`, `mslhf` | within 0.4 W m⁻² per cell |
+| On-disk size | 159 MB hourly vs 0.61 MB monthly — **262× smaller** |
+
+Residuals are at the level of ERA5's archived packing precision. For an
+**unmasked** monthly average, downloading hourly data and averaging it yourself
+buys nothing.
+
+### But a monthly mean cannot be masked to ice-free conditions
+
+This is the real constraint, and it decides the question for you:
+
+- A cell whose **monthly-mean** `siconc` is 0.5 was ice-covered for roughly half
+  the month. Its monthly-mean flux already blends open-water and ice-covered
+  hours, and no post-hoc filter can separate them.
+- Masking has to happen **before** averaging. Masking and averaging do not
+  commute.
+
+So:
+
+| What you want | Use |
+| --- | --- |
+| Monthly maps over all ocean, ice included | **monthly** — same answer, 260× less data |
+| Seasonal cycle, sea-ice edge as a continuous field | **monthly** |
+| Fluxes conditioned on ice-free water only | **daily** or hourly — the mask must precede the average |
+| Distributions, extremes, PDFs, polynya events | **daily** keeps most of it; hourly for the far tail |
+
+### Daily is a strong middle ground, not just a compromise
+
+Measured on the Barrow hourly record (Jan–Mar 2026) by aggregating it to daily
+means and comparing against the hourly truth:
+
+| Property | Retained at daily resolution |
+| --- | --- |
+| Standard deviation of net turbulent flux | 94.6% |
+| 1st-percentile (cold) tail | 97.0% |
+| Most extreme single value | 91.8% |
+| Ice-mask agreement vs hourly (`siconc` < 0.15) | 99.997% of cell-days |
+
+Two reasons daily costs so little here:
+
+1. **Arctic turbulent flux variability is synoptic, not diurnal.** It is driven by
+   multi-day weather systems, and the test period is polar night with no solar
+   diurnal cycle at all. Daily averaging removes variance that is largely absent.
+2. **Sea ice concentration evolves over days, not hours.** The mean absolute
+   change is 0.0004 per hour against 0.009 per day, so a daily-mean ice mask
+   reproduces an hourly mask almost exactly. This is the key result: unlike
+   monthly means, daily means *can* carry a meaningful ice-free mask.
+
+Caveat: that test covers January–March. In summer the solar cycle is present even
+at 70–80° N, so daily averaging will lose more diurnal variance then. Re-check
+before applying the same reasoning to a melt-season analysis.
+
+### Storage, daily means, 2000-01-01 to 2025-12-31
+
+9,497 days (26 calendar years). Projected from a measured **1.768 bytes per
+cell-day-variable** — the compressed size of this repository's own hourly Barrow
+data aggregated to daily means and written with the downloader's zlib settings
+(2.26× compression).
+
+| Region | grid cells | `core` (17) | `recommended` (34) | `extended` (45) |
+| --- | ---: | ---: | ---: | ---: |
+| `barrow` | 2,501 | 0.7 GB | **1.3 GB** | 1.8 GB |
+| `arctic_circle` | 136,800 | 36 GB | **73 GB** | 96 GB |
+
+Land cells barely help: only `cbh` and `siconc` are NaN over land, and the flux
+variables are defined there too, so the pan-Arctic figure is a fair estimate
+rather than a ceiling.
+
+For reference, the same span at **hourly** resolution would be roughly 24× these
+numbers — about 31 GB for Barrow and 1.7 TB for the Arctic Circle.
+
+### Request count is the real cost, not bytes
+
+The CDS costs a request by how much **hourly** ERA5 it must touch —
+`variables × days × 24` — not by the size of the output. Probed ceilings
+(largest request verified accepted, and the smallest observed rejection):
+
+| frequency | verified accepted | rejected with 403 |
+| --- | ---: | ---: |
+| hourly | 12,648 fields | 25,296 fields |
+| daily | 8,160 fields | 12,240 fields |
+
+Two consequences that are easy to get backwards:
+
+**The daily product has the tighter ceiling**, because it still reads all 24
+hourly steps to form each daily mean. Its output is 24× smaller; its request cost
+is not. For the same span and variable set, daily therefore needs **more**
+requests than hourly, not fewer.
+
+**Request count drives wall time, and the CDS throttles high-volume users.** An
+overnight run of 9,497 single-day requests degraded from 1.8 min per request to
+34.3 min per request over roughly 280 requests — a 19× slowdown — which puts the
+remaining work at over 200 days.
+
+For 2000–2025 over one region, with the 34-variable `recommended` set:
+
+| configuration | cost/request | requests | |
+| --- | ---: | ---: | --- |
+| hourly, `--chunk day` | 816 | 9,497 | what not to do |
+| hourly, `--chunk-days 15` | 12,240 | **806** | verified accepted |
+| hourly, `--var-set core --chunk month` | 12,648 | **312** | verified; only 17 variables |
+| hourly, `--chunk month` | 25,296 | 312 | rejected (403) |
+| daily, `--chunk-days 10` | 8,160 | 1,118 | verified; *more* requests than hourly |
+| monthly | — | 26 | verified |
+
+`--chunk-days N` sets the days per request directly; chunks never span a month
+boundary and each month is split into near-equal groups. The plan output reports
+the per-request field count and warns when it exceeds the verified ceiling.
+
+### The daily product works, but it is computed on demand and is slow
+
+Unlike hourly and monthly, which serve pre-computed archive fields,
+`derived-era5-single-levels-daily-statistics` calculates the statistic per
+request. A verified minimal request (3 days, 2 variables, Barrow) took **68
+minutes** from `accepted` to `successful`, against under a minute for monthly and
+about 1.5 minutes for an hourly day-chunk.
+
+26 years is 312 requests. **Time a single month before committing to a full
+download**, and be aware that requesting hourly data and averaging it locally may
+finish sooner despite moving 24× more bytes.
+
+An earlier test in which all 12 chunks failed turned out to be a local DNS outage
+(`Failed to resolve 'cds.climate.copernicus.eu'`), not a problem with the request
+or the dataset licence. The request shape is confirmed correct against the
+dataset's live schema.
+
 ## What the CDS actually returns
 
 Two behaviours of the current CDS backend that the download handles for you.
@@ -109,6 +284,19 @@ the abbreviations do not make that obvious, so each mapping was verified against
 the `GRIB_paramId` attribute in a downloaded file. Files written by this script
 are normalised to the canonical names. `compute_seb_terms()` calls
 `normalise_names()` itself, so it also accepts a file pulled straight from the CDS.
+
+**3. Monthly means timestamp their streams at different hours.** The monthly
+product splits into `avgad`/`avgid`/`avgua` streams; the time-mean flux streams
+land on **06:00** of the first of the month while the instantaneous stream lands
+on **00:00**. Both describe the same calendar month, but the offset makes an
+exact-join merge fail. `_floor_time_to_month()` discards the hour before merging,
+and is applied only at monthly resolution — at hourly or daily resolution a time
+offset is a real difference and must not be flattened.
+
+Note also that a failure *after* a successful transfer is never retried: the
+payload is already on disk and will not merge differently on a second attempt, so
+it is kept as `.raw_unmerged` for inspection instead of burning another CDS queue
+wait. Only transfer failures back off and retry.
 
 ## Equation (1) mapping
 
@@ -249,10 +437,19 @@ the boot drive at that path. `--out-dir` overrides both.
 
 ## Behaviour worth knowing
 
-- **Resume.** Existing output files are skipped unless `--overwrite` is passed.
-  The raw CDS payload lands on a `.raw.part` scratch path and the merged netCDF is
-  moved into place only once complete, so an interrupted run never leaves a partial
-  file that a later resume would treat as finished.
+- **Resume works in date space, not filename space.** Before planning, the run
+  scans the output directory and decodes which days each existing file covers from
+  its name, then drops those days. A range already downloaded as 275 one-day files
+  is therefore recognised by a later `--chunk-days 15` run. Holes left by earlier
+  failures are picked up automatically as their own small chunks. `--overwrite`
+  bypasses the scan. The raw payload lands on a `.raw.part` scratch path and the
+  merged netCDF is moved into place only once complete.
+- **Chunks are always contiguous day runs**, so a `DD-DD` filename honestly
+  describes its contents — a gapped chunk named `05-23` holding only the 5th and
+  23rd would make the next resume skip the 6th through 22nd.
+- **Ctrl-C does not cancel the CDS request.** The job keeps running server-side and
+  holds one of your few concurrent queue slots. Abandoned jobs throttle everything
+  after them; clear them at <https://cds.climate.copernicus.eu/requests>.
 - **Retries.** Four attempts per chunk with exponential backoff (30 s, 60 s, 120 s).
   A chunk that exhausts its retries is recorded as failed and the run continues.
 - **Manifest.** Each run writes `manifest_<start>_<end>.json` recording the region,
