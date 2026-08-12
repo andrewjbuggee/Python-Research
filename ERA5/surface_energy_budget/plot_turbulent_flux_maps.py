@@ -132,8 +132,16 @@ def make_maps(
     projection: str = "polar",
     output_path: Path | None = None,
     dpi: int = 150,
+    panels=FLUX_PANELS,
+    quantity_noun: str = "turbulent heat fluxes",
+    cbar_quantity: str = "Turbulent heat flux",
 ):
-    """Draw the 1x3 map figure and return the matplotlib Figure."""
+    """Draw the 1xN map figure and return the matplotlib Figure.
+
+    ``panels`` is a sequence of ``(var_name, title, subtitle)`` naming variables
+    in ``means``; the turbulent set is the default and the radiative maps script
+    passes RADIATIVE_PANELS instead.
+    """
     import matplotlib.pyplot as plt
 
     use_cartopy = projection == "polar"
@@ -166,22 +174,22 @@ def make_maps(
     aspect = domain_aspect(lat, lon)
     fig, axes = plt.subplots(
         1,
-        3,
+        len(panels),
         figsize=figure_size(aspect, is_circumpolar and use_cartopy),
         subplot_kw=proj_kw,
         constrained_layout=True,
     )
 
-    fields = [means[name].values for name, _, _ in FLUX_PANELS]
+    fields = [means[name].values for name, _, _ in panels]
     if shared_scale:
         vmax = symmetric_limits(fields)
-        limits = [vmax] * 3
+        limits = [vmax] * len(panels)
     else:
         limits = [symmetric_limits([f]) for f in fields]
 
     meshes = []
     for ax, (name, title, subtitle), field, vmax in zip(
-        axes, FLUX_PANELS, fields, limits
+        axes, panels, fields, limits
     ):
         plot_kw = dict(
             cmap=DIVERGING_CMAP, vmin=-vmax, vmax=vmax, shading="auto"
@@ -239,13 +247,13 @@ def make_maps(
             aspect=40,
         )
         cb.set_label(
-            "Turbulent heat flux [W m$^{-2}$]   —   positive downward, into the surface",
+            f"{cbar_quantity} [W m$^{{-2}}$]   —   positive downward, into the surface",
             fontsize=10,
         )
         cb.ax.tick_params(labelsize=9)
 
     fig.suptitle(
-        f"ERA5 turbulent heat fluxes over ocean — {region}\n"
+        f"ERA5 {quantity_noun} over ocean — {region}\n"
         f"{time_label}   |   {mask_label}",
         fontsize=13,
     )

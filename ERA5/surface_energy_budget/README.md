@@ -17,7 +17,10 @@ Equation (1) of:
 | `seb_analysis_common.py` | Shared loading, ocean/ice masking, flux terms, area weights (analysis side). |
 | `plot_turbulent_flux_maps.py` | 1×3 spatial maps of net / sensible / latent flux, time-mean over a range. |
 | `plot_turbulent_flux_pdfs.py` | 1×3 probability density functions of the same three quantities. |
+| `plot_radiative_flux_maps.py` | Radiative counterpart of the maps: net radiative / net LW / net SW. |
+| `plot_radiative_flux_pdfs.py` | Radiative counterpart of the PDFs. |
 | `plot_monthly_flux_maps.py` | Month-by-component grid of maps, with the sea-ice edge contoured. |
+| `plot_fall_seb_timeseries.py` | Freeze-up season: climatological net SEB over open ocean (median + IQR) with the region's ice-free fraction beneath it. |
 
 Note the analysis scripts keep the **native ERA5 positive-downward** convention,
 unlike `seb_terms.py` which flips the turbulent terms to Sledd's positive-upward.
@@ -35,6 +38,33 @@ the downloader rather than duplicated, so editing that one constant moves both
 the writing and the reading side. `--data-root PATH` overrides both. If a region
 is missing from the chosen disk but present on the other, the error says so and
 names the flag to use.
+
+### The freeze-up time series
+
+`plot_fall_seb_timeseries.py` targets the question of what the ocean's energy
+balance is doing in the run-up to ice growth:
+
+```bash
+python plot_fall_seb_timeseries.py --storage external --region barrow
+```
+
+The net SEB, positive downward, needs no sign flips because all four ERA5 terms
+share the convention:
+
+```
+SEB_net = msnlwrf + msnswrf + msshf + mslhf     [W m-2]
+```
+
+For each time-of-season step (1 Sep 12:00, 1 Sep 13:00, …) it pools every year
+and every open-ocean cell (`siconc < --max-siconc`), then draws the
+cos(lat)-weighted median with the 25th–75th percentile band. A second panel
+below shows the ice-free fraction of the region's ocean area, so the reader can
+see how much open water the statistics stand on. Steps with fewer than
+`--min-cells` surviving samples are left blank — as freeze-up completes, the SEB
+curve going blank *is* the signal that the region has closed. `--group day`
+pools each calendar day's 24 hours for a smoother curve without the solar
+diurnal cycle; `--season-start`/`--season-end` (MM-DD) move the window. The
+"N years" label counts only years contributing data inside the season window.
 
 ## Status
 

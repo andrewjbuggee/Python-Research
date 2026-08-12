@@ -113,22 +113,28 @@ def make_pdfs(
     log_y: bool = False,
     output_path: Path | None = None,
     dpi: int = 150,
+    panels=FLUX_PANELS,
+    quantity_noun: str = "turbulent heat flux",
 ):
-    """Draw the 1x3 PDF figure and return the matplotlib Figure."""
+    """Draw the 1xN PDF figure and return the matplotlib Figure.
+
+    ``panels`` names the variables in ``samples``/``weights``; the turbulent set
+    is the default and the radiative PDF script passes RADIATIVE_PANELS.
+    """
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5.0), constrained_layout=True)
+    fig, axes = plt.subplots(1, len(panels), figsize=(15, 5.0), constrained_layout=True)
 
     p_lo, p_hi = xlim_percentile, 100.0 - xlim_percentile
     if shared_xlim:
         allv = np.concatenate([v for v in samples.values() if v.size])
         lo, hi = np.percentile(allv, [p_lo, p_hi])
         pad = 0.05 * (hi - lo)
-        xlims = [(lo - pad, hi + pad)] * 3
+        xlims = [(lo - pad, hi + pad)] * len(panels)
 
     stats_all = {}
     for i, (ax, (name, title, subtitle), color) in enumerate(
-        zip(axes, FLUX_PANELS, PANEL_COLORS)
+        zip(axes, panels, PANEL_COLORS)
     ):
         v = samples[name]
         w = weights[name]
@@ -224,7 +230,7 @@ def make_pdfs(
         ax.tick_params(labelsize=9, colors="0.35")
 
     fig.suptitle(
-        f"ERA5 turbulent heat flux distributions over ocean — {region}\n"
+        f"ERA5 {quantity_noun} distributions over ocean — {region}\n"
         f"{time_label}   |   {mask_label}   |   {weight_label}",
         fontsize=13,
     )

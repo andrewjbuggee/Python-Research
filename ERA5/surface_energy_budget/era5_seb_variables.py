@@ -132,6 +132,7 @@ ESSENTIAL_ADDITIONS: tuple[Era5Var, ...] = (
     Era5Var("10m_u_component_of_wind", "u10", "m s-1", "turbulent flux control"),
     Era5Var("10m_v_component_of_wind", "v10", "m s-1", "turbulent flux control"),
     Era5Var("surface_pressure", "sp", "Pa", "air density / thermodynamics"),
+    Era5Var("sea_surface_temperature", "sst", "K", "open-ocean surface"),
 )
 
 
@@ -148,7 +149,6 @@ EXTENDED_ADDITIONS: tuple[Era5Var, ...] = (
     # no snow on sea ice (see README caveat). Included for coastal/land contrast.
     Era5Var("snow_depth", "sd", "m water equiv.", "land snow (not sea ice)"),
     Era5Var("snow_density", "rsn", "kg m-3", "land snow (not sea ice)"),
-    Era5Var("sea_surface_temperature", "sst", "K", "open-ocean surface"),
     Era5Var("mean_surface_direct_short_wave_radiation_flux", "msdrswrf", "W m-2", "SW partitioning"),
     Era5Var("mean_top_net_long_wave_radiation_flux", "mtnlwrf", "W m-2", "TOA budget"),
     Era5Var("mean_top_net_short_wave_radiation_flux", "mtnswrf", "W m-2", "TOA budget"),

@@ -47,11 +47,20 @@ DEFAULT_STORAGE = "local"
 # "ice free" normally means in the sea ice literature.
 DEFAULT_MAX_SICONC = 0.15
 
-# The three quantities plotted, in panel order.
+# The three turbulent quantities plotted, in panel order.
 FLUX_PANELS = (
     ("net_turbulent_W_m2", "Net turbulent flux", "SH + LH"),
     ("shf_W_m2", "Sensible heat flux", "msshf"),
     ("lhf_W_m2", "Latent heat flux", "mslhf"),
+)
+
+# The radiative counterparts, same 1x3 structure: the net first, then its
+# components. ERA5 archives net radiative fluxes directly (msnlwrf, msnswrf),
+# already positive downward, so no sign flip is involved here.
+RADIATIVE_PANELS = (
+    ("net_radiative_W_m2", "Net radiative flux", "LW$_{net}$ + SW$_{net}$"),
+    ("lw_net_W_m2", "Net longwave flux", "msnlwrf"),
+    ("sw_net_W_m2", "Net shortwave flux", "msnswrf"),
 )
 
 
@@ -333,6 +342,86 @@ def compute_turbulent_fluxes(
     out["lhf_W_m2"].attrs["long_name"] = "Surface latent heat flux"
     out.attrs["convention"] = "ERA5: positive downward (into the surface)"
     return out
+
+
+def compute_radiative_fluxes(
+    ds: "xr.Dataset", mask: "xr.DataArray | None" = None
+) -> "xr.Dataset":
+    """Return the three radiative flux fields in the ERA5 positive-downward sense.
+
+    Returns a Dataset with ``net_radiative_W_m2``, ``lw_net_W_m2`` and
+    ``sw_net_W_m2``, matching the RADIATIVE_PANELS order. ERA5's net radiative
+    fluxes are already positive downward, so unlike the turbulent terms no sign
+    convention change is applied.
+    """
+    import xarray as xr
+
+    missing = [v for v in ("msnlwrf", "msnswrf") if v not in ds]
+    if missing:
+        raise KeyError(
+            f"Dataset is missing {missing}. Expected canonical ERA5 short names "
+            f"(msnlwrf, msnswrf) as written by download_era5_seb.py."
+        )
+
+    lw_net_W_m2 = ds["msnlwrf"]
+    sw_net_W_m2 = ds["msnswrf"]
+    if mask is not None:
+        lw_net_W_m2 = lw_net_W_m2.where(mask)
+        sw_net_W_m2 = sw_net_W_m2.where(mask)
+
+    out = xr.Dataset(
+        {
+            "net_radiative_W_m2": lw_net_W_m2 + sw_net_W_m2,
+            "lw_net_W_m2": lw_net_W_m2,
+            "sw_net_W_m2": sw_net_W_m2,
+        }
+    )
+    for name, title, _ in RADIATIVE_PANELS:
+        out[name].attrs["units"] = "W m-2"
+        out[name].attrs["long_name"] = title
+    out.attrs["convention"] = "ERA5: positive downward (into the surface)"
+    return out
+
+
+def compute_net_seb(
+    ds: "xr.Dataset", mask: "xr.DataArray | None" = None
+) -> "xr.DataArray":
+    """Net surface energy balance, positive downward (into the ocean).
+
+        SEB_net = msnlwrf + msnswrf + msshf + mslhf   [W m-2]
+
+    All four terms share ERA5's positive-downward convention, so the sum needs
+    no sign flips. Positive means the surface is gaining energy; the sustained
+    negative values of the freeze-up season are what cool the mixed layer and
+    ultimately grow sea ice. Over OPEN ocean there is no conduction term to
+    close: the residual goes into the water column.
+    """
+    missing = [v for v in ("msnlwrf", "msnswrf", "msshf", "mslhf") if v not in ds]
+    if missing:
+        raise KeyError(f"Dataset is missing {missing}; cannot form the net SEB.")
+    net = ds["msnlwrf"] + ds["msnswrf"] + ds["msshf"] + ds["mslhf"]
+    if mask is not None:
+        net = net.where(mask)
+    net.attrs["units"] = "W m-2"
+    net.attrs["long_name"] = "Net surface energy balance (positive downward)"
+    return net
+
+
+def weighted_quantiles(
+    values: np.ndarray, weights: np.ndarray, qs: tuple[float, ...]
+) -> list[float]:
+    """Weighted quantiles of a 1-D sample, by inverting the weighted CDF.
+
+    Same construction as the PDF script's stats box: sort, accumulate weights,
+    interpolate at the requested quantile of total weight.
+    """
+    if values.size == 0:
+        return [float("nan")] * len(qs)
+    order = np.argsort(values)
+    v_sorted = values[order]
+    cum_w = np.cumsum(weights[order])
+    cum_w = cum_w / cum_w[-1]
+    return [float(np.interp(q, cum_w, v_sorted)) for q in qs]
 
 
 def area_weights(ds: "xr.Dataset") -> "xr.DataArray":
