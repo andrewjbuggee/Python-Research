@@ -81,6 +81,20 @@ MAX_FIG_WIDTH_IN = 22.0
 MAX_FIG_HEIGHT_IN = 24.0
 
 
+def _month_list(text: str):
+    """Parse ``8,9,10,11`` or ``all`` into a month tuple."""
+    if text.strip().lower() == "all":
+        return tuple(range(1, 13))
+    try:
+        months = tuple(int(t) for t in text.split(",") if t.strip())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a comma-separated month list")
+    bad = [m for m in months if not 1 <= m <= 12]
+    if bad or not months:
+        raise argparse.ArgumentTypeError(f"months out of range: {bad or 'empty list'}")
+    return months
+
+
 def period_coverage(ds, by_year_month: bool) -> dict[str, float]:
     """Fraction of each period's calendar days that are actually present.
 
@@ -325,6 +339,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mask", choices=("open-ocean", "all-ocean"), default="open-ocean",
                         help="open-ocean drops land and sea ice (default); all-ocean drops only land.")
     parser.add_argument("--max-siconc", type=float, default=DEFAULT_MAX_SICONC)
+    parser.add_argument("--months", type=_month_list, default=(8, 9, 10, 11),
+                        metavar="M[,M...]",
+                        help="Calendar months to show, comma-separated (default 8,9,10,11 "
+                             "= Aug-Nov, the freeze-up season). Outside these months the "
+                             "Arctic is essentially fully ice covered and the panels carry "
+                             "little information. Pass 'all' for every month present.")
     parser.add_argument("--by-year-month", action="store_true",
                         help="One panel per calendar month in the record instead of a "
                              "climatology averaged across years.")
@@ -368,6 +388,21 @@ def main(argv: list[str] | None = None) -> int:
 
     fluxes = compute_turbulent_fluxes(ds, mask)
     siconc = ds["siconc"]
+    # Restrict to the requested calendar months BEFORE averaging, so a panel is
+    # never built from months the caller excluded.
+    if len(args.months) < 12:
+        keep_t = ds["valid_time"].dt.month.isin(list(args.months))
+        n_before = ds.sizes["valid_time"]
+        ds = ds.sel(valid_time=keep_t)
+        fluxes = fluxes.sel(valid_time=keep_t)
+        siconc = siconc.sel(valid_time=keep_t)
+        if ds.sizes["valid_time"] == 0:
+            print(f"  Error: no data in months {list(args.months)}.", file=sys.stderr)
+            return 1
+        month_names = ", ".join(calendar.month_abbr[m] for m in sorted(args.months))
+        print(f"\n  Months     : {month_names} "
+              f"({ds.sizes['valid_time']:,} of {n_before:,} steps kept)")
+
     flux_m, ice_m, labels = monthly_means(fluxes, siconc, args.by_year_month)
     flux_m = flux_m.compute()
     ice_m = ice_m.compute()
@@ -413,10 +448,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.mask == "open-ocean"
         else "all ocean, including sea ice"
     )
+    # Report the years actually contributing, not the raw record span: after a
+    # month filter, "2000-01 to 2026-01" would describe data that is not shown.
+    yrs = sorted({int(y) + 1970
+                  for y in ds["valid_time"].values.astype("datetime64[Y]").astype(int)})
+    span = f"{yrs[0]}" if len(yrs) == 1 else f"{yrs[0]}–{yrs[-1]}"
     source_label = (
-        f"individual months, {t0[:7]} to {t1[:7]}"
+        f"individual months, {span}"
         if args.by_year_month
-        else f"climatology over {t0[:7]} to {t1[:7]}"
+        else f"climatology over {span} ({len(yrs)} year{'s' if len(yrs) != 1 else ''})"
     )
 
     make_monthly_maps(

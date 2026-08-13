@@ -21,6 +21,8 @@ Equation (1) of:
 | `plot_radiative_flux_pdfs.py` | Radiative counterpart of the PDFs. |
 | `plot_monthly_flux_maps.py` | Month-by-component grid of maps, with the sea-ice edge contoured. |
 | `plot_fall_seb_timeseries.py` | Freeze-up season: climatological net SEB over open ocean (median + IQR) with the region's ice-free fraction beneath it. |
+| `era5_aws.py` | Read ERA5 straight from the public NSF NCAR S3 bucket, no download. |
+| `era5_aws_analysis.ipynb` | Notebook running the same analysis against that remote data. |
 
 Note the analysis scripts keep the **native ERA5 positive-downward** convention,
 unlike `seb_terms.py` which flips the turbulent terms to Sledd's positive-upward.
@@ -119,6 +121,49 @@ applies the conversion in one place — use it rather than repeating the flip.
 
 Source: [ECMWF, surface fluxes of sensible heat — positive downwards](https://sites.ecmwf.int/era/40-atlas/docs/section_B/parameter_sfoshpd.html),
 [latent heat](https://sites.ecmwf.int/era/40-atlas/docs/section_B/parameter_sfolhpd.html).
+
+## Reading from AWS instead of downloading
+
+ERA5 is also on a public NSF NCAR bucket — `s3://nsf-ncar-era5`, us-west-2,
+anonymous, no account: <https://registry.opendata.aws/nsf-ncar-era5/>.
+`era5_aws.py` reads it directly and returns a Dataset **shaped exactly like a
+file from `download_era5_seb.py`**, so every analysis function works unchanged.
+
+```python
+from era5_aws import load_named_region
+ds = load_named_region("barrow", "2000-09-05", "2000-09-06")
+```
+
+Verified against the local CDS files over the same window: values match
+**bit-for-bit** (`max|diff| = 0.00000`) and the land masks agree at 7.2%.
+
+**It is the same data, but it is not faster from a laptop.** Reading from S3
+avoids *storing* the data; the bytes still travel to wherever Python runs.
+"Analysis in the cloud" only avoids that if the compute also runs in us-west-2.
+Two structural facts make laptop-side reads expensive:
+
+- **One variable per file**, each costing 12–15 s of HDF5 header reading over HTTP.
+- **Mean-flux files are chunked `(1, 12, 721, 1440)`** — one chunk spans the whole
+  globe, so a 0.24% spatial subset still inflates entire global chunks. (Analysis
+  files are tiled `(27, 139, 279)` and subset well.)
+
+Measured: **~500–700 s for 5 variables × 2 days**. The CDS returns the same
+window with all 34 variables, server-side subset, in ~2.5 MB per day. So use AWS
+for exploratory work with no queue to wait on, or on an EC2 instance in
+us-west-2; keep the CDS downloader for the multi-decade local archive.
+
+Differences to know about: short names are the original GRIB ones (`ci` not
+`siconc`, `2t` not `t2m` — `NCAR_VARS` maps them all), longitude is stored
+0–360, mean-flux time is a 2-D `(init_time, forecast_hour)` grid, `tcslw` is
+**absent**, and `tp` is not archived as an accumulation (use `mtpr`).
+
+One trap worth naming: raw `h5py` does **not** apply CF `_FillValue`, and these
+files store land as `9.999e+20` rather than NaN. Left unhandled, every land cell
+becomes a large finite number, `build_ocean_mask` sees no land, and an
+`all-ocean` average silently includes the Alaskan North Slope. `_apply_cf()`
+handles it; a values-only comparison masked with `isfinite` on both sides cannot
+detect the mistake, so the notebook's check compares NaN patterns and land
+fractions too.
 
 ## Choosing a temporal resolution
 
@@ -480,6 +525,13 @@ the boot drive at that path. `--out-dir` overrides both.
 - **Ctrl-C does not cancel the CDS request.** The job keeps running server-side and
   holds one of your few concurrent queue slots. Abandoned jobs throttle everything
   after them; clear them at <https://cds.climate.copernicus.eu/requests>.
+- **`--jobs N` runs N requests concurrently.** Wall time is dominated by queue
+  latency, not bandwidth — a single request can sit `accepted` for an hour — so
+  overlapping them helps a lot. Measured: 3 chunks took **44.8 min at `--jobs 3`**,
+  against ~50–70 min *per chunk* serially. Each worker gets its own `cdsapi`
+  client, since the client's session and polling state are not thread-safe. Do not
+  set N high: many queued jobs is exactly what triggers the throttling that
+  degraded a serial run from 1.8 to 34 min per request. 3–4 is the sweet spot.
 - **Retries.** Four attempts per chunk with exponential backoff (30 s, 60 s, 120 s).
   A chunk that exhausts its retries is recorded as failed and the run continues.
 - **Manifest.** Each run writes `manifest_<start>_<end>.json` recording the region,

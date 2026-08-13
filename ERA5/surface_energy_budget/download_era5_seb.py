@@ -88,14 +88,14 @@ Which variables
         that liquid and ice water path live here, under ERA5's names
         ``total_column_cloud_liquid_water`` and
         ``total_column_cloud_ice_water``.
-    ``recommended`` (34, the default)
+    ``recommended`` (35, the default)
         ``core`` plus what Equation (1) actually needs to close and what
         restricts the analysis to Arctic Ocean sea ice: skin temperature, sea
         ice cover, the four sea-ice temperature layers, forecast albedo, the
-        four clear-sky fluxes, column water vapour, and near-surface state.
-    ``extended`` (45)
+        four clear-sky fluxes, column water vapour, SST, and near-surface state.
+    ``extended`` (44)
         ``recommended`` plus boundary layer height, friction velocity,
-        precipitation rates, land snow properties, SST, and TOA fluxes.
+        precipitation rates, land snow properties, and TOA fluxes.
 
     The full registry, with units and the Equation (1) role of each variable,
     is ``era5_seb_variables.py``.
@@ -154,7 +154,7 @@ How the run is organised
 SIZING
 ======
 Measured from real downloads by this script, at 0.25 deg with the
-``recommended`` 34-variable set:
+``recommended`` 35-variable set:
 
     hourly    1.11 bytes per cell-hour-variable   (3.60x compression)
     daily     1.77 bytes per cell-day-variable    (2.26x compression)
@@ -255,8 +255,10 @@ import json
 import re
 import sys
 import tempfile
+import threading
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -753,6 +755,21 @@ def _compression_encoding(ds, complevel: int = 4) -> dict:
     }
 
 
+# One cdsapi client per worker thread. The client keeps a requests.Session and
+# per-request polling state, neither of which is documented thread-safe, so
+# sharing a single instance across the pool would be asking for trouble.
+_thread_local = threading.local()
+
+
+def _thread_client():
+    """The calling thread's cdsapi client, created on first use."""
+    import cdsapi
+
+    if not hasattr(_thread_local, "client"):
+        _thread_local.client = cdsapi.Client()
+    return _thread_local.client
+
+
 def download_one(
     client,
     dataset: str,
@@ -1053,6 +1070,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     g_run.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Number of CDS requests to keep in flight at once (default 1). "
+            "Wall time is dominated by queue latency, not bandwidth -- a single "
+            "request can sit 'accepted' for an hour -- so N=3 or 4 can be several "
+            "times faster. Do not go high: the CDS throttles users with many "
+            "queued jobs, which is the failure mode that made a serial run "
+            "degrade from 1.8 to 34 minutes per request."
+        ),
+    )
+    g_run.add_argument(
         "--overwrite",
         action="store_true",
         help=(
@@ -1276,31 +1307,35 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     run_dir.mkdir(parents=True, exist_ok=True)
-    client = cdsapi.Client()
     print()
 
-    # --- Download loop -------------------------------------------------------
+    # --- Download -------------------------------------------------------------
     manifest_entries: list[dict] = []
     n_done = n_skipped = n_failed = 0
     total_mb = 0.0
     t_start = time.monotonic()
+    print_lock = threading.Lock()
 
-    for i, (filename, year, month, chunk_days, chunk_months) in enumerate(chunks, start=1):
+    # Skip existing files up front so the pool only carries real work.
+    pending = []
+    for filename, year, month, chunk_days, chunk_months in chunks:
         output_path = run_dir / filename
-        print(
-            f"[{i}/{len(chunks)}] {filename}  "
-            f"({describe_chunk(year, month, chunk_days, chunk_months)})"
-        )
-
         if output_path.exists() and not args.overwrite:
             size_mb = output_path.stat().st_size / 1024**2
-            print(f"      already present ({size_mb:.1f} MB) -- skipping")
             n_skipped += 1
             manifest_entries.append(
                 {"file": filename, "status": "skipped_existing", "size_mb": round(size_mb, 2)}
             )
             continue
+        pending.append((filename, year, month, chunk_days, chunk_months))
 
+    if n_skipped:
+        print(f"  {n_skipped} chunk(s) already on disk -- skipping")
+    if not pending:
+        print("\nNothing left to download.")
+
+    def _run_chunk(task):
+        filename, year, month, chunk_days, chunk_months = task
         request = build_request(
             frequency=args.frequency,
             variables=variables,
@@ -1314,23 +1349,48 @@ def main(argv: list[str] | None = None) -> int:
             monthly_product=args.monthly_product,
         )
         ok, size_mb = download_one(
-            client,
+            _thread_client(),
             dataset,
             request,
-            output_path,
+            run_dir / filename,
             align_to_month=(args.frequency == "monthly"),
         )
+        return filename, describe_chunk(year, month, chunk_days, chunk_months), ok, size_mb
 
-        if ok:
-            print(f"      done ({size_mb:.1f} MB)")
-            n_done += 1
-            total_mb += size_mb
-            manifest_entries.append(
-                {"file": filename, "status": "downloaded", "size_mb": round(size_mb, 2)}
-            )
-        else:
-            n_failed += 1
-            manifest_entries.append({"file": filename, "status": "failed", "size_mb": 0.0})
+    n_total = len(pending)
+    completed = 0
+    if args.jobs > 1:
+        print(f"  running {args.jobs} requests concurrently\n")
+
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futures = {pool.submit(_run_chunk, t): t for t in pending}
+        try:
+            for fut in as_completed(futures):
+                filename, span, ok, size_mb = fut.result()
+                with print_lock:
+                    completed += 1
+                    tag = f"done ({size_mb:.1f} MB)" if ok else "FAILED"
+                    print(f"[{completed}/{n_total}] {filename}  ({span})  {tag}")
+                if ok:
+                    n_done += 1
+                    total_mb += size_mb
+                    manifest_entries.append(
+                        {"file": filename, "status": "downloaded", "size_mb": round(size_mb, 2)}
+                    )
+                else:
+                    n_failed += 1
+                    manifest_entries.append(
+                        {"file": filename, "status": "failed", "size_mb": 0.0}
+                    )
+        except KeyboardInterrupt:
+            print("\n  Interrupted. Cancelling queued chunks ...", file=sys.stderr)
+            for f in futures:
+                f.cancel()
+            print("  NOTE: requests already submitted keep running on the CDS and",
+                  file=sys.stderr)
+            print("  hold queue slots. Clear them at "
+                  "https://cds.climate.copernicus.eu/requests", file=sys.stderr)
+            raise
 
     elapsed_min = (time.monotonic() - t_start) / 60.0
 
