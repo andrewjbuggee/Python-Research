@@ -20,6 +20,7 @@ Equation (1) of:
 | `plot_radiative_flux_maps.py` | Radiative counterpart of the maps: net radiative / net LW / net SW. |
 | `plot_radiative_flux_pdfs.py` | Radiative counterpart of the PDFs. |
 | `plot_monthly_flux_maps.py` | Month-by-component grid of maps, with the sea-ice edge contoured. |
+| `plot_monthly_longwave_maps.py` | 3-row monthly grid: downwelling LW, net LW, sea ice. No ocean mask by default. |
 | `plot_fall_seb_timeseries.py` | Freeze-up season: climatological net SEB over open ocean (median + IQR) with the region's ice-free fraction beneath it. |
 | `era5_aws.py` | Read ERA5 straight from the public NSF NCAR S3 bucket, no download. |
 | `era5_aws_analysis.ipynb` | Notebook running the same analysis against that remote data. |
@@ -525,13 +526,40 @@ the boot drive at that path. `--out-dir` overrides both.
 - **Ctrl-C does not cancel the CDS request.** The job keeps running server-side and
   holds one of your few concurrent queue slots. Abandoned jobs throttle everything
   after them; clear them at <https://cds.climate.copernicus.eu/requests>.
-- **`--jobs N` runs N requests concurrently.** Wall time is dominated by queue
-  latency, not bandwidth — a single request can sit `accepted` for an hour — so
-  overlapping them helps a lot. Measured: 3 chunks took **44.8 min at `--jobs 3`**,
-  against ~50–70 min *per chunk* serially. Each worker gets its own `cdsapi`
-  client, since the client's session and polling state are not thread-safe. Do not
-  set N high: many queued jobs is exactly what triggers the throttling that
-  degraded a serial run from 1.8 to 34 min per request. 3–4 is the sweet spot.
+- **`--jobs N` does not make downloads faster.** The CDS enforces *"the maximum
+  number of per-user requests that access the CDS-MARS data is 1"* — extra
+  submissions only queue behind the running one. An earlier claim here that
+  `--jobs 3` gave a 3× speedup was wrong: that measurement (44.8 min for 3 chunks
+  = 14.9 min/chunk) matches the *sequential* rate observed later (7.5–14.4
+  min/chunk), so the requests had been running one at a time all along. Default
+  is 1. N>1 also puts the netCDF merge on worker threads, where HDF5 is not
+  thread-safe — this environment links *two* copies of it (h5py against libhdf5
+  1.14.5, netCDF4 against 1.14.6), which is what produced the
+  `HDF5-DIAG ... thread 1` noise. A lock guards the merge, but staying at
+  `--jobs 1` avoids the situation entirely.
+
+### How large can one request be?
+
+The ceiling is on **fields = variables × days × 24**, probed empirically at
+~12,648 accepted / 25,296 rejected (403). Since only one request runs per user,
+total wall time is `requests × minutes-per-request`, and the only lever on
+request count is the variable count:
+
+| variable set | vars | max days/request | requests for 2019–2022 |
+| --- | ---: | ---: | ---: |
+| `core` | 17 | 31 (a full month) | 48 |
+| `recommended` | 35 | 15 | 98 |
+| `extended` | 45 | 11 | 133 |
+
+So with the 35-variable `recommended` set: **one year is 24× over the limit, one
+month is 2× over, and 15 days fits** — `--chunk-days 15` is already at the
+ceiling. At ~10 min/request, 2019–2022 is roughly 17 hours. Halving the variable
+count halves the request count; nothing else does.
+- **`--cds-retries N` bounds connection retries** (default 10, roughly N × 2 min).
+  cdsapi's own default is **500**, so a dropped connection is retried for over
+  **16 hours** while making zero progress — an overnight run was found stuck at
+  "attempt 248 of 500". Failing fast is strictly better here because resume
+  restarts exactly where it stopped.
 - **Retries.** Four attempts per chunk with exponential backoff (30 s, 60 s, 120 s).
   A chunk that exhausts its retries is recorded as failed and the run continues.
 - **Manifest.** Each run writes `manifest_<start>_<end>.json` recording the region,

@@ -262,6 +262,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
+
 from era5_seb_variables import (
     VARIABLE_SETS,
     Region,
@@ -654,6 +656,25 @@ def consolidate_to_netcdf(
         d = normalise_names(d)
         return _floor_time_to_month(d) if align_to_month else d
 
+    if raw_path.is_dir():
+        # The CDS website delivers a .zip that a browser may auto-expand into a
+        # directory; both shapes have to work.
+        members = sorted(raw_path.glob("*.nc"))
+        if not members:
+            raise RuntimeError(f"{raw_path} contains no .nc files")
+        opened = [xr.open_dataset(m) for m in members]
+        try:
+            merged = xr.merge(
+                [_prepare(d) for d in opened],
+                join="exact", compat="no_conflicts", combine_attrs="drop_conflicts",
+            ).load()
+        finally:
+            for d in opened:
+                d.close()
+        merged.attrs["cds_stream_files"] = ", ".join(m.name for m in members)
+        merged.to_netcdf(final_path, encoding=_compression_encoding(merged))
+        return
+
     if not zipfile.is_zipfile(raw_path):
         ds = xr.open_dataset(raw_path)
         try:
@@ -665,7 +686,10 @@ def consolidate_to_netcdf(
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         with zipfile.ZipFile(raw_path) as zf:
-            members = [m for m in zf.namelist() if m.endswith(".nc")]
+            # Sorted so the merge order -- and therefore the variable order in
+            # the output -- is deterministic and matches the directory branch.
+            # Zip listing order is incidental, not meaningful.
+            members = sorted(m for m in zf.namelist() if m.endswith(".nc"))
             if not members:
                 raise RuntimeError(f"{raw_path.name} contains no .nc members")
             zf.extractall(tmp_dir, members)
@@ -760,14 +784,100 @@ def _compression_encoding(ds, complevel: int = 4) -> dict:
 # sharing a single instance across the pool would be asking for trouble.
 _thread_local = threading.local()
 
+# HDF5 is NOT thread-safe in a standard build, and this environment is worse
+# than that: h5py links libhdf5 1.14.5 while netCDF4 links 1.14.6, so two
+# different copies of the library live in one process. Running the merge step
+# on several threads at once is undefined behaviour -- it produced streams of
+# "HDF5-DIAG: Error detected in HDF5 ... thread 1/2" and happened not to corrupt
+# anything, which is luck rather than safety. Network transfers still overlap
+# freely; only the netCDF read/write is serialised, and since wall time is
+# dominated by CDS queue latency this costs essentially nothing.
+_HDF5_LOCK = threading.Lock()
 
-def _thread_client():
+# cdsapi defaults to retry_max=500 with sleep_max=120 s, i.e. it will keep
+# retrying a dead connection for over 16 hours without ever giving up. An
+# overnight run spent ~8 hours at "attempt 248 of 500" making no progress.
+# Because resume is cheap and reliable, failing fast and being restarted is
+# strictly better than hanging.
+DEFAULT_CDS_RETRIES = 10  # x 120 s ~= 20 minutes of connection trouble
+
+
+def _thread_client(retries: int = DEFAULT_CDS_RETRIES):
     """The calling thread's cdsapi client, created on first use."""
     import cdsapi
 
     if not hasattr(_thread_local, "client"):
-        _thread_local.client = cdsapi.Client()
+        _thread_local.client = cdsapi.Client(retry_max=retries)
     return _thread_local.client
+
+
+def import_raw_payload(
+    src: Path, run_dir: Path, prefix: str, align_to_month: bool, overwrite: bool
+) -> int:
+    """Fold a hand-downloaded CDS payload into the archive under the right name.
+
+    When a run is interrupted, the request it had already submitted keeps going
+    on the CDS and can be fetched from the website afterwards. What comes back is
+    the raw multi-stream payload, not the merged single-variable-set file the
+    rest of this project expects, so it has to go through exactly the same
+    consolidation the downloader applies.
+
+    The output filename is derived from the payload's own time coordinate rather
+    than typed in, which removes the chance of filing a chunk under the wrong
+    dates -- a mistake that resume would then silently honour.
+    """
+    import xarray as xr
+
+    if not src.exists():
+        # The CDS often lands as both a directory and a sibling .zip.
+        alt = src.with_suffix(".zip")
+        if alt.exists():
+            src = alt
+        else:
+            print(f"  Error: {src} does not exist.", file=sys.stderr)
+            return 1
+
+    print(f"  Importing   : {src}")
+    tmp = run_dir / ".import.part"
+    try:
+        consolidate_to_netcdf(src, tmp, align_to_month=align_to_month)
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        print(f"  Error: could not consolidate {src.name}: {exc}", file=sys.stderr)
+        return 1
+
+    with xr.open_dataset(tmp) as ds:
+        t = ds["valid_time"].values
+        n_steps, n_vars = t.size, len(ds.data_vars)
+    days = np.unique(t.astype("datetime64[D]"))
+    first, last = days[0].astype(object), days[-1].astype(object)
+
+    if (first.year, first.month) != (last.year, last.month):
+        # Every chunk this project emits stays inside one month, so a payload
+        # that spans a boundary is not something the naming scheme can express.
+        tmp.unlink(missing_ok=True)
+        print(f"  Error: payload spans {first} to {last}, crossing a month "
+              f"boundary; the chunk naming assumes one month.", file=sys.stderr)
+        return 1
+
+    name = (f"{prefix}_{first.year:04d}{first.month:02d}"
+            f"_{first.day:02d}-{last.day:02d}.nc")
+    dst = run_dir / name
+
+    if dst.exists() and not overwrite:
+        tmp.unlink(missing_ok=True)
+        size_mb = dst.stat().st_size / 1024**2
+        print(f"  {name} already exists ({size_mb:.1f} MB). "
+              f"Use --overwrite to replace it.")
+        return 0
+
+    tmp.replace(dst)
+    print(f"  Covers      : {first} to {last} "
+          f"({len(days)} days, {n_steps} steps, {n_vars} variables)")
+    print(f"  Written     : {dst}  ({dst.stat().st_size / 1024**2:.1f} MB)")
+    print("\n  Named from the payload's own time axis, so a later resume will "
+          "recognise these days as present.")
+    return 0
 
 
 def download_one(
@@ -830,7 +940,11 @@ def download_one(
         # NOT retried, and the raw file is kept for inspection rather than
         # deleted. Retrying it would just burn another CDS queue wait.
         try:
-            consolidate_to_netcdf(raw_path, merged_path, align_to_month=align_to_month)
+            # Serialised: see _HDF5_LOCK. The transfer above ran concurrently.
+            with _HDF5_LOCK:
+                consolidate_to_netcdf(
+                    raw_path, merged_path, align_to_month=align_to_month
+                )
         except KeyboardInterrupt:
             _cleanup()
             raise
@@ -1075,12 +1189,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1,
         metavar="N",
         help=(
-            "Number of CDS requests to keep in flight at once (default 1). "
-            "Wall time is dominated by queue latency, not bandwidth -- a single "
-            "request can sit 'accepted' for an hour -- so N=3 or 4 can be several "
-            "times faster. Do not go high: the CDS throttles users with many "
-            "queued jobs, which is the failure mode that made a serial run "
-            "degrade from 1.8 to 34 minutes per request."
+            "Requests submitted at once (default 1). Raising this does NOT make "
+            "the download faster: the CDS states 'the maximum number of per-user "
+            "requests that access the CDS-MARS data is 1', so extra submissions "
+            "only sit in your own queue while one runs. N>1 also puts the netCDF "
+            "merge on worker threads, where HDF5 is not thread-safe. Left in for "
+            "the marginal benefit of having the next request already queued the "
+            "instant the current one finishes; 1 or 2 is sensible, more is not."
+        ),
+    )
+    g_run.add_argument(
+        "--cds-retries",
+        type=int,
+        default=DEFAULT_CDS_RETRIES,
+        metavar="N",
+        help=(
+            f"How many times cdsapi retries a broken connection before giving up "
+            f"on a chunk (default {DEFAULT_CDS_RETRIES}, roughly N x 2 minutes). "
+            f"cdsapi's own default is 500, which means a dropped connection is "
+            f"retried for over 16 hours while making no progress. Failing fast is "
+            f"better here because resume picks up exactly where it stopped."
         ),
     )
     g_run.add_argument(
@@ -1089,6 +1217,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Re-download chunks whose output file already exists. Without this, "
             "existing files are skipped, which is what makes a run resumable."
+        ),
+    )
+    g_run.add_argument(
+        "--import-raw",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Fold a payload downloaded by hand from the CDS website into the "
+            "archive instead of making any request. Point it at the .zip (or the "
+            "directory the browser unpacked): it is consolidated exactly as a "
+            "normal download would be, and the filename is derived from the "
+            "payload's own time axis so resume will recognise those days. Useful "
+            "after an interrupted run, since a request already submitted keeps "
+            "running on the CDS and can be fetched from the website later."
         ),
     )
     g_run.add_argument(
@@ -1185,6 +1327,23 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Output       : {run_dir}")
     print("-" * 72)
 
+    # --- Import a hand-downloaded payload ------------------------------------
+    # Placed before any date handling: an import is named from the payload's own
+    # time axis, so --start/--end are irrelevant to it. Leaving it later meant
+    # the resume check could return "nothing to do" first and skip the import.
+    if args.import_raw is not None:
+        check_volume_mounted(run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        import_prefix = (
+            f"era5_seb_{region_label}" if args.frequency == "hourly"
+            else f"era5_seb_{args.frequency}_{region_label}"
+        )
+        return import_raw_payload(
+            Path(args.import_raw), run_dir, import_prefix,
+            align_to_month=(args.frequency == "monthly"),
+            overwrite=args.overwrite,
+        )
+
     # --- Build the chunk list ------------------------------------------------
     # Each entry is (filename, year, month, days, months).
     # Hourly filenames keep their original form so that files downloaded before
@@ -1269,6 +1428,13 @@ def main(argv: list[str] | None = None) -> int:
         fields = len(variables) * max_days * 24
         print(f"  Request cost : {fields:,} hourly source fields per request "
               f"(largest chunk = {max_days} day{'s' if max_days > 1 else ''})")
+        # What the ceiling implies, stated plainly: the CDS runs one request per
+        # user at a time, so total wall time is (requests x minutes-per-request)
+        # and the only lever on request count is the field ceiling.
+        max_days = safe_fields // (len(variables) * 24)
+        print(f"  Max chunk    : {max_days} days at {len(variables)} variables "
+              f"(ceiling ~{safe_fields:,} fields)")
+
         if fields > safe_fields:
             n_ok = max(1, safe_fields // (len(variables) * 24))
             # stdout, not stderr, so it stays in order with the rest of the plan.
@@ -1349,7 +1515,7 @@ def main(argv: list[str] | None = None) -> int:
             monthly_product=args.monthly_product,
         )
         ok, size_mb = download_one(
-            _thread_client(),
+            _thread_client(args.cds_retries),
             dataset,
             request,
             run_dir / filename,
@@ -1360,7 +1526,8 @@ def main(argv: list[str] | None = None) -> int:
     n_total = len(pending)
     completed = 0
     if args.jobs > 1:
-        print(f"  running {args.jobs} requests concurrently\n")
+        print(f"  submitting {args.jobs} requests at a time -- note the CDS runs")
+        print("  only ONE per user, so the rest simply queue behind it\n")
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = {pool.submit(_run_chunk, t): t for t in pending}
@@ -1434,6 +1601,12 @@ def main(argv: list[str] | None = None) -> int:
         f"Downloaded {n_done}, skipped {n_skipped}, failed {n_failed} "
         f"of {len(chunks)} chunks in {elapsed_min:.1f} min"
     )
+    if n_failed:
+        # Resume makes a rerun cheap, so say so rather than leaving the user to
+        # work out whether the failures cost them anything.
+        print(f"\n{n_failed} chunk(s) failed -- most often a dropped connection.")
+        print("Rerun the same command: completed days are skipped automatically,")
+        print("so only the missing ones are requested again.")
     print(f"Total new data: {total_mb / 1024:.2f} GB")
     print(f"Output dir    : {run_dir}")
     print(f"Manifest      : {manifest_path}")

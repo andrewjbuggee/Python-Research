@@ -224,7 +224,46 @@ def load_seb_data(
             f"Available regions: {available_regions(Path(data_root)) or 'none'}"
         )
 
-    ds = xr.open_mfdataset(files, combine="by_coords")
+    # Two downloader runs with different --chunk-days over the same dates
+    # produce differently-named files covering overlapping days. combine=
+    # "by_coords" then fails with "does not have monotonic global indexes",
+    # which is an accurate complaint but a fatal one. Fall back to an explicit
+    # concat and drop duplicate timestamps: the overlapping values come from the
+    # same archive and are identical, so keeping the first is lossless.
+    try:
+        # join and compat are passed explicitly rather than left to the
+        # defaults. xarray warns that both defaults are changing (join
+        # outer -> exact, compat no_conflicts -> override), and the new ones
+        # would break this archive: files cover different time ranges, so an
+        # exact join cannot align them. Naming the current values keeps the
+        # behaviour pinned across an xarray upgrade instead of letting results
+        # shift silently, and silences the warning as a side effect.
+        ds = xr.open_mfdataset(
+            files,
+            combine="by_coords",
+            join="outer",           # union the per-file time ranges
+            compat="no_conflicts",  # verify overlapping values agree
+        )
+    except ValueError as exc:
+        if "monotonic" not in str(exc):
+            raise
+        # chunks={} keeps each file lazy; a plain open_dataset here would pull
+        # every file fully into memory before the concat, which for a
+        # multi-hundred-file archive is gigabytes to obtain a small subset.
+        parts = [xr.open_dataset(f, chunks={}) for f in files]
+        ds = xr.concat(parts, dim="valid_time", coords="minimal",
+                       data_vars="minimal", compat="override", join="outer")
+        ds = ds.sortby("valid_time")
+        keep = ~ds.indexes["valid_time"].duplicated(keep="first")
+        n_dupe = int((~keep).sum())
+        ds = ds.isel(valid_time=keep)
+        if n_dupe:
+            print(
+                f"  Note: {n_dupe:,} duplicate time steps dropped (files with "
+                f"overlapping day ranges). Run with --overwrite off is unaffected; "
+                f"see README on removing redundant files.",
+                file=sys.stderr,
+            )
 
     if start is not None or end is not None:
         # Push the end bound to the last instant of that day when no hour given.
@@ -422,6 +461,66 @@ def weighted_quantiles(
     cum_w = np.cumsum(weights[order])
     cum_w = cum_w / cum_w[-1]
     return [float(np.interp(q, cum_w, v_sorted)) for q in qs]
+
+
+# ----------------------------------------------------------------------------
+# Season handling (shared; windows may wrap the new year)
+# ----------------------------------------------------------------------------
+def season_calendar(start_md, end_md) -> list[tuple[int, int]]:
+    """Ordered (month, day) slots from start to end, wrapping the new year.
+
+    A window like 09-01 to 03-31 spans two calendar years, so time is indexed by
+    position within the season rather than by date. Built on a leap year so that
+    29 February gets a slot; seasons without one simply leave that column empty.
+    """
+    import calendar as _cal
+    from datetime import date as _date, timedelta as _td
+
+    m0, d0 = start_md
+    m1, d1 = end_md
+    wraps = (m1, d1) < (m0, d0)
+    # Whichever year holds February must be a leap year for 29 Feb to exist.
+    if wraps:
+        cur, stop = _date(1999, m0, d0), _date(2000, m1, d1)
+    else:
+        cur, stop = _date(2000, m0, d0), _date(2000, m1, d1)
+    out = []
+    while cur <= stop:
+        out.append((cur.month, cur.day))
+        cur += _td(days=1)
+    return out
+
+
+def season_year_of(times: np.ndarray, start_md) -> np.ndarray:
+    """Calendar year each timestamp's season STARTS in.
+
+    For a wrapping window, January belongs to the season that began the previous
+    August, so those timestamps are labelled with year - 1.
+    """
+    years = times.astype("datetime64[Y]").astype(int) + 1970
+    months = times.astype("datetime64[M]").astype(int) % 12 + 1
+    days = (times.astype("datetime64[D]") - times.astype("datetime64[M]")).astype(int) + 1
+    m0, d0 = start_md
+    before_start = (months * 100 + days) < (m0 * 100 + d0)
+    return np.where(before_start, years - 1, years)
+
+
+def season_slot_of(times: np.ndarray, slots: list[tuple[int, int]]) -> np.ndarray:
+    """Index of each timestamp within the season, or -1 if outside the window.
+
+    Uses a lookup on (month, day) rather than arithmetic on the date, which is
+    what makes a wrapping window work: position in the season is defined by the
+    slot list, not by how the calendar year happens to break.
+    """
+    months = times.astype("datetime64[M]").astype(int) % 12 + 1
+    days = (times.astype("datetime64[D]") - times.astype("datetime64[M]")).astype(int) + 1
+    lut = {md: i for i, md in enumerate(slots)}
+    return np.array([lut.get((int(m), int(d)), -1) for m, d in zip(months, days)])
+
+
+def hour_of(times: np.ndarray) -> np.ndarray:
+    """Hour of day for each timestamp."""
+    return (times.astype("datetime64[h]") - times.astype("datetime64[D]")).astype(int)
 
 
 def area_weights(ds: "xr.Dataset") -> "xr.DataArray":
