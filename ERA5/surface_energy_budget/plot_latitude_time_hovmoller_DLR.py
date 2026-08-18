@@ -429,12 +429,27 @@ def make_hovmoller(
         f"contours: sea ice {', '.join(f'{v:g}' for v in ice_levels)}",
         fontsize=11.5)
     if n_contrib.size and n_contrib.min() != n_contrib.max():
-        ax.text(0.5, -0.16,
-                f"Seasons contributing per column varies {n_contrib.min()}-"
-                f"{n_contrib.max()}; vertical striping is that sampling change, "
-                f"not a physical signal.",
-                transform=ax.transAxes, ha="center", va="top",
-                fontsize=8.5, color="0.35")
+        # A single vague on-plot caption ("varies X-Y") reads as if the whole
+        # figure were undersampled, when in practice it is almost always one
+        # column: 29 Feb only exists in a season whose wrap year is a leap
+        # year, so every OTHER season leaves that column empty. Naming that
+        # column separately from any other thin day keeps a real gap
+        # elsewhere from being mistaken for the same harmless artifact.
+        n_used = sec["field"].shape[0]
+        lo, hi = int(n_contrib.min()), int(n_contrib.max())
+        thin = [(kept_slots[i], int(n_contrib[i])) for i in range(len(kept_slots))
+                if n_contrib[i] < hi]
+        leap_day = [n for (md, n) in thin if md == (2, 29)]
+        other_thin = [(md, n) for (md, n) in thin if md != (2, 29)]
+        print(f"\n  Season coverage varies by day of season: {lo}-{hi} of "
+              f"{n_used} seasons contribute per column.")
+        if leap_day:
+            print(f"    29 Feb: only {leap_day[0]} season(s) wrap into a leap "
+                  f"year and cover it -- expected, not a data gap.")
+        if other_thin:
+            print("    Other thin day(s): " + ", ".join(
+                f"{calendar.month_abbr[m]} {d} ({n} of {n_used} seasons)"
+                for (m, d), n in other_thin))
     ax.grid(alpha=0.18, linewidth=0.5, color="white")
     ax.set_axisbelow(False)
 

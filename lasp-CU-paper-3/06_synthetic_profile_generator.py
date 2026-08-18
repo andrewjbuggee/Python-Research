@@ -2,8 +2,8 @@
 Synthetic in-situ profile generator (joint r_e + LWC + alpha_param + geometry).
 
 Fits a functional-PCA + multivariate-normal generative model in LOG-SPACE
-to a set of in-situ profiles from the ORACLES campaign, then samples N
-new synthetic profiles. Each synthetic sample carries:
+to a set of in-situ profiles from the ORACLES and VOCALS-REx field campaign,
+then samples N new synthetic profiles. Each synthetic sample carries:
 
     re        : (N_FIXED_LEVELS,) effective radius profile  (μm, top → base)
     lwc       : (N_FIXED_LEVELS,) liquid water content        (g/m³,  top → base)
@@ -48,6 +48,7 @@ Method
 Profile orientation throughout: index 0 = cloud top, index -1 = cloud base.
 """
 
+import datetime
 import numpy as np
 import scipy.io
 import matplotlib.pyplot as plt
@@ -55,7 +56,7 @@ from pathlib import Path
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-MAT_DIR          = Path('/Volumes/My Passport/neural_network_training_data/saz0_allProfiles/')
+MAT_DIR          = Path('/Volumes/My Passport/CU_Boulder/neural_network_training_data/saz0_allProfiles/')
 
 TAU_C_MIN        = 3.0          # only use clouds with cloud optical depth ≥ this
 L_COMMON         = 80           # length of the common normalized-altitude grid (≥ 60)
@@ -63,10 +64,10 @@ N_FIXED_LEVELS   = 7            # every synthetic profile is on this fixed grid
 N_SAMPLES        = 100
 
 VAR_TARGET       = 0.99         # cumulative variance target for picking K_RE, K_LWC, K_T, K_VAPOR
-K_RE_MAX         = 6           # hard cap on number of re modes kept
-K_LWC_MAX        = 8           # hard cap on number of lwc modes kept
-K_T_MAX          = 8            # hard cap on number of ERA5 temperature modes kept
-K_VAPOR_MAX      = 6            # hard cap on number of ERA5 vapor-concentration modes kept
+K_RE_MAX         = 12           # hard cap on number of re modes kept
+K_LWC_MAX        = 12           # hard cap on number of lwc modes kept
+K_T_MAX          = 20            # hard cap on number of ERA5 temperature modes kept
+K_VAPOR_MAX      = 20            # hard cap on number of ERA5 vapor-concentration modes kept
 
 LWC_EPS          = 1e-3         # g/m³ floor for log(lwc + eps); below typical in-cloud LWC
 VAPOR_EPS        = 1.0          # molec/cm³ floor for log(vapor + eps)
@@ -74,12 +75,26 @@ QEXT_EFF         = 2.32         # bulk Mie extinction efficiency for τ_c calc
                                 # (calibrated to libRadtran's reported τ; see compute_tau_c)
 RANDOM_SEED      = 0
 
+RUN_DATE         = datetime.date.today().strftime('%Y-%m-%d')
+
 OUT_DIR          = Path(__file__).parent / 'synthetic_profiles'
 OUT_PATH         = OUT_DIR / f'synthetic_profiles_jointMVN_N{N_SAMPLES}_L{N_FIXED_LEVELS}.npz'
-FIG_PATH         = OUT_DIR / f'synthetic_profiles_jointMVN_diagnostic_N{N_SAMPLES}.png'
-FIG_EXAMPLES_PATH = OUT_DIR / f'synthetic_profiles_jointMVN_examples_N{N_SAMPLES}.png'
-FIG_ATMOS_PATH    = OUT_DIR / f'synthetic_profiles_jointMVN_atmos_diagnostic_N{N_SAMPLES}.png'
+FIG_PATH         = OUT_DIR / f'synthetic_profiles_jointMVN_diagnostic_N{N_SAMPLES}_{RUN_DATE}.png'
+FIG_EXAMPLES_PATH = OUT_DIR / f'synthetic_profiles_jointMVN_examples_N{N_SAMPLES}_{RUN_DATE}.png'
+FIG_ATMOS_PATH    = OUT_DIR / f'synthetic_profiles_jointMVN_atmos_diagnostic_N{N_SAMPLES}_{RUN_DATE}.png'
 FIGURE_DPI       = 500
+
+
+def _versioned_path(path):
+    """Append '_ver2', '_ver3', ... to path's stem if a file already exists there."""
+    if not path.exists():
+        return path
+    ver = 2
+    while True:
+        candidate = path.with_name(f'{path.stem}_ver{ver}{path.suffix}')
+        if not candidate.exists():
+            return candidate
+        ver += 1
 
 # Rejection-sampling loop: keeps drawing batches until N samples have
 # tau_c >= TAU_C_MIN (matching the in-situ filter). Without this, the
@@ -758,8 +773,9 @@ fig.suptitle(
     y=1.005,
 )
 fig.tight_layout()
-fig.savefig(FIG_PATH, dpi=FIGURE_DPI, bbox_inches='tight')
-print(f'Diagnostic figure → {FIG_PATH}  (dpi={FIGURE_DPI})')
+fig_path = _versioned_path(FIG_PATH)
+fig.savefig(fig_path, dpi=FIGURE_DPI, bbox_inches='tight')
+print(f'Diagnostic figure → {fig_path}  (dpi={FIGURE_DPI})')
 
 
 # ── Atmospheric diagnostic figure (2 x 3) — ERA5 T and vapor ──────────────────
@@ -878,8 +894,9 @@ fig_a.suptitle(
     y=1.005,
 )
 fig_a.tight_layout()
-fig_a.savefig(FIG_ATMOS_PATH, dpi=FIGURE_DPI, bbox_inches='tight')
-print(f'Atmosphere figure → {FIG_ATMOS_PATH}  (dpi={FIGURE_DPI})')
+fig_atmos_path = _versioned_path(FIG_ATMOS_PATH)
+fig_a.savefig(fig_atmos_path, dpi=FIGURE_DPI, bbox_inches='tight')
+print(f'Atmosphere figure → {fig_atmos_path}  (dpi={FIGURE_DPI})')
 
 
 # ── Random-examples figure (3 x 3, synthetic only) ────────────────────────────
@@ -920,7 +937,8 @@ fig_ex.suptitle(
     y=1.005,
 )
 fig_ex.tight_layout()
-fig_ex.savefig(FIG_EXAMPLES_PATH, dpi=FIGURE_DPI, bbox_inches='tight')
-print(f'Examples figure   → {FIG_EXAMPLES_PATH}  (dpi={FIGURE_DPI})')
+fig_examples_path = _versioned_path(FIG_EXAMPLES_PATH)
+fig_ex.savefig(fig_examples_path, dpi=FIGURE_DPI, bbox_inches='tight')
+print(f'Examples figure   → {fig_examples_path}  (dpi={FIGURE_DPI})')
 
 plt.show()

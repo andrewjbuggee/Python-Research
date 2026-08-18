@@ -21,6 +21,7 @@ Equation (1) of:
 | `plot_radiative_flux_pdfs.py` | Radiative counterpart of the PDFs. |
 | `plot_monthly_flux_maps.py` | Month-by-component grid of maps, with the sea-ice edge contoured. |
 | `plot_monthly_longwave_maps.py` | 3-row monthly grid: downwelling LW, net LW, sea ice. No ocean mask by default. |
+| `plot_monthly_lwd_maps.py` | 2×3 grid of downwelling-LW maps, one month per panel, with sea ice contoured. Season window and years to average are chosen the same way as in the Hovmoller. |
 | `plot_fall_seb_timeseries.py` | Freeze-up season: climatological net SEB over open ocean (median + IQR) with the region's ice-free fraction beneath it. |
 | `era5_aws.py` | Read ERA5 straight from the public NSF NCAR S3 bucket, no download. |
 | `era5_aws_analysis.ipynb` | Notebook running the same analysis against that remote data. |
