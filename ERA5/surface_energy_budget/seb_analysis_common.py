@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +35,11 @@ import numpy as np
 # reads from wherever the downloader writes. Editing EXTERNAL_ROOT in
 # download_era5_seb.py moves both halves at once.
 from download_era5_seb import STORAGE_ROOTS, check_volume_mounted
+
+# The land-sea mask subdirectory name, imported so available_regions() below
+# can exclude it by the same name download_era5_land_sea_mask.py writes to --
+# a directory of masks with no time axis must never be listed as a region.
+from download_era5_land_sea_mask import LSM_SUBDIR
 
 if TYPE_CHECKING:  # pragma: no cover
     import xarray as xr
@@ -110,12 +117,18 @@ def parse_date(text: str) -> datetime:
 
 
 def available_regions(data_root: Path = DEFAULT_DATA_ROOT) -> list[str]:
-    """Region subdirectories that actually contain netCDF files."""
+    """Region subdirectories that actually contain netCDF files.
+
+    Excludes ``LSM_SUBDIR``: it holds land-sea masks with no time axis, not a
+    region's time-series chunks, and would otherwise be listed and then fail
+    confusingly if loaded as one.
+    """
     data_root = Path(data_root)
     if not data_root.is_dir():
         return []
     return sorted(
-        d.name for d in data_root.iterdir() if d.is_dir() and any(d.glob("*.nc"))
+        d.name for d in data_root.iterdir()
+        if d.is_dir() and d.name != LSM_SUBDIR and any(d.glob("*.nc"))
     )
 
 
@@ -203,16 +216,187 @@ def resolve_region_dir(args: argparse.Namespace) -> Path:
     raise FileNotFoundError("\n".join(lines))
 
 
+# ----------------------------------------------------------------------------
+# Per-file time index
+# ----------------------------------------------------------------------------
+# Cache of "which timestamps live in which file", written beside the netCDF
+# files. Hidden so it never appears in the "*.nc" glob nor in a listing of the
+# archive.
+FILE_INDEX_NAME = ".seb_file_index.json"
+
+# Bumped whenever an entry's layout changes, so a cache written by an older
+# version is rebuilt rather than misread.
+FILE_INDEX_VERSION = 1
+
+
+def _scan_file_time_axis(path: Path) -> dict:
+    """Read ONE file's time axis and nothing else.
+
+    Goes through netCDF4 rather than xarray on purpose: this must touch only
+    the ``valid_time`` variable, which costs ~15 ms per file and indexes a
+    600-file archive in about 10 s.
+
+    Every file the downloader writes has a regular axis, so an entry normally
+    stores ``(start, step, n)`` and reconstructs the timestamps exactly. A file
+    that is NOT regular -- which a download with a sparse ``hours_utc`` would
+    produce -- records its timestamps explicitly, so the index stays exact
+    instead of silently approximating.
+    """
+    import netCDF4
+
+    st = path.stat()
+    with netCDF4.Dataset(path) as nc:
+        t = np.asarray(nc.variables["valid_time"][:], dtype="int64")
+    if t.size == 0:
+        raise ValueError(f"{path} has an empty valid_time axis")
+
+    step = int(t[1] - t[0]) if t.size > 1 else 0
+    entry = {
+        "mtime_ns": st.st_mtime_ns, "size": st.st_size,
+        "start": int(t[0]), "end": int(t[-1]), "n": int(t.size), "step": step,
+    }
+    if t.size > 1 and not np.array_equal(t, t[0] + step * np.arange(t.size)):
+        entry["times"] = t.tolist()
+    return entry
+
+
+def _entry_times(entry: dict) -> np.ndarray:
+    """Timestamps of one indexed file, as int64 seconds since the epoch."""
+    if "times" in entry:
+        return np.asarray(entry["times"], dtype="int64")
+    return entry["start"] + entry["step"] * np.arange(entry["n"], dtype="int64")
+
+
+def build_file_index(
+    region_dir: Path,
+    files: list[str] | None = None,
+    use_cache: bool = True,
+) -> dict[str, dict]:
+    """Map each netCDF filename in ``region_dir`` to its time span.
+
+    The point of the index is to know what a file COVERS without opening it, so
+    a caller with a date range can choose its files before paying to open
+    anything.
+
+    Entries are keyed by bare filename and validated against ``(mtime, size)``,
+    so a re-downloaded or newly added file is rescanned while every unchanged
+    one is reused. A cache that cannot be written -- a read-only external drive
+    being the likely case -- is not an error; the scan just runs every time.
+    """
+    region_dir = Path(region_dir)
+    if files is None:
+        files = sorted(glob.glob(str(region_dir / "*.nc")))
+    names = [Path(f).name for f in files]
+
+    cache_path = region_dir / FILE_INDEX_NAME
+    cached: dict[str, dict] = {}
+    if use_cache and cache_path.is_file():
+        try:
+            blob = json.loads(cache_path.read_text())
+            if blob.get("version") == FILE_INDEX_VERSION:
+                cached = blob.get("entries", {})
+        except (OSError, ValueError):
+            # A truncated or half-written cache is rebuilt, never trusted.
+            cached = {}
+
+    index: dict[str, dict] = {}
+    stale = 0
+    for name in names:
+        path = region_dir / name
+        st = path.stat()
+        hit = cached.get(name)
+        if (hit is not None and hit.get("mtime_ns") == st.st_mtime_ns
+                and hit.get("size") == st.st_size):
+            index[name] = hit
+        else:
+            index[name] = _scan_file_time_axis(path)
+            stale += 1
+
+    if use_cache and (stale or len(cached) != len(index)):
+        tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        try:
+            tmp.write_text(json.dumps(
+                {"version": FILE_INDEX_VERSION, "entries": index}))
+            os.replace(tmp, cache_path)
+        except OSError:
+            # Read-only archive: fall back to rescanning on every run.
+            tmp.unlink(missing_ok=True)
+    return index
+
+
+def region_time_index(
+    region: str,
+    data_root: Path = DEFAULT_DATA_ROOT,
+) -> np.ndarray:
+    """Every timestamp in a region's archive, without opening any data.
+
+    Returns the same ``valid_time`` values -- sorted, de-duplicated -- that
+    :func:`load_seb_data` would produce for the whole archive, at the cost of
+    reading the index instead of 600 files. Season selection can therefore run
+    before any data is opened.
+    """
+    region_dir = Path(data_root) / region
+    files = sorted(glob.glob(str(region_dir / "*.nc")))
+    if not files:
+        raise FileNotFoundError(
+            f"No netCDF files in {region_dir}. "
+            f"Available regions: {available_regions(Path(data_root)) or 'none'}"
+        )
+    index = build_file_index(region_dir, files)
+    times = np.concatenate([_entry_times(index[Path(f).name]) for f in files])
+    return np.unique(times).astype("datetime64[s]").astype("datetime64[ns]")
+
+
+def season_windows(
+    used: list[int],
+    season_start: tuple[int, int],
+    season_end: tuple[int, int],
+) -> list[tuple[datetime, datetime]]:
+    """Calendar span of each season, for pre-selecting files.
+
+    ``used`` holds the years a season STARTS in, matching
+    :func:`season_year_of`. A window that wraps the new year ends in the
+    following calendar year.
+    """
+    m0, d0 = season_start
+    m1, d1 = season_end
+    wraps = (m1, d1) < (m0, d0)
+    out = []
+    for y in used:
+        out.append((datetime(y, m0, d0),
+                    datetime(y + 1 if wraps else y, m1, d1, 23, 59, 59)))
+    return out
+
+
+def _inclusive_end(end: datetime | None) -> datetime | None:
+    """Push a bare date's end bound to the last instant of that day.
+
+    ``--end 2026-01-07`` means "keep all 24 hours of 7 January", not "stop at
+    00:00".
+    """
+    if end is not None and (end.hour, end.minute) == (0, 0):
+        return end.replace(hour=23, minute=59, second=59)
+    return end
+
+
 def load_seb_data(
     region: str,
     start: datetime | None = None,
     end: datetime | None = None,
     data_root: Path = DEFAULT_DATA_ROOT,
+    windows: list[tuple[datetime, datetime]] | None = None,
 ) -> "xr.Dataset":
-    """Open every file for ``region`` and subset to the requested time range.
+    """Open the files for ``region`` and subset to the requested time range.
 
     The end bound is INCLUSIVE, so ``--end 2026-01-07`` keeps all 24 hours of
     7 January rather than stopping at 00:00.
+
+    ``windows`` is an optional list of ``(start, end)`` spans; only files
+    overlapping one of them are opened, and NO time subsetting is applied
+    afterwards. It exists for the season scripts, which mask the time axis
+    themselves but should not have to open two decades of files to reach one
+    season. ``start``/``end`` still subset as before and may be combined with
+    it.
     """
     import xarray as xr
 
@@ -223,63 +407,115 @@ def load_seb_data(
             f"No netCDF files in {region_dir}. "
             f"Available regions: {available_regions(Path(data_root)) or 'none'}"
         )
+    all_files = files
+    index = build_file_index(region_dir, files)
+    end_bound = _inclusive_end(end)
 
-    # Two downloader runs with different --chunk-days over the same dates
-    # produce differently-named files covering overlapping days. combine=
-    # "by_coords" then fails with "does not have monotonic global indexes",
-    # which is an accurate complaint but a fatal one. Fall back to an explicit
-    # concat and drop duplicate timestamps: the overlapping values come from the
-    # same archive and are identical, so keeping the first is lossless.
-    try:
-        # join and compat are passed explicitly rather than left to the
-        # defaults. xarray warns that both defaults are changing (join
-        # outer -> exact, compat no_conflicts -> override), and the new ones
-        # would break this archive: files cover different time ranges, so an
-        # exact join cannot align them. Naming the current values keeps the
-        # behaviour pinned across an xarray upgrade instead of letting results
-        # shift silently, and silences the warning as a side effect.
-        ds = xr.open_mfdataset(
-            files,
-            combine="by_coords",
-            join="outer",           # union the per-file time ranges
-            compat="no_conflicts",  # verify overlapping values agree
-        )
-    except ValueError as exc:
-        if "monotonic" not in str(exc):
-            raise
-        # chunks={} keeps each file lazy; a plain open_dataset here would pull
-        # every file fully into memory before the concat, which for a
-        # multi-hundred-file archive is gigabytes to obtain a small subset.
-        parts = [xr.open_dataset(f, chunks={}) for f in files]
-        ds = xr.concat(parts, dim="valid_time", coords="minimal",
-                       data_vars="minimal", compat="override", join="outer")
-        ds = ds.sortby("valid_time")
-        keep = ~ds.indexes["valid_time"].duplicated(keep="first")
-        n_dupe = int((~keep).sum())
-        ds = ds.isel(valid_time=keep)
-        if n_dupe:
-            print(
-                f"  Note: {n_dupe:,} duplicate time steps dropped (files with "
-                f"overlapping day ranges). Run with --overwrite off is unaffected; "
-                f"see README on removing redundant files.",
-                file=sys.stderr,
+    # Choose the files BEFORE opening them. Opening is the only part of this
+    # that scales with the size of the archive, so a caller after one season
+    # should not pay for the twenty-five it is not going to read.
+    spans = list(windows) if windows else []
+    if start is not None or end_bound is not None:
+        spans.append((start, end_bound))
+    if spans:
+        files = _files_overlapping(files, index, spans)
+        if not files:
+            raise ValueError(
+                f"No time steps in the requested range for region {region!r}. "
+                f"Files span {_file_span(all_files)}."
             )
 
-    if start is not None or end is not None:
-        # Push the end bound to the last instant of that day when no hour given.
-        end_bound = end
-        if end_bound is not None and (end_bound.hour, end_bound.minute) == (0, 0):
-            end_bound = end_bound.replace(hour=23, minute=59, second=59)
+    # Concatenate in time order rather than filename order: the archive mixes
+    # per-day names (era5_seb_barrow_20000101.nc) with per-chunk ones
+    # (era5_seb_barrow_202603_01-11.nc), which do not sort chronologically.
+    files = sorted(files, key=lambda f: index[Path(f).name]["start"])
+
+    # combine="nested" along valid_time, NOT combine="by_coords".
+    #
+    # by_coords groups the inputs by their SET OF DATA VARIABLES, combines each
+    # group, then merges the groups under `compat`. This archive has two such
+    # groups -- files downloaded before `sst` was added to the variable set, and
+    # files after -- so that merge is real work on two datasets that are
+    # essentially disjoint in time. Under compat="no_conflicts" xarray computes
+    # every shared variable over the WHOLE record to run the conflict check
+    # before combining with fillna, which is where ~9 minutes of startup went.
+    # Under compat="override" it keeps the first group's array outright, which
+    # is silent, catastrophic data loss here: everything the other group covers
+    # comes back NaN.
+    #
+    # A nested concat along the time axis sidesteps the grouping entirely.
+    # Missing variables are NaN-filled per file, so the two variable sets still
+    # align, and the result is identical to the no_conflicts merge -- verified
+    # elementwise on this archive -- without computing anything.
+    #
+    # join and compat are still named explicitly. xarray warns that both
+    # defaults are changing (join outer -> exact, compat no_conflicts ->
+    # override), and an exact join cannot align files that cover different
+    # ranges. Naming them pins the behaviour across an xarray upgrade instead of
+    # letting results shift silently, and silences the warning as a side effect.
+    ds = xr.open_mfdataset(
+        files,
+        combine="nested",
+        concat_dim="valid_time",
+        join="outer",           # union the per-file lat/lon ranges
+        compat="override",      # safe here: concat, not a cross-group merge
+        coords="minimal",
+        data_vars="minimal",
+    )
+
+    # Two downloader runs with different --chunk-days over the same dates
+    # produce differently-named files covering overlapping days. The time index
+    # is already in memory, so both guards below are coordinate-only work.
+    # Overlapping values come from the same archive and are identical, so
+    # keeping the first is lossless.
+    idx = ds.indexes["valid_time"]
+    if not idx.is_monotonic_increasing:
+        ds = ds.sortby("valid_time")
+        idx = ds.indexes["valid_time"]
+    dupe = idx.duplicated(keep="first")
+    n_dupe = int(dupe.sum())
+    if n_dupe:
+        ds = ds.isel(valid_time=~dupe)
+        print(
+            f"  Note: {n_dupe:,} duplicate time steps dropped (files with "
+            f"overlapping day ranges). Run with --overwrite off is unaffected; "
+            f"see README on removing redundant files.",
+            file=sys.stderr,
+        )
+
+    if start is not None or end_bound is not None:
         ds = ds.sel(valid_time=slice(start, end_bound))
 
     if ds.sizes.get("valid_time", 0) == 0:
         raise ValueError(
             f"No time steps in the requested range for region {region!r}. "
-            f"Files span {_file_span(files)}."
+            f"Files span {_file_span(all_files)}."
         )
     return ds
 
 
+def _files_overlapping(
+    files: list[str],
+    index: dict[str, dict],
+    spans: list[tuple[datetime | None, datetime | None]],
+) -> list[str]:
+    """Files whose indexed time range intersects any of ``spans``.
+
+    An open-ended bound is treated as unbounded on that side, matching how
+    ``slice(start, end)`` behaves in the subset below.
+    """
+    def as_epoch(d: datetime | None, default: int) -> int:
+        if d is None:
+            return default
+        return int(np.datetime64(d, "s").astype("int64"))
+
+    lo_hi = [(as_epoch(a, -(2 ** 62)), as_epoch(b, 2 ** 62)) for a, b in spans]
+    keep = []
+    for f in files:
+        e = index[Path(f).name]
+        if any(e["start"] <= hi and e["end"] >= lo for lo, hi in lo_hi):
+            keep.append(f)
+    return keep
 def _file_span(files: list[str]) -> str:
     """Human-readable date span implied by the filenames."""
     stems = [Path(f).stem.split("_")[-1] for f in files]
@@ -516,6 +752,32 @@ def season_slot_of(times: np.ndarray, slots: list[tuple[int, int]]) -> np.ndarra
     days = (times.astype("datetime64[D]") - times.astype("datetime64[M]")).astype(int) + 1
     lut = {md: i for i, md in enumerate(slots)}
     return np.array([lut.get((int(m), int(d)), -1) for m, d in zip(months, days)])
+
+
+def format_used_seasons(used: list[int], stat: str | None = None) -> str:
+    """Render the seasons kept for a climatology as a subtitle fragment.
+
+    A single season is ``season YYYY/YYYY``. Multiple seasons that form an
+    unbroken run of start years are collapsed to a range -- ``N seasons:
+    2015/2016 - 2025/2026`` -- rather than spelling out every one, which is
+    what a multi-decade climatology would otherwise do to the figure title.
+    A non-consecutive selection (explicit ``--years`` skipping some) still
+    lists every season, since there is no shorter faithful way to say it.
+
+    ``stat`` prefixes the count as e.g. ``"mean of N seasons"`` when the
+    figure's title does not otherwise say how the seasons were combined --
+    the hovmoller scripts need this because whether seasons are meaned or
+    medianed varies between them and is not stated anywhere else on the
+    figure. Leave it None where the reduction is already named elsewhere in
+    the title (or is the only option in that script).
+    """
+    if len(used) == 1:
+        return f"season {used[0]}/{used[0]+1}"
+    count = f"{stat} of {len(used)} seasons" if stat else f"{len(used)} seasons"
+    consecutive = all(b - a == 1 for a, b in zip(used, used[1:]))
+    if consecutive:
+        return f"{count}: {used[0]}/{used[0]+1} - {used[-1]}/{used[-1]+1}"
+    return f"{count}: " + ", ".join(f"{u}/{u+1}" for u in used)
 
 
 def hour_of(times: np.ndarray) -> np.ndarray:

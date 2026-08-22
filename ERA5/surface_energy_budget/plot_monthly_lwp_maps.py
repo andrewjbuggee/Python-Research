@@ -95,6 +95,11 @@ LWP_CMAP = LinearSegmentedColormap.from_list(
 # Liquid at or below this many g m-2 is treated as no liquid before the median
 # is taken. Matches the near-zero trace-liquid floor discussed in
 # analyze_cloud_liquid_frequency.py.
+# MEASURED: ERA5's tclw/tciw here are quantised to exact multiples of
+# 2**-15 kg m-2 = 0.0305176 g m-2 (a GRIB binary scale factor), so the smallest
+# non-zero path the archive can express is 0.03052 g m-2. A threshold BELOW that
+# quantum selects exactly the same cell-hours as "> 0" and guards nothing. To
+# actually drop the single-quantum population, use >= 0.031.
 DEFAULT_LWP_THRESHOLD_G = 0.03
 
 # Sea ice contour levels. 0.05 traces the outer edge of any ice at all and 0.95
@@ -647,8 +652,16 @@ def main(argv: list[str] | None = None) -> int:
         mode_label = f"season {seasons[0]}/{seasons[0]+1}"
         tag = f"season{seasons[0]}"
     else:
-        mode_label = (f"median of {len(seasons)} seasons: "
-                      + ", ".join(f"{s}/{str(s+1)[-2:]}" for s in seasons))
+        # A consecutive run of start years collapses to a range rather than
+        # spelling out every season, which is what a multi-decade climatology
+        # would otherwise do to the figure title.
+        consecutive = all(b - a == 1 for a, b in zip(seasons, seasons[1:]))
+        if consecutive:
+            mode_label = (f"{len(seasons)} seasons: {seasons[0]}/{seasons[0]+1} "
+                          f"- {seasons[-1]}/{seasons[-1]+1}")
+        else:
+            mode_label = (f"{len(seasons)} seasons: "
+                          + ", ".join(f"{s}/{str(s+1)[-2:]}" for s in seasons))
         tag = f"median{seasons[0]}-{seasons[-1]}"
     season_label = (f"{args.season_start[0]:02d}-{args.season_start[1]:02d} to "
                     f"{args.season_end[0]:02d}-{args.season_end[1]:02d}")

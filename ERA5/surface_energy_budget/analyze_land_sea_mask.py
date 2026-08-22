@@ -38,7 +38,7 @@ examples
 ========
   ./analyze_land_sea_mask.py
   ./analyze_land_sea_mask.py --region barrow --verbose
-  ./analyze_land_sea_mask.py --file data/era5_lsm_barrow.nc
+  ./analyze_land_sea_mask.py --file data/land_sea_masks/era5_lsm_barrow.nc
 """
 
 from __future__ import annotations

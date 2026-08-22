@@ -40,17 +40,17 @@ check before switching any analysis over.
 
 Output
 ======
-One file per region, written at the TOP of the storage root rather than in a
+One file per region, written under ``<root>/land_sea_masks/`` rather than in a
 region subdirectory::
 
-    <root>/era5_lsm_barrow.nc
-    <root>/era5_lsm_arctic_circle_0p50deg.nc
+    <root>/land_sea_masks/era5_lsm_barrow.nc
+    <root>/land_sea_masks/era5_lsm_arctic_circle_0p50deg.nc
 
 Kept out of the ``<root>/<region>/`` trees deliberately: those hold time-series
-chunks that the analysis scripts glob and concatenate, and an extra file with no
-time axis in there would be a foot-gun. It also keeps
-``seb_analysis_common.available_regions`` (which lists subdirectories holding
-netCDFs) from reporting a mask directory as if it were a region.
+chunks that the analysis scripts glob and concatenate, and mask files with no
+time axis in there would be a foot-gun. ``land_sea_masks`` itself is kept out of
+``seb_analysis_common.available_regions`` by name (see ``LSM_SUBDIR`` above), so
+it is never listed or loaded as if it were a region.
 
 The stored field has its length-1 ``valid_time`` dimension squeezed out, so it
 broadcasts against ``(valid_time, latitude, longitude)`` data without fuss.
@@ -95,6 +95,12 @@ DATASET = "reanalysis-era5-single-levels"
 LSM_CDS_NAME = "land_sea_mask"
 LSM_SHORT_NAME = "lsm"
 
+# Subdirectory of the storage root the masks live in. Named here once and
+# imported by seb_analysis_common.available_regions, which excludes it by this
+# same name -- otherwise a directory of masks with no time axis would get
+# listed as if it were a region a script could load SEB data from.
+LSM_SUBDIR = "land_sea_masks"
+
 # Any timestamp returns the same field. This one is arbitrary, chosen only to sit
 # well inside the final-ERA5 period rather than the preliminary ERA5T window near
 # real time, so nobody has to wonder whether the mask came from a provisional
@@ -121,7 +127,7 @@ def grid_tag(grid_deg: float | None) -> str:
 
 def mask_path(out_root: Path, region_label: str, grid_deg: float | None) -> Path:
     """Where the mask for one region lands."""
-    return out_root / f"era5_lsm_{region_label}{grid_tag(grid_deg)}.nc"
+    return out_root / LSM_SUBDIR / f"era5_lsm_{region_label}{grid_tag(grid_deg)}.nc"
 
 
 def build_lsm_request(area_deg: list[float], grid_deg: float | None) -> dict:
@@ -216,6 +222,7 @@ def download_region_mask(
 ) -> bool:
     """Retrieve, consolidate, and finalise the mask for one region."""
     out_path = mask_path(out_root, region_label, grid_deg)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"  {region_label:<18} -> {out_path.name}")
 
     if out_path.exists() and not overwrite:

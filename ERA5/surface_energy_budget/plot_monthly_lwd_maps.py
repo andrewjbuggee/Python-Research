@@ -632,8 +632,16 @@ def main(argv: list[str] | None = None) -> int:
         mode_label = f"season {seasons[0]}/{seasons[0]+1}"
         tag = f"season{seasons[0]}"
     else:
-        mode_label = (f"mean of {len(seasons)} seasons: "
-                      + ", ".join(f"{s}/{str(s+1)[-2:]}" for s in seasons))
+        # A consecutive run of start years collapses to a range rather than
+        # spelling out every season, which is what a multi-decade climatology
+        # would otherwise do to the figure title.
+        consecutive = all(b - a == 1 for a, b in zip(seasons, seasons[1:]))
+        if consecutive:
+            mode_label = (f"{len(seasons)} seasons: {seasons[0]}/{seasons[0]+1} "
+                          f"- {seasons[-1]}/{seasons[-1]+1}")
+        else:
+            mode_label = (f"{len(seasons)} seasons: "
+                          + ", ".join(f"{s}/{str(s+1)[-2:]}" for s in seasons))
         tag = f"mean{seasons[0]}-{seasons[-1]}"
     season_label = (f"{args.season_start[0]:02d}-{args.season_start[1]:02d} to "
                     f"{args.season_end[0]:02d}-{args.season_end[1]:02d}")

@@ -123,7 +123,7 @@ CLASS_COLORS: dict[str, str] = {
 }
 
 # Packing round-off tolerance on lsm, not a physical threshold.
-DEFAULT_LSM_TOL = 1e-4
+DEFAULT_LSM_TOL = 0.01
 
 # Sea ice concentration cuts separating the three ocean classes.
 DEFAULT_OPEN_OCEAN_MAX_SICONC = 0.05

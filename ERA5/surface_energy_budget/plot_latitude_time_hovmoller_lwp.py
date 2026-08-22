@@ -79,6 +79,7 @@ from plot_monthly_lwp_maps import (
 )
 from seb_analysis_common import (
     add_data_source_args,
+    format_used_seasons,
     load_seb_data,
     resolve_region_dir,
 )
@@ -455,11 +456,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     used = [sec["seasons"][i] for i in keep_idx]
-    if len(used) == 1:
-        mode_label = f"season {used[0]}/{used[0]+1}"
-    else:
-        mode_label = (f"median of {len(used)} seasons: "
-                      + ", ".join(f"{u}/{u+1}" for u in used))
+    mode_label = format_used_seasons(used, stat="median")
     print(f"\n  Using {len(used)} season(s): {used}")
 
     if sec["land_edge"] is not None:

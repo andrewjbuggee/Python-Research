@@ -21,8 +21,11 @@ Liquid is then counted as present when
     tclw > --lwp-threshold
 
 ERA5's names for the two paths are ``tclw`` (total column cloud liquid water =
-LWP) and ``tciw`` (total column cloud ice water = IWP), both in kg m-2;
-0.001 kg m-2 = 1 g m-2.
+LWP) and ``tciw`` (total column cloud ice water = IWP), both stored NATIVELY in
+kg m-2. ``--lwp-threshold`` and ``--iwp-threshold`` are given in g m-2 instead,
+for readability against the g m-2 magnitudes quoted throughout this file
+(1 g m-2 = 0.001 kg m-2); the conversion to kg m-2 happens internally, right
+before each threshold is compared against the raw field.
 
 WHAT THE REPORTED FRACTION IS, AND IS NOT
 =========================================
@@ -132,16 +135,42 @@ because the sampling grid is fixed and independent of the cloud field. What it
 cannot do is measure duration or contiguity: 10 samples could be one 10-hour
 deck or ten isolated hours.
 
-How badly the hourly grid aliases the real thing is measurable, via the 1-hour
-persistence of the overcast state (Barrow, 2020-2022):
+How badly the hourly grid aliases the real thing is measurable, by extracting
+the actual episodes -- runs of consecutive samples in one cell, discarding any
+that touch a gap in the record. Barrow, 7 seasons, tcc = 1 (figure 7):
 
-    P(overcast at t+1 | overcast at t)  = 0.855
-    P(overcast at t+1 | clear at t)     = 0.165
-    mean run length                     = 6.9 samples
+    mean duration                       6.58 h
+    median duration                     3 h
+    episodes lasting exactly 1 sample   34.1%
+    share of total overcast TIME in those 1-hour episodes   5.2%
 
-Overcast episodes last about 7 hours, so the hourly grid resolves them with room
-to spare, and events shorter than an hour -- the ones that get missed entirely
-or rounded up to a full hour, errors that partly cancel -- are a small tail.
+The mean alone flatters the sampling. The median is 3 h, and a third of all
+episodes are a single sample -- which is exactly the signature of structure at
+or below the sampling scale. A memoryless process with the same measured
+persistence would produce 15.1% singletons, so there is roughly twice the
+short-episode population that hour-to-hour persistence alone implies.
+
+What rescues the hour count is that those singletons carry only 5.2% of the
+total overcast time. Occupancy -- the fraction of the day overcast, which is all
+these figures claim -- is exposed to that 5%, not to the 34%.
+
+MUCH OF THE SPIKE IS THE THRESHOLD, NOT THE CLOUD. tcc = 1 exactly is a knife
+edge, and about a tenth of all cell-hours sit in [0.99, 1). A cell drifting
+across that line manufactures 1-hour episodes out of a deck that never broke.
+Relaxing the threshold separates the two (``--episode-scan`` prints this):
+
+    tcc >=   base rate   mean h   median h   1-h eps   memoryless   time in 1-h
+      1.00       0.519     6.58          3     34.1%        15.1%          5.2%
+      0.99       0.626     9.84          4     27.5%        10.1%          2.8%
+      0.95       0.750    18.29          7     19.6%         5.4%          1.1%
+      0.90       0.803    23.92          8     17.1%         4.1%          0.7%
+      0.50       0.924    57.86         16     13.2%         1.5%          0.2%
+
+Mean duration rises from 6.6 h to 23.9 h between tcc = 1 and tcc >= 0.9, and the
+time held in 1-hour episodes falls from 5.2% to 0.7%. The excess over the
+memoryless benchmark never vanishes, so some genuine short-timescale structure
+is there at every threshold -- but the strict criterion is responsible for most
+of what looks like flicker.
 
 THE THRESHOLD MATTERS, AND HOW MUCH DEPENDS ON THE SEASON
 =========================================================
@@ -175,7 +204,7 @@ seasons, whole record):
 
 If the aim is comparison against ground-based retrievals, pick a threshold near
 their detection limit: microwave radiometer LWP uncertainty is roughly
-10-25 g m-2, so ``--lwp-threshold 0.01`` to ``0.025``. Every run prints the
+10-25 g m-2, so ``--lwp-threshold 10`` to ``25``. Every run prints the
 sensitivity table above for its own data, so the dependence is never hidden.
 
 OPTIONS
@@ -198,9 +227,9 @@ Season and years
 
 Thresholds
 ----------
---lwp-threshold F            Liquid water path above which liquid counts as
-                             present, kg m-2 (default 0.0; see the warning).
---iwp-threshold F            Ice water path used in the cloudy test, kg m-2
+--lwp-threshold G            Liquid water path above which liquid counts as
+                             present, g m-2 (default 0.0; see the warning).
+--iwp-threshold G            Ice water path used in the cloudy test, g m-2
                              (default 0.0).
 --min-cloud-fraction F       Total cloud cover at or above which a scene counts
                              as cloudy (default 1.0, fully overcast).
@@ -223,7 +252,7 @@ Examples
     python analyze_cloud_liquid_frequency.py --region barrow --years 2019
 
     python analyze_cloud_liquid_frequency.py --region barrow \
-        --years 2019-2020 --lwp-threshold 0.01
+        --years 2019-2020 --lwp-threshold 10
 """
 
 from __future__ import annotations
@@ -232,6 +261,7 @@ import argparse
 import calendar
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -249,10 +279,18 @@ from seb_analysis_common import (
 REF_YEAR_START = 2000
 REF_YEAR_WRAP = (1999, 2000)
 
-# Thresholds used for the automatic sensitivity table, in kg m-2.
-SENSITIVITY_THRESHOLDS = (0.0, 0.001, 0.005, 0.010, 0.020, 0.050)
+# Thresholds used for the automatic sensitivity table, in g m-2.
+SENSITIVITY_THRESHOLDS = (0.0, 1.0, 5.0, 10.0, 20.0, 50.0)
 
 HOURS_PER_STEP = 1.0  # ERA5 hourly data: one time step is one hour
+
+# Longest episode tracked exactly; anything longer is lumped into the top
+# slot. Multi-day overcast does occur here, so this is deliberately roomy.
+MAX_RUN_H = 500
+
+# Cloud-cover thresholds for --episode-scan.
+EPISODE_SCAN_THRESHOLDS = (1.0, 0.99, 0.95, 0.90, 0.70, 0.50)
+
 
 # Darker grey for "cloudy" so it separates cleanly from the liquid series and
 # from the white background.
@@ -314,6 +352,9 @@ def parse_layout(text: str) -> tuple[int, int]:
 def build_masks(ds, lwp_thr, iwp_thr, min_cf, ocean_only):
     """Boolean (time, lat, lon) masks over the whole record.
 
+    ``lwp_thr`` and ``iwp_thr`` are in g m-2; ``tclw``/``tciw`` are ERA5's
+    native kg m-2, so both are converted here before comparison.
+
     Returns ``(cloudy, liquid, liquid_any, valid)``:
       cloudy      overcast AND some condensate of either phase
       liquid      cloudy AND liquid above threshold  (conditional)
@@ -323,16 +364,16 @@ def build_masks(ds, lwp_thr, iwp_thr, min_cf, ocean_only):
     question needs; ``liquid`` is the conditional one.
     """
     tcc = ds["tcc"].values
-    tclw = ds["tclw"].values
-    tciw = ds["tciw"].values
+    tclw_g = ds["tclw"].values * 1000.0
+    tciw_g = ds["tciw"].values * 1000.0
 
-    valid = np.isfinite(tcc) & np.isfinite(tclw) & np.isfinite(tciw)
+    valid = np.isfinite(tcc) & np.isfinite(tclw_g) & np.isfinite(tciw_g)
     if ocean_only:
         valid &= np.isfinite(ds["siconc"].values)
 
-    cloudy = valid & (tcc >= min_cf) & ((tclw > lwp_thr) | (tciw > iwp_thr))
-    liquid = cloudy & (tclw > lwp_thr)
-    liquid_any = valid & (tclw > lwp_thr)
+    cloudy = valid & (tcc >= min_cf) & ((tclw_g > lwp_thr) | (tciw_g > iwp_thr))
+    liquid = cloudy & (tclw_g > lwp_thr)
+    liquid_any = valid & (tclw_g > lwp_thr)
     return cloudy, liquid, liquid_any, valid
 
 
@@ -361,13 +402,17 @@ def season_coverage(times, idx, slot, syear, n_slots):
 
 
 def per_season_daily(ds, idx, slot, syear, seasons, n_slots,
-                     cloudy, liquid, liquid_any, valid, w_yx, lwp_thr):
+                     cloudy, liquid, liquid_any, valid, w_yx):
     """Reduce to arrays indexed [season, day-slot].
 
     Keeping the season axis intact is what makes a median and an interquartile
     band across years possible; collapsing to a single mean here would throw away
     exactly the spread the figures are meant to show. Cells are cos(latitude)
     weighted throughout, so a value is an area mean, not a cell count.
+
+    UNITS. Every condensate path returned here is g m-2, converted from ERA5's
+    native kg m-2 at source so that no caller has to remember to scale it. TCWV
+    stays kg m-2 and t2m stays kelvin.
     """
     n_s, n_d = len(seasons), n_slots
     shape = (n_s, n_d)
@@ -380,6 +425,11 @@ def per_season_daily(ds, idx, slot, syear, seasons, n_slots,
     extras = {"tcsw": "snow_cloudy", "tcrw": "rain_cloudy",
               "tcwv": "tcwv_cloudy", "t2m": "t2m_cloudy"}
     extras = {v: k for v, k in extras.items() if v in ds}
+    # tcsw/tcrw are condensate paths in ERA5's kg m-2, like tclw/tciw, so they
+    # are reported in g m-2 with everything else. tcwv stays kg m-2 (a column
+    # vapour path of 15 kg m-2 is the conventional unit) and t2m stays kelvin.
+    extra_scale = {"snow_cloudy": 1000.0, "rain_cloudy": 1000.0,
+                   "tcwv_cloudy": 1.0, "t2m_cloudy": 1.0}
     out = {k: np.full(shape, np.nan) for k in
            ("cloudy_h", "liquid_h", "liquid_any_h", "frac",
             "lwp_cloudy", "iwp_cloudy", *extras.values())}
@@ -416,11 +466,101 @@ def per_season_daily(ds, idx, slot, syear, seasons, n_slots,
             # Mean condensate WHEN CLOUDY, area weighted.
             cm = cloudy[sel]
             if cm.any():
-                out["lwp_cloudy"][i_s, i_d] = float((tclw[sel] * cm * w).sum()) / c_w
-                out["iwp_cloudy"][i_s, i_d] = float((tciw[sel] * cm * w).sum()) / c_w
+                # Scale AFTER the weighted sum rather than converting the whole
+                # array, which would double the memory for no benefit.
+                out["lwp_cloudy"][i_s, i_d] = (
+                    float((tclw[sel] * cm * w).sum()) / c_w * 1000.0)
+                out["iwp_cloudy"][i_s, i_d] = (
+                    float((tciw[sel] * cm * w).sum()) / c_w * 1000.0)
                 for k, a in extra_a.items():
-                    out[k][i_s, i_d] = float((a[sel] * cm * w).sum()) / c_w
+                    out[k][i_s, i_d] = (float((a[sel] * cm * w).sum()) / c_w
+                                        * extra_scale[k])
     return out
+
+
+def contiguous_segments(times, idx):
+    """Split ``idx`` into blocks whose timestamps step by exactly one hour.
+
+    Season boundaries and any gap in the archive break a block. Runs must not be
+    measured across a break, or two separate episodes either side of a missing
+    week get glued into one implausibly long one.
+    """
+    t = times[idx].astype("datetime64[h]").astype("int64")
+    brk = np.nonzero(np.diff(t) != 1)[0] + 1
+    return [s for s in np.split(idx, brk) if s.size >= 3]
+
+
+def episode_statistics(times, idx, masks, w_yx, month_of):
+    """Length distribution of consecutive-True episodes, per cell.
+
+    Returns ``{name: {"hist": H, "censored": c, "total": n}}`` where ``H`` is a
+    cos(latitude) weighted count indexed [month, length_in_hours], length 0
+    unused. Also returns hourly persistence per month.
+
+    CENSORING. An episode already under way at the start of a contiguous block,
+    or still under way at its end, has an unknown true length and is discarded
+    rather than counted short. The discarded fraction is reported so the size of
+    that correction is visible.
+
+    WHAT THIS CANNOT SEE. The sampling grid is hourly, so an episode shorter
+    than one hour is either missed entirely or recorded as one sample. The
+    distribution is therefore censored from below at 1 h, and a large spike at
+    exactly 1 h would be the signature of unresolved flicker. That the spike is
+    small is evidence against flicker, not proof of its absence.
+    """
+    w_flat = np.asarray(w_yx).ravel()
+    n_month = 13
+    out = {}
+    for name in masks:
+        out[name] = {"hist": np.zeros((n_month, MAX_RUN_H + 1)),
+                     "censored": 0.0, "total": 0.0,
+                     "pair_on": np.zeros(n_month), "pair_on_on": np.zeros(n_month)}
+
+    for seg in contiguous_segments(times, idx):
+        mon = month_of[seg]
+        for name, mask in masks.items():
+            m = mask[seg].reshape(seg.size, -1)
+            T = seg.size
+            z = np.zeros((1, m.shape[1]), np.int8)
+            d = np.diff(np.vstack([z, m.astype(np.int8), z]), axis=0)
+            si = np.argwhere(d == 1)
+            ei = np.argwhere(d == -1)
+            if si.size == 0:
+                continue
+            si = si[np.lexsort((si[:, 0], si[:, 1]))]
+            ei = ei[np.lexsort((ei[:, 0], ei[:, 1]))]
+            keep = (si[:, 0] > 0) & (ei[:, 0] < T)
+            rec = out[name]
+            rec["total"] += si.shape[0]
+            rec["censored"] += int((~keep).sum())
+            if keep.any():
+                L = np.minimum(ei[keep, 0] - si[keep, 0], MAX_RUN_H)
+                cell = si[keep, 1]
+                np.add.at(rec["hist"], (mon[si[keep, 0]], L), w_flat[cell])
+
+            # Hourly persistence, attributed to the month of the earlier sample.
+            prev, cur = m[:-1], m[1:]
+            wm = np.broadcast_to(w_flat, prev.shape)
+            np.add.at(rec["pair_on"], mon[:-1], (prev * wm).sum(axis=1))
+            np.add.at(rec["pair_on_on"], mon[:-1], ((prev & cur) * wm).sum(axis=1))
+    return out
+
+
+def pd_month(times):
+    """Calendar month of each time step, as a plain int array."""
+    return times.astype("datetime64[M]").astype(int) % 12 + 1
+
+
+def run_summary(hist_1d):
+    """Weighted mean, median and 1-hour share from a length histogram."""
+    L = np.arange(hist_1d.size)
+    n = hist_1d.sum()
+    if n <= 0:
+        return float("nan"), float("nan"), float("nan")
+    mean = float((L * hist_1d).sum() / n)
+    c = np.cumsum(hist_1d) / n
+    median = float(np.searchsorted(c, 0.5))
+    return mean, median, float(hist_1d[1] / n)
 
 
 def pooled_cell_day_hours(idx, slot, syear, seasons, n_slots, masks, valid,
@@ -468,6 +608,60 @@ def pooled_cell_day_hours(idx, slot, syear, seasons, n_slots, masks, valid,
             out[name][d] = weighted_quantiles(
                 np.concatenate(vals), np.concatenate(wts), qs)
     return out
+
+
+def monthly_median_lwp(ds, idx, month_of, cloudy, w_yx, months, lwp_thr):
+    """cos(latitude) weighted median LWP over LIQUID cloudy cell-hours, per month.
+
+    Restricted to cell-hours where LWP exceeds ``lwp_thr`` -- the same
+    "liquid" test used everywhere else in this script -- so an overcast
+    ice-only scene (LWP at or below threshold) no longer drags the median
+    toward zero. That ice-only population is already reported separately, as
+    the histogram's leftmost bar; folding it back into this median would
+    double-count the same information the wrong way.
+
+    Pooled over seasons rather than averaged season by season: a median is not
+    additive, so pooling is the honest way to get one number per month.
+    """
+    tclw_g = ds["tclw"].values * 1000.0
+    thr_g = lwp_thr    # already g m-2
+    w_flat = np.asarray(w_yx).ravel()
+    out = {}
+    for m in months:
+        sel = idx[month_of[idx] == m]
+        if sel.size == 0:
+            out[m] = float("nan")
+            continue
+        cm = cloudy[sel].reshape(sel.size, -1)
+        x_all = tclw_g[sel].reshape(sel.size, -1)
+        liquid = cm & (x_all > thr_g)
+        if not liquid.any():
+            out[m] = float("nan")
+            continue
+        x = x_all[liquid]
+        w = np.broadcast_to(w_flat, liquid.shape)[liquid]
+        out[m] = weighted_quantiles(x, w, (0.5,))[0]
+    return out
+
+
+def lwp_to_bar_x(v, edges):
+    """Where an LWP value falls in the histogram's categorical bar coordinate.
+
+    Bar 0 is the at-or-below-threshold bar, bar 1 the underflow, bars 2..len(e)
+    the log-spaced interior, bar len(e)+1 the overflow. Inside the interior the
+    position is interpolated on the log axis, so the line lands where the eye
+    expects it rather than snapping to a bar centre.
+    """
+    if not np.isfinite(v):
+        return None
+    if v < edges[0]:
+        return 1.0
+    if v >= edges[-1]:
+        return float(len(edges) + 1)
+    i = int(np.digitize(v, edges))            # edges[i-1] <= v < edges[i]
+    span = np.log10(edges[i]) - np.log10(edges[i - 1])
+    f = (np.log10(v) - np.log10(edges[i - 1])) / span
+    return (i + 1) - 0.5 + f
 
 
 def lwp_bin_edges(lo_g, hi_g, n_bins):
@@ -534,7 +728,7 @@ def monthly_lwp_histogram(ds, idx, slot, syear, seasons, slots, cloudy, valid,
             ww = w[cm.reshape(sel.size, -1)]
             counts = np.zeros(n_bin)
             b = np.digitize(x, edges_g) + 1       # 1 = under, len(edges)+1 = over
-            b[x <= lwp_thr * 1000.0] = 0          # ice-only scenes
+            b[x <= lwp_thr] = 0                   # ice-only scenes; lwp_thr already g m-2
             np.add.at(counts, b, ww)
             n_days = len(days_seen[(y, m)])
             H[si, mi] = counts / per_step * (days_in_month[m] / n_days)
@@ -619,25 +813,71 @@ def _season_span(seasons) -> str:
             f"\u2013{b}/{(b + 1) % 100:02d}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+class Analysis(SimpleNamespace):
+    """Everything the figures need, computed once.
+
+    Built by :func:`prepare`. Holding it in one object is what lets a
+    notebook load the archive in one cell and then redraw any single figure
+    without repeating the load, which takes minutes.
+    """
+
+
+def _emit(fig, A, out_dir, stem, dpi=None):
+    """Save a figure if asked, and hand it back either way."""
+    if out_dir is None:
+        return fig
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{A.args.region}_{stem}.png"
+    fig.savefig(path, dpi=dpi or A.args.dpi, bbox_inches="tight")
+    print(f"  -> {path}")
+    return fig
+
+
+def _finish(ax, ylab, ylim=None):
+    ax.set_ylabel(ylab, fontsize=10)
+    if ylim:
+        ax.set_ylim(*ylim)
+    ax.grid(True, alpha=0.25, linewidth=0.5)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+
+
+def _daily_axis(ax):
+    import matplotlib.dates as mdates
+    ax.xaxis.set_major_locator(mdates.MonthLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+
+
+def prepare(argv=None, args=None, **overrides):
+    """Load the archive and compute everything the figures share.
+
+    ``argv`` takes the same strings as the command line; ``overrides`` sets
+    individual options by name, e.g. ``prepare(region="barrow",
+    years=(2019, 2020))``. Returns an :class:`Analysis`.
+
+    This is the slow step -- it reads every file for the region and holds the
+    subset in memory -- so a notebook should call it once and keep the result.
+    """
+    if args is None:
+        args = parse_args([] if argv is None else argv)
+    for k, v in overrides.items():
+        if not hasattr(args, k):
+            raise TypeError(f"unknown option {k!r}")
+        setattr(args, k, v)
 
     print("=" * 72)
     print("Cloud liquid water frequency")
     print("=" * 72)
 
-    try:
-        region_dir = resolve_region_dir(args)
-        ds = load_seb_data(args.region, None, None, region_dir.parent)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"  Error: {exc}", file=sys.stderr)
-        return 1
+    region_dir = resolve_region_dir(args)
+    ds = load_seb_data(args.region, None, None, region_dir.parent)
 
     needed = ["tcc", "tclw", "tciw"] + (["siconc"] if args.ocean_only else [])
     missing = [v for v in needed if v not in ds]
     if missing:
-        print(f"  Error: dataset is missing {missing}.", file=sys.stderr)
-        return 1
+        raise KeyError(f"dataset is missing {missing}")
 
     (m0, d0), (m1, d1) = args.season_start, args.season_end
     wraps = (m1, d1) < (m0, d0)
@@ -645,9 +885,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Season     : {m0:02d}-{d0:02d} to {m1:02d}-{d1:02d}"
           + ("  (wraps the new year)" if wraps else ""))
     print(f"  Cloudy scene: tcc >= {args.min_cloud_fraction:g} AND "
-          f"(LWP > {args.lwp_threshold:g} or IWP > {args.iwp_threshold:g}) kg m-2")
-    print(f"  Liquid      : LWP > {args.lwp_threshold:g} kg m-2 "
-          f"({args.lwp_threshold * 1000:g} g m-2)")
+          f"(LWP > {args.lwp_threshold:g} or IWP > {args.iwp_threshold:g}) g m-2")
+    print(f"  Liquid      : LWP > {args.lwp_threshold:g} g m-2 "
+          f"({args.lwp_threshold / 1000:g} kg m-2)")
     print(f"  Domain      : {'ocean only' if args.ocean_only else 'all cells, land included'}")
 
     # Optional diagnostics: the precipitating condensate and the vapour and
@@ -656,12 +896,8 @@ def main(argv: list[str] | None = None) -> int:
     optional = [v for v in ("tcsw", "tcrw", "tcwv", "t2m") if v in ds]
     ds = ds[needed + optional].compute()
 
-    try:
-        idx, slot, syear, slots = season_index(
-            ds, (args.season_start, args.season_end), args.years)
-    except ValueError as exc:
-        print(f"  Error: {exc}", file=sys.stderr)
-        return 1
+    idx, slot, syear, slots = season_index(
+        ds, (args.season_start, args.season_end), args.years)
 
     cov = season_coverage(ds["valid_time"].values, idx, slot, syear, len(slots))
     print(f"\n  Seasons found ({len(cov)}), coverage of the "
@@ -671,9 +907,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    {y}/{(y+1) % 100:02d}: {100*f:5.1f}%{flag}")
     seasons = [y for y, f in cov.items() if f >= args.min_season_coverage]
     if not seasons:
-        print(f"  Error: no season meets --min-season-coverage "
-              f"{args.min_season_coverage}.", file=sys.stderr)
-        return 1
+        raise ValueError("no season meets --min-season-coverage "
+                         f"{args.min_season_coverage}")
     idx = idx[np.isin(syear[idx], seasons)]
     print(f"  Using {len(seasons)} season(s): "
           f"{', '.join(f'{y}/{(y+1)%100:02d}' for y in seasons)}")
@@ -689,12 +924,61 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Cells       : {n_cells:,}   time steps: {idx.size:,}")
 
     daily = per_season_daily(ds, idx, slot, syear, seasons, len(slots),
-                             cloudy, liquid, liquid_any, valid, w_yx,
-                             args.lwp_threshold)
+                             cloudy, liquid, liquid_any, valid, w_yx)
     dim = {m: calendar.monthrange(2001 if m != 2 else 2000, m)[1]
            for m in range(1, 13)}
     months, monthly = monthly_from_daily(daily, slots, dim)
 
+
+    pooled = pooled_cell_day_hours(
+        idx, slot, syear, seasons, len(slots),
+        {"cloud_liquid": liquid, "liquid_any": liquid_any, "cloudy": cloudy},
+        valid, w_yx)
+    med = {k: med_iqr(v)[0] for k, v in monthly.items()}
+    month_of_all = pd_month(ds["valid_time"].values)
+
+    # Day-of-season x positions for the daily figures. A wrapping window
+    # needs two reference years so the axis runs forward across New Year.
+    pos = []
+    for m, d in slots:
+        yr = (REF_YEAR_WRAP[1] if (wraps and (m, d) < args.season_start)
+              else (REF_YEAR_WRAP[0] if wraps else REF_YEAR_START))
+        pos.append(np.datetime64(f"{yr}-{m:02d}-{d:02d}"))
+    pos = np.array(pos).astype("datetime64[D]").astype("O")
+
+    n_seasons = len(seasons)
+    return Analysis(
+        args=args, ds=ds, idx=idx, slot=slot, syear=syear, slots=slots,
+        seasons=seasons, n_seasons=n_seasons, wraps=wraps,
+        cloudy=cloudy, liquid=liquid, liquid_any=liquid_any, valid=valid,
+        w_yx=w_yx, n_cells=n_cells, daily=daily, monthly=monthly, med=med,
+        months=months, dim=dim, pooled=pooled, month_of_all=month_of_all,
+        pos=pos, x=np.arange(len(months)),
+        names=[calendar.month_abbr[m] for m in months],
+        years_label=_season_span(seasons),
+        thr_label=(f"liquid = LWP > {args.lwp_threshold:g} g m$^{{-2}}$;  "
+                   + _cloud_criterion_label(args.min_cloud_fraction)),
+        band_note=("shading = 25th\u201375th percentile across seasons"
+                   if n_seasons > 1 else None),
+    )
+
+
+def print_report(A):
+    """The numeric summary that the command-line run prints."""
+    args = A.args
+    med = A.med
+    daily = A.daily
+    months = A.months
+    slots = A.slots
+    idx = A.idx
+    cloudy = A.cloudy
+    liquid = A.liquid
+    liquid_any = A.liquid_any
+    valid = A.valid
+    w_yx = A.w_yx
+    ds = A.ds
+    pooled = A.pooled
+    n_cells = A.n_cells
     # ---- (1) overall -------------------------------------------------------
     w = np.broadcast_to(w_yx, cloudy[idx].shape)
     c_w = float((cloudy[idx] * w).sum())
@@ -718,16 +1002,18 @@ def main(argv: list[str] | None = None) -> int:
     print(f"    mean hours per cell, liquid     : {n_liquid / n_cells:>8,.0f} h")
 
     print("\n    Sensitivity to --lwp-threshold (fraction of cloudy scenes):")
-    print(f"      {'kg m-2':>10}{'g m-2':>9}{'fraction':>11}")
-    tclw_a, tciw_a, tcc_a = ds["tclw"].values, ds["tciw"].values, ds["tcc"].values
+    print(f"      {'g m-2':>9}{'kg m-2':>10}{'fraction':>11}")
+    tclw_a_g = ds["tclw"].values * 1000.0
+    tciw_a_g = ds["tciw"].values * 1000.0
+    tcc_a = ds["tcc"].values
     for thr in SENSITIVITY_THRESHOLDS:
         cl = valid & (tcc_a >= args.min_cloud_fraction) & \
-             ((tclw_a > thr) | (tciw_a > args.iwp_threshold))
-        li = cl & (tclw_a > thr)
+             ((tclw_a_g > thr) | (tciw_a_g > args.iwp_threshold))
+        li = cl & (tclw_a_g > thr)
         cw = float((cl[idx] * w).sum()); lw = float((li[idx] * w).sum())
         f = lw / cw if cw > 0 else np.nan
         mark = "  <- current" if abs(thr - args.lwp_threshold) < 1e-12 else ""
-        print(f"      {thr:>10g}{thr*1000:>9g}{100*f:>10.2f}%{mark}")
+        print(f"      {thr:>9g}{thr/1000:>10g}{100*f:>10.2f}%{mark}")
 
     # ---- (2) monthly -------------------------------------------------------
     print("\n" + "-" * 72)
@@ -737,9 +1023,8 @@ def main(argv: list[str] | None = None) -> int:
            f"{'LWP':>8}{'IWP':>8}{'snow':>8}{'rain':>8}{'total':>8}"
            f"{'TCWV':>8}{'t2m C':>8}")
     print(hdr); print("    " + "-" * (len(hdr) - 4))
-    med = {k: med_iqr(v)[0] for k, v in monthly.items()}
 
-    def _col(key, j, scale=1000.0, default=float("nan")):
+    def _col(key, j, scale=1.0, default=float("nan")):
         return scale * med[key][j] if key in med else default
 
     for j, m in enumerate(months):
@@ -749,8 +1034,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    {calendar.month_abbr[m]:<7}{med['cloudy_h'][j]:>10,.1f}"
               f"{med['liquid_h'][j]:>10,.1f}{100*med['frac'][j]:>7.2f}%"
               f"{lwp:>8.1f}{iwp:>8.1f}{snow:>8.1f}{rain:>8.1f}{total:>8.1f}"
-              f"{_col('tcwv_cloudy', j, 1.0):>8.2f}"
-              f"{_col('t2m_cloudy', j, 1.0) - 273.15:>8.1f}")
+              f"{_col('tcwv_cloudy', j):>8.2f}"
+              f"{_col('t2m_cloudy', j) - 273.15:>8.1f}")
     print("    paths in g m-2, TCWV in kg m-2, all conditioned on cloudy scenes.")
     print("    'snow' and 'rain' are the PRECIPITATING condensate (tcsw, tcrw);")
     print("    ERA5's IWP (tciw) is suspended cloud ice only and excludes them.")
@@ -766,10 +1051,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"    liquid ANY cloud, per day : {np.nanmean(d_med['liquid_any_h']):5.2f} of 24")
 
     # ---- (4) per cell-day --------------------------------------------------
-    pooled = pooled_cell_day_hours(
-        idx, slot, syear, seasons, len(slots),
-        {"cloud_liquid": liquid, "liquid_any": liquid_any, "cloudy": cloudy},
-        valid, w_yx)
     print("\n" + "-" * 72)
     print("  (4) PER CELL-DAY, quantiles over all cells x all seasons")
     print("-" * 72)
@@ -781,50 +1062,37 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    {lab}: {np.nanmean(q[:, 1]):5.2f} "
               f"({np.nanmean(q[:, 0]):5.2f}-{np.nanmean(q[:, 2]):5.2f}) of 24")
 
-    if args.no_figures:
-        print("=" * 72)
-        return 0
 
-    out_dir = args.output_dir or (Path(__file__).resolve().parent / "figures")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    import matplotlib
-    if not args.show:
-        matplotlib.use("Agg")
-    import matplotlib.dates as mdates
+
+def condensate_series(A):
+    """Which condensate paths to draw, and in what colour.
+
+    Shared by the two condensate figures so they cannot disagree about whether
+    the precipitating species are included.
+    """
+    series = [("lwp_cloudy", LIQUID_COLOR, "LWP (liquid)"),
+              ("iwp_cloudy", ICE_COLOR, "IWP (cloud ice)")]
+    if A.args.include_precip:
+        series += [(k, c, l) for k, c, l in
+                   (("snow_cloudy", SNOW_COLOR, "snow water"),
+                    ("rain_cloudy", RAIN_COLOR, "rain water")) if k in A.med]
+    return series
+
+
+def fig_monthly_liquid(A, out_dir=None, dpi=None):
+    """fig 1: monthly hours + fraction.
+
+    Draws from a prepared :class:`Analysis`, so it can be re-run on its
+    own without reloading the archive. Saves into ``out_dir`` when one is
+    given, and always returns the figure.
+    """
     import matplotlib.pyplot as plt
-
-    years_label = _season_span(seasons)
-    thr_label = (f"liquid = LWP > {args.lwp_threshold*1000:g} g m$^{{-2}}$;  "
-                 + _cloud_criterion_label(args.min_cloud_fraction))
-    n_seasons = len(seasons)
-    band_note = ("shading = 25th\u201375th percentile across seasons"
-                 if n_seasons > 1 else None)
-
-    # x positions for the daily figures
-    pos = []
-    for m, d in slots:
-        yr = (REF_YEAR_WRAP[1] if (wraps and (m, d) < args.season_start)
-              else (REF_YEAR_WRAP[0] if wraps else REF_YEAR_START))
-        pos.append(np.datetime64(f"{yr}-{m:02d}-{d:02d}"))
-    pos = np.array(pos).astype("datetime64[D]").astype("O")
-
-    def _finish(ax, ylab, ylim=None):
-        ax.set_ylabel(ylab, fontsize=10)
-        if ylim:
-            ax.set_ylim(*ylim)
-        ax.grid(True, alpha=0.25, linewidth=0.5)
-        ax.set_axisbelow(True)
-        for sp in ("top", "right"):
-            ax.spines[sp].set_visible(False)
-
-    def _daily_axis(ax):
-        ax.xaxis.set_major_locator(mdates.MonthLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-
-    x = np.arange(len(months))
-    names = [calendar.month_abbr[m] for m in months]
-    written = []
-
+    args = A.args
+    med = A.med
+    years_label = A.years_label
+    thr_label = A.thr_label
+    x = A.x
+    names = A.names
     # --- fig 1: monthly hours + fraction ------------------------------------
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 7.5), constrained_layout=True)
     a1.bar(x - 0.2, med["cloudy_h"], width=0.4, color=CLOUD_COLOR, label="cloudy")
@@ -838,9 +1106,25 @@ def main(argv: list[str] | None = None) -> int:
     a2.bar(x, 100 * med["frac"], width=0.55, color=LIQUID_COLOR)
     a2.set_xticks(x); a2.set_xticklabels(names)
     _finish(a2, "Cloudy scenes with\nliquid [%]", (0, 100))
-    p = out_dir / f"{args.region}_cloud_liquid_monthly.png"
-    fig.savefig(p, dpi=args.dpi, bbox_inches="tight"); written.append(p)
 
+    return _emit(fig, A, out_dir, "cloud_liquid_monthly", dpi)
+
+
+def fig_daily_liquid(A, out_dir=None, dpi=None):
+    """fig 2: daily hours + fraction, with IQR.
+
+    Draws from a prepared :class:`Analysis`, so it can be re-run on its
+    own without reloading the archive. Saves into ``out_dir`` when one is
+    given, and always returns the figure.
+    """
+    import matplotlib.pyplot as plt
+    args = A.args
+    daily = A.daily
+    years_label = A.years_label
+    thr_label = A.thr_label
+    n_seasons = A.n_seasons
+    band_note = A.band_note
+    pos = A.pos
     # --- fig 2: daily hours + fraction, with IQR ----------------------------
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(13, 7.5), sharex=True,
                                  constrained_layout=True)
@@ -862,42 +1146,66 @@ def main(argv: list[str] | None = None) -> int:
     a2.plot(pos, 100*f50, color=LIQUID_COLOR, lw=1.5)
     _finish(a2, "Cloudy scenes with\nliquid [%]", (0, 100))
     a2.set_xlabel("Day of season", fontsize=10); _daily_axis(a2)
-    p = out_dir / f"{args.region}_cloud_liquid_daily.png"
-    fig.savefig(p, dpi=args.dpi, bbox_inches="tight"); written.append(p)
 
+    return _emit(fig, A, out_dir, "cloud_liquid_daily", dpi)
+
+
+def fig_condensate_monthly(A, out_dir=None, dpi=None):
+    """fig 3: monthly mean LWP and IWP.
+
+    Draws from a prepared :class:`Analysis`, so it can be re-run on its
+    own without reloading the archive. Saves into ``out_dir`` when one is
+    given, and always returns the figure.
+    """
+    import matplotlib.pyplot as plt
+    args = A.args
+    med = A.med
+    years_label = A.years_label
+    x = A.x
+    names = A.names
     # --- fig 3: monthly mean LWP and IWP ------------------------------------
     # With --include-precip the falling species are shown too. Without them the
     # figure understates how much frozen water the winter column holds, because
     # the IFS carries prognostic snow: tciw is suspended cloud ice ONLY.
-    series = [("lwp_cloudy", LIQUID_COLOR, "LWP (liquid)"),
-              ("iwp_cloudy", ICE_COLOR, "IWP (cloud ice)")]
-    if args.include_precip:
-        series += [(k, c, l) for k, c, l in
-                   (("snow_cloudy", SNOW_COLOR, "snow water"),
-                    ("rain_cloudy", RAIN_COLOR, "rain water")) if k in med]
+    series = condensate_series(A)
     fig, ax = plt.subplots(figsize=(11, 5.0), constrained_layout=True)
     n_b = len(series)
     width = 0.8 / n_b
     for i, (key, color, lab) in enumerate(series):
         off = (i - (n_b - 1) / 2) * width
-        ax.bar(x + off, 1000 * med[key], width=width * 0.92, color=color, label=lab)
+        ax.bar(x + off, med[key], width=width * 0.92, color=color, label=lab)
     ax.set_xticks(x); ax.set_xticklabels(names)
     ax.legend(fontsize=9, framealpha=0.9)
     ax.set_title(f"Mean condensate path in cloudy scenes \u2014 {args.region}\n"
                  f"{years_label}   |   {_cloud_criterion_label(args.min_cloud_fraction)}",
                  fontsize=12, pad=10)
     _finish(ax, "Mean path [g m$^{-2}$]")
-    p = out_dir / f"{args.region}_cloud_condensate_monthly.png"
-    fig.savefig(p, dpi=args.dpi, bbox_inches="tight"); written.append(p)
 
+    return _emit(fig, A, out_dir, "cloud_condensate_monthly", dpi)
+
+
+def fig_condensate_daily(A, out_dir=None, dpi=None):
+    """fig 4: daily mean LWP and IWP when cloudy.
+
+    Draws from a prepared :class:`Analysis`, so it can be re-run on its
+    own without reloading the archive. Saves into ``out_dir`` when one is
+    given, and always returns the figure.
+    """
+    import matplotlib.pyplot as plt
+    args = A.args
+    daily = A.daily
+    years_label = A.years_label
+    n_seasons = A.n_seasons
+    band_note = A.band_note
+    pos = A.pos
     # --- fig 4: daily mean LWP and IWP when cloudy --------------------------
     fig, ax = plt.subplots(figsize=(13, 5.2), constrained_layout=True)
-    for key, color, lab in series:
+    for key, color, lab in condensate_series(A):
         m50, m25, m75 = med_iqr(daily[key])
         if n_seasons > 1:
-            ax.fill_between(pos, 1000*m25, 1000*m75, color=color, alpha=0.20,
+            ax.fill_between(pos, m25, m75, color=color, alpha=0.20,
                             linewidth=0)
-        ax.plot(pos, 1000*m50, color=color, lw=1.5, label=f"{lab} (median)")
+        ax.plot(pos, m50, color=color, lw=1.5, label=f"{lab} (median)")
     ax.legend(fontsize=9, framealpha=0.9, loc="upper right", title=band_note,
               title_fontsize=8)
     ax.set_title(f"Daily mean condensate path in cloudy scenes \u2014 {args.region}\n"
@@ -905,9 +1213,23 @@ def main(argv: list[str] | None = None) -> int:
                  fontsize=12, pad=10)
     _finish(ax, "Mean path [g m$^{-2}$]")
     ax.set_xlabel("Day of season", fontsize=10); _daily_axis(ax)
-    p = out_dir / f"{args.region}_cloud_condensate_daily.png"
-    fig.savefig(p, dpi=args.dpi, bbox_inches="tight"); written.append(p)
 
+    return _emit(fig, A, out_dir, "cloud_condensate_daily", dpi)
+
+
+def fig_liquid_hours(A, out_dir=None, dpi=None):
+    """fig 5: hours per cell-day with a liquid-bearing cloud.
+
+    Draws from a prepared :class:`Analysis`, so it can be re-run on its
+    own without reloading the archive. Saves into ``out_dir`` when one is
+    given, and always returns the figure.
+    """
+    import matplotlib.pyplot as plt
+    args = A.args
+    pooled = A.pooled
+    years_label = A.years_label
+    thr_label = A.thr_label
+    pos = A.pos
     # --- fig 5: hours per cell-day with a liquid-bearing cloud --------------
     # The sample unit here is a cell-day, not a season-day: for "Aug 01" the
     # quantiles run over every grid cell on every 1 August in the record. That
@@ -932,9 +1254,31 @@ def main(argv: list[str] | None = None) -> int:
                  f"instantaneous hourly samples", fontsize=12, pad=10)
     _finish(ax, "Hourly samples with\nliquid-bearing cloud (of 24)", (0, 24.8))
     ax.set_xlabel("Day of season", fontsize=10); _daily_axis(ax)
-    p = out_dir / f"{args.region}_cloud_liquid_hours.png"
-    fig.savefig(p, dpi=args.dpi, bbox_inches="tight"); written.append(p)
 
+    return _emit(fig, A, out_dir, "cloud_liquid_hours", dpi)
+
+
+def fig_lwp_histogram(A, out_dir=None, dpi=None):
+    """fig 6: per-month LWP histogram.
+
+    Draws from a prepared :class:`Analysis`, so it can be re-run on its
+    own without reloading the archive. Saves into ``out_dir`` when one is
+    given, and always returns the figure.
+    """
+    import matplotlib.pyplot as plt
+    args = A.args
+    slots = A.slots
+    seasons = A.seasons
+    idx = A.idx
+    slot = A.slot
+    syear = A.syear
+    cloudy = A.cloudy
+    valid = A.valid
+    w_yx = A.w_yx
+    ds = A.ds
+    dim = A.dim
+    month_of_all = A.month_of_all
+    years_label = A.years_label
     # --- fig 6: per-month LWP histogram -------------------------------------
     edges = lwp_bin_edges(args.lwp_bin_min, args.lwp_bin_max, args.lwp_bins)
     h_months, H = monthly_lwp_histogram(ds, idx, slot, syear, seasons, slots,
@@ -956,8 +1300,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         n_r = 2
         n_c = -(-n_m // n_r)          # ceil, so Aug-Mar gives 2 x 4 not 2 x 3
-    fig, axes = plt.subplots(n_r, n_c, figsize=(3.4 * n_c, 3.3 * n_r),
+    fig, axes = plt.subplots(n_r, n_c, figsize=(3.4 * n_c, 3.6 * n_r),
                              sharex=True, sharey=True, constrained_layout=True)
+    fig.get_layout_engine().set(hspace=0.09)
     axes = np.atleast_1d(axes).ravel()
     n_bar = len(edges) + 2
     centres = np.arange(n_bar)
@@ -965,7 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
     # rather than by value. The top edge gets no tick of its own: the overflow
     # bar sits beside it and its ">" label already names that edge.
     ticks = [0, 1]
-    labels = ["0" if args.lwp_threshold <= 0 else f"$\\leq${args.lwp_threshold*1000:g}",
+    labels = ["0" if args.lwp_threshold <= 0 else f"$\\leq${args.lwp_threshold:g}",
               f"{edges[0]:g}"]
     for i, e in enumerate(edges[1:-1], start=1):
         if abs(np.log10(e) - round(np.log10(e))) < 1e-9:
@@ -974,17 +1319,31 @@ def main(argv: list[str] | None = None) -> int:
     ticks.append(n_bar - 1); labels.append(f">{edges[-1]:g}")
     colors = [ICE_COLOR] + [LIQUID_COLOR] * (n_bar - 1)
 
+    med_lwp = monthly_median_lwp(ds, idx, month_of_all, cloudy, w_yx, h_months,
+                                 args.lwp_threshold)
+    print("\n    Median LWP over cloudy scenes with liquid present (LWP > threshold):")
+    for m in h_months:
+        print(f"      {calendar.month_abbr[m]:<5}{med_lwp[m]:>9.2f} g m-2")
+
     for k, m in enumerate(h_months):
         ax = axes[k]
         ax.bar(centres, hist[k], width=0.9, color=colors)
         ax.set_title(f"{calendar.month_name[m]}   "
-                     f"({np.nansum(hist[k]):,.0f} h cloudy)", fontsize=10)
+                     f"({np.nansum(hist[k]):,.0f} h cloudy)", fontsize=10, pad=6)
+        xm = lwp_to_bar_x(med_lwp[m], edges)
+        if xm is not None:
+            ax.axvline(xm, color="#B2182B", lw=1.6, ls=":",
+                       label=f"Median LWP, liquid only = {med_lwp[m]:,.3g} g m$^{{-2}}$")
+            ax.legend(fontsize=8.5, framealpha=0.85, loc="best")
         ax.grid(True, axis="y", alpha=0.25, linewidth=0.5)
         ax.set_axisbelow(True)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
         ax.set_xticks(ticks)
         ax.set_xticklabels(labels, fontsize=11, rotation=45, ha="right")
+        # sharex hides the top row's labels, which leaves the bottom row's
+        # titles floating under the top row's bars and reading as its x labels.
+        ax.tick_params(axis="x", labelbottom=True)
         ax.tick_params(axis="y", labelsize=11)
     for ax in axes[n_m:]:
         ax.set_visible(False)
@@ -997,14 +1356,214 @@ def main(argv: list[str] | None = None) -> int:
     fig.suptitle(f"Cloudy-scene hours by liquid water path — {args.region}\n"
                  f"{years_label}, mean across seasons   |   "
                  f"{_cloud_criterion_label(args.min_cloud_fraction)}   |   "
-                 f"log-spaced bins; leftmost bar = overcast but no liquid",
+                 f"log-spaced bins; leftmost bar = overcast with "
+                 f"LWP $\\leq$ {args.lwp_threshold:g} g m$^{{-2}}$",
                  fontsize=12)
-    p = out_dir / f"{args.region}_cloud_lwp_histogram.png"
-    fig.savefig(p, dpi=args.dpi, bbox_inches="tight"); written.append(p)
 
+    return _emit(fig, A, out_dir, "cloud_lwp_histogram", dpi)
+
+
+def fig_episode_duration(A, out_dir=None, dpi=None):
+    """fig 7: episode durations vs the hourly sampling interval.
+
+    Draws from a prepared :class:`Analysis`, so it can be re-run on its
+    own without reloading the archive. Saves into ``out_dir`` when one is
+    given, and always returns the figure.
+    """
+    import matplotlib.pyplot as plt
+    args = A.args
+    med = A.med
+    months = A.months
+    idx = A.idx
+    cloudy = A.cloudy
+    liquid = A.liquid
+    valid = A.valid
+    w_yx = A.w_yx
+    ds = A.ds
+    month_of_all = A.month_of_all
+    years_label = A.years_label
+    # --- fig 7: episode durations vs the hourly sampling interval -----------
+    # The point of this figure is a methodological one: tcc is an INSTANTANEOUS
+    # field, so counting hourly samples measures duration only if episodes last
+    # many hours. That is testable, and this is the test.
+    epi = episode_statistics(ds["valid_time"].values, idx,
+                             {"cloudy": cloudy, "liquid": liquid},
+                             w_yx, month_of_all)
+
+    print("\n" + "-" * 72)
+    print("  (5) EPISODE DURATION vs the 1-hour sampling interval")
+    print("-" * 72)
+    for name, lab in (("cloudy", "overcast"), ("liquid", "overcast + liquid")):
+        rec = epi[name]
+        tot = rec["hist"].sum(axis=0)
+        mean, med, one_h = run_summary(tot)
+        cens = 100 * rec["censored"] / max(rec["total"], 1)
+        hours = tot * np.arange(tot.size)
+        share_1 = 100 * hours[1] / hours.sum()
+        share_le2 = 100 * hours[1:3].sum() / hours.sum()
+        print(f"    {lab:<18} mean {mean:5.2f} h   median {med:4.0f} h"
+              f"   episodes lasting exactly 1 h: {100*one_h:5.1f}%")
+        print(f"    {'':<18} share of total {lab} TIME in episodes of"
+              f" 1 h: {share_1:4.1f}%,  <=2 h: {share_le2:4.1f}%")
+        print(f"    {'':<18} episodes discarded as censored at a record gap:"
+              f" {cens:.1f}%")
+
+    if args.episode_scan:
+        # How much of the 1-hour spike is physical, and how much is cells
+        # wobbling across an exact tcc threshold? Relaxing the threshold
+        # separates the two. The memoryless column is the share of 1-hour
+        # episodes a geometric process with the SAME measured persistence would
+        # produce; the excess over it is real short-timescale structure.
+        tcc_a = ds["tcc"].values
+        tclw_a_g = ds["tclw"].values * 1000.0
+        tciw_a_g = ds["tciw"].values * 1000.0
+        print("\n    Sensitivity of episode duration to --min-cloud-fraction:")
+        print(f"      {'tcc >=':>7}{'base rate':>11}{'mean h':>9}{'median h':>10}"
+              f"{'1-h eps':>9}{'memoryless':>12}{'time in 1-h':>13}")
+        for thr in EPISODE_SCAN_THRESHOLDS:
+            m = valid & (tcc_a >= thr) & ((tclw_a_g > args.lwp_threshold) |
+                                          (tciw_a_g > args.iwp_threshold))
+            rec = episode_statistics(ds["valid_time"].values, idx,
+                                     {"m": m}, w_yx, month_of_all)["m"]
+            tot = rec["hist"].sum(axis=0)
+            mean, med, one = run_summary(tot)
+            hours = tot * np.arange(tot.size)
+            pair = rec["pair_on"].sum()
+            p_stay = rec["pair_on_on"].sum() / pair if pair > 0 else np.nan
+            mark = "  <- current" if abs(thr - args.min_cloud_fraction) < 1e-12 else ""
+            print(f"      {thr:>7.2f}{m[idx].mean():>11.3f}{mean:>9.2f}{med:>10.0f}"
+                  f"{100*one:>8.1f}%{100*(1-p_stay):>11.1f}%"
+                  f"{100*hours[1]/hours.sum():>12.1f}%{mark}")
+
+    n_top = 24
+    fig, ((b1, b2), (b3, b4)) = plt.subplots(2, 2, figsize=(13.5, 8.0),
+                                             constrained_layout=True)
+
+    # (a) how long episodes last
+    xs = np.arange(1, n_top + 2)
+    for i, (name, color, lab) in enumerate(
+            (("cloudy", CLOUD_COLOR, "overcast"),
+             ("liquid", LIQUID_COLOR, "overcast + liquid"))):
+        tot = epi[name]["hist"].sum(axis=0)
+        frac = np.empty(n_top + 1)
+        frac[:n_top] = tot[1:n_top + 1]
+        frac[n_top] = tot[n_top + 1:].sum()
+        frac = 100 * frac / tot[1:].sum()
+        b1.bar(xs + (i - 0.5) * 0.42, frac, width=0.42, color=color, label=lab)
+    # Memoryless benchmark. If the overcast state had no memory beyond one hour
+    # -- if the chance of surviving the next hour were always p, no matter how
+    # long the deck had already been there -- episode lengths would be geometric:
+    # P(length = k) = p**(k-1) * (1 - p). Feeding in the SAME persistence p that
+    # was measured from the data makes this a like-for-like reference, so any
+    # departure is memory in the process, not a different overall cloudiness.
+    rec = epi["cloudy"]
+    p_stay = rec["pair_on_on"].sum() / rec["pair_on"].sum()
+    g = p_stay ** (xs[:n_top] - 1) * (1 - p_stay)
+    g = np.append(g, p_stay ** n_top)          # the >n_top tail
+    b1.plot(xs, 100 * g, color="#B2182B", lw=1.5, ls="--", marker="o", ms=3,
+            label=f"memoryless, same persistence (p = {p_stay:.3f})")
+    b1.set_xlabel("Episode duration [h]", fontsize=9)
+    b1.set_ylabel("Share of episodes [%]", fontsize=9)
+    b1.set_xticks([1, 4, 8, 12, 16, 20, 24, 25])
+    b1.set_xticklabels(["1", "4", "8", "12", "16", "20", "24", f">{n_top}"])
+    b1.legend(fontsize=8.5, framealpha=0.9)
+    b1.set_title("(a) Episode duration distribution", fontsize=10)
+
+    # (b) where the TIME actually sits. Short episodes are numerous but carry
+    # little of the record, which is the quantity that matters for aliasing.
+    for name, color, lab in (("cloudy", CLOUD_COLOR, "overcast"),
+                             ("liquid", LIQUID_COLOR, "overcast + liquid")):
+        tot = epi[name]["hist"].sum(axis=0)
+        hours = tot * np.arange(tot.size)
+        cdf = 100 * np.cumsum(hours) / hours.sum()
+        b2.step(np.arange(tot.size), cdf, where="post", color=color, lw=1.6,
+                label=lab)
+        b2.plot([1], [cdf[1]], "o", color=color, ms=5)
+        b2.annotate(f"{lab}: {cdf[1]:.1f}% of time is in 1-h episodes",
+                    (1, cdf[1]), textcoords="offset points",
+                    xytext=(12, 2 if name == "cloudy" else 16),
+                    fontsize=8, color=color)
+    b2.axvline(1.0, color="#B2182B", lw=1.2, ls="--")
+    b2.set_xlim(0, 48); b2.set_ylim(0, 100)
+    b2.set_xlabel("Episode duration [h]", fontsize=9)
+    b2.set_ylabel("Share of total time in episodes\nno longer than this [%]",
+                  fontsize=9)
+    b2.legend(fontsize=9, framealpha=0.9, loc="lower right")
+    b2.set_title("(b) Cumulative share of overcast time", fontsize=10)
+
+    # (c) duration by month
+    order = [m for m in months]
+    xm = np.arange(len(order))
+    for i, (name, color, lab) in enumerate(
+            (("cloudy", CLOUD_COLOR, "overcast"),
+             ("liquid", LIQUID_COLOR, "overcast + liquid"))):
+        means = [run_summary(epi[name]["hist"][m])[0] for m in order]
+        b3.bar(xm + (i - 0.5) * 0.42, means, width=0.42, color=color, label=lab)
+    b3.axhline(1.0, color="#B2182B", lw=1.2, ls="--")
+    b3.text(len(order) - 0.4, 1.6, "1 h", color="#B2182B", fontsize=8, ha="right")
+    b3.set_xticks(xm); b3.set_xticklabels([calendar.month_abbr[m] for m in order])
+    b3.set_ylabel("Mean episode duration [h]", fontsize=9)
+    b3.legend(fontsize=9, framealpha=0.9)
+    b3.set_title("(c) Mean duration by month", fontsize=10)
+
+    # (d) hour-to-hour persistence
+    for i, (name, color, lab) in enumerate(
+            (("cloudy", CLOUD_COLOR, "overcast"),
+             ("liquid", LIQUID_COLOR, "overcast + liquid"))):
+        rec = epi[name]
+        pers = [rec["pair_on_on"][m] / rec["pair_on"][m]
+                if rec["pair_on"][m] > 0 else np.nan for m in order]
+        b4.bar(xm + (i - 0.5) * 0.42, pers, width=0.42, color=color, label=lab)
+    b4.set_xticks(xm); b4.set_xticklabels([calendar.month_abbr[m] for m in order])
+    b4.set_ylim(0, 1.0)
+    b4.set_ylabel("P(state holds one hour later)", fontsize=9)
+    b4.legend(fontsize=9, framealpha=0.9, loc="lower right")
+    b4.set_title("(d) Hour-to-hour persistence", fontsize=10)
+
+    for ax in (b1, b2, b3, b4):
+        ax.grid(True, axis="y", alpha=0.25, linewidth=0.5)
+        ax.set_axisbelow(True)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+    fig.suptitle(f"Cloud episode duration vs the hourly sampling interval "
+                 f"\u2014 {args.region}\n{years_label}   |   "
+                 f"{_cloud_criterion_label(args.min_cloud_fraction)}   |   "
+                 f"episodes spanning a record gap are excluded", fontsize=12)
+
+    return _emit(fig, A, out_dir, "cloud_episode_duration", dpi)
+
+
+ALL_FIGURES = (
+    fig_monthly_liquid,
+    fig_daily_liquid,
+    fig_condensate_monthly,
+    fig_condensate_daily,
+    fig_liquid_hours,
+    fig_lwp_histogram,
+    fig_episode_duration,
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        A = prepare(args=args)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        print(f"  Error: {exc}", file=sys.stderr)
+        return 1
+    print_report(A)
+    if args.no_figures:
+        print("=" * 72)
+        return 0
+
+    out_dir = args.output_dir or (Path(__file__).resolve().parent / "figures")
+    import matplotlib
+    if not args.show:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
     print()
-    for p in written:
-        print(f"  -> {p}")
+    for fn in ALL_FIGURES:
+        fn(A, out_dir=out_dir)
     if args.show:
         plt.show()
     print("=" * 72)
@@ -1021,10 +1580,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--season-end", type=parse_month_day, default=(3, 31),
                         metavar="MM-DD", help="Inclusive; may wrap the new year.")
     parser.add_argument("--years", type=parse_years, default=None, metavar="SPEC")
-    parser.add_argument("--lwp-threshold", type=float, default=0.0, metavar="F",
-                        help="kg m-2. NOTE: 0 yields ~100%% because ERA5 carries "
-                             "trace liquid nearly everywhere; try 0.01.")
-    parser.add_argument("--iwp-threshold", type=float, default=0.0, metavar="F")
+    parser.add_argument("--lwp-threshold", type=float, default=0.0, metavar="G",
+                        help="g m-2. NOTE: 0 yields ~100%% because ERA5 carries "
+                             "trace liquid nearly everywhere; try 10-25 (roughly "
+                             "a microwave radiometer's detection floor).")
+    parser.add_argument("--iwp-threshold", type=float, default=0.0, metavar="G",
+                        help="g m-2, used in the cloudy test.")
     parser.add_argument("--min-cloud-fraction", type=float, default=1.0,
                         metavar="F")
     parser.add_argument("--min-season-coverage", type=float, default=0.5,
@@ -1052,6 +1613,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Panel grid for the LWP histogram, e.g. 2x4. "
                              "Default: 2 rows, enough columns for the months in "
                              "the season. Widened automatically if too small.")
+    parser.add_argument("--episode-scan", action="store_true",
+                        help="Also report how episode duration depends on the\n"
+                             "cloud-cover threshold. Slow: it redoes the run\n"
+                             "extraction once per threshold.")
     parser.add_argument("--ocean-only", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--dpi", type=int, default=350)
@@ -1062,3 +1627,4 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 if __name__ == "__main__":
     sys.exit(main())
+

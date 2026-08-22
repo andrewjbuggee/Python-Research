@@ -83,6 +83,7 @@ from ERA5.surface_energy_budget.plot_latitude_time_hovmoller_DLR import (
 from plot_monthly_longwave_maps import ARM_UTQIAGVIK_LAT, ARM_UTQIAGVIK_LON
 from seb_analysis_common import (
     add_data_source_args,
+    format_used_seasons,
     load_seb_data,
     resolve_region_dir,
 )
@@ -99,10 +100,10 @@ LIQUID_FRAC_CMAP = LinearSegmentedColormap.from_list(
 # default used in the LWP magnitude scripts -- see the module docstring.
 DEFAULT_LWP_THRESHOLD_G = 5.0
 
-# IWP used in the cloudy test, kg m-2, and the cloud-cover floor for a scene to
-# count as cloudy at all. Both match analyze_cloud_liquid_frequency.py's
-# defaults.
-DEFAULT_IWP_THRESHOLD_KG = 0.0
+# IWP used in the cloudy test, g m-2 -- same unit as --lwp-threshold, and
+# matching analyze_cloud_liquid_frequency.py's default value (its own
+# --iwp-threshold is g m-2 too now, not kg m-2).
+DEFAULT_IWP_THRESHOLD_G = 0.0
 DEFAULT_MIN_CLOUD_FRACTION = 1.0
 
 DEFAULT_ICE_LEVELS = (0.05, 0.95)
@@ -117,7 +118,7 @@ def build_section(
     start_md: tuple[int, int],
     end_md: tuple[int, int],
     lwp_threshold_g: float,
-    iwp_threshold_kg: float,
+    iwp_threshold_g: float,
     min_cloud_fraction: float,
 ):
     """Reduce the dataset to (season, day-of-season, latitude) arrays.
@@ -149,11 +150,11 @@ def build_section(
 
     tcc = band["tcc"].values
     tclw_g = band["tclw"].values * 1000.0    # kg m-2 -> g m-2
-    tciw = band["tciw"].values               # kg m-2
+    tciw_g = band["tciw"].values * 1000.0    # kg m-2 -> g m-2
 
-    valid = np.isfinite(tcc) & np.isfinite(tclw_g) & np.isfinite(tciw)
+    valid = np.isfinite(tcc) & np.isfinite(tclw_g) & np.isfinite(tciw_g)
     cloudy = valid & (tcc >= min_cloud_fraction) & (
-        (tclw_g > lwp_threshold_g) | (tciw > iwp_threshold_kg))
+        (tclw_g > lwp_threshold_g) | (tciw_g > iwp_threshold_g))
     liquid = cloudy & (tclw_g > lwp_threshold_g)
 
     # Counts (not means) across the longitude strip: every cell in the strip
@@ -227,7 +228,7 @@ def make_hovmoller(
     region: str,
     mode_label: str,
     lwp_threshold_g: float,
-    iwp_threshold_kg: float,
+    iwp_threshold_g: float,
     min_cloud_fraction: float,
     ice_levels: tuple[float, ...],
     contour_style: str = "contrast",
@@ -320,7 +321,7 @@ def make_hovmoller(
         f"{mode_label}   |   {lon_used.size}-cell longitude mean "
         f"({lon_used.min():.2f} to {lon_used.max():.2f}°E)\n"
         f"liquid = LWP > {lwp_threshold_g:g} g m$^{{-2}}$   |   {cf_label}   |   "
-        f"IWP > {iwp_threshold_kg:g} kg m$^{{-2}}$ (cloudy test)   |   "
+        f"IWP > {iwp_threshold_g:g} g m$^{{-2}}$ (cloudy test)   |   "
         f"contours: sea ice {', '.join(f'{v:g}' for v in ice_levels)}",
         fontsize=11)
     if n_contrib.size and n_contrib.min() != n_contrib.max():
@@ -382,9 +383,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "the liquid test and the cloudy test, exactly as in "
                              "analyze_cloud_liquid_frequency.py.")
     parser.add_argument("--iwp-threshold", type=float,
-                        default=DEFAULT_IWP_THRESHOLD_KG, metavar="F",
-                        help="IWP in kg m-2 used in the cloudy test (default "
-                             f"{DEFAULT_IWP_THRESHOLD_KG:g}).")
+                        default=DEFAULT_IWP_THRESHOLD_G, metavar="G",
+                        help="IWP in g m-2 used in the cloudy test (default "
+                             f"{DEFAULT_IWP_THRESHOLD_G:g}). Same unit as "
+                             "--lwp-threshold.")
     parser.add_argument("--min-cloud-fraction", type=float,
                         default=DEFAULT_MIN_CLOUD_FRACTION, metavar="F",
                         help="Total cloud cover at or above which a scene counts "
@@ -450,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
           + ("  (wraps the new year)"
              if args.season_end < args.season_start else ""))
     print(f"  Cloudy scene: tcc >= {args.min_cloud_fraction:g} AND "
-          f"(LWP > {args.lwp_threshold:g} g m-2 or IWP > {args.iwp_threshold:g} kg m-2)")
+          f"(LWP > {args.lwp_threshold:g} g m-2 or IWP > {args.iwp_threshold:g} g m-2)")
     print(f"  Liquid      : LWP > {args.lwp_threshold:g} g m-2")
 
     try:
@@ -497,11 +499,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     used = [sec["seasons"][i] for i in keep_idx]
-    if len(used) == 1:
-        mode_label = f"season {used[0]}/{used[0]+1}"
-    else:
-        mode_label = (f"mean of {len(used)} seasons: "
-                      + ", ".join(f"{u}/{u+1}" for u in used))
+    mode_label = format_used_seasons(used, stat="mean")
     print(f"\n  Using {len(used)} season(s): {used}")
 
     if sec["land_edge"] is not None:
