@@ -5,8 +5,9 @@ One panel per surface class from ``surface_classification.py`` -- land, coastal,
 open ocean, marginal ice, sea ice -- plus a sixth panel for the single ERA5 grid
 cell holding the DOE ARM facility at Utqiagvik. Inside each panel the bars are
 stacked by cloud phase from ``cloud_classification.py``: liquid-only clouds at
-the bottom, mixed-phase on top, so the full bar height is "a cloud containing
-liquid" and the split says how much of it also carried ice.
+the bottom, mixed-phase on top. The two are defined by four INDEPENDENT
+thresholds (see CLOUD PHASE) and are guaranteed not to overlap, so the bar
+height is exactly their sum -- and, deliberately, not every cloud is in one.
 
 The figure answers, for each surface type: over a season, how many hours does a
 grid cell of that type spend under a liquid-bearing cloud, and how is that time
@@ -20,8 +21,8 @@ binned:
     linear   equal-width bins, 0 to --lwp-lin-max g m-2. Reads like a physical
              axis and is directly comparable to a linear-axis figure from a
              ground site, but puts most of the winter population in bar 1.
-    log      log-spaced bins, by default from --lwp-min (the liquid-bearing
-             floor, below which there is nothing to draw) to --lwp-log-max.
+    log      log-spaced bins, by default from the lower of the two LWP floors
+             (below which nothing is drawn at all) to --lwp-log-max.
              Resolves the low-LWP end, where the midwinter population lives.
 
 Both are drawn from the SAME cell-hours -- only the bin edges differ -- so bar
@@ -75,22 +76,53 @@ before anything is read.
 
 CLOUD PHASE
 ===========
-Masks come from ``cloud_classification.cloud_phase_masks``, applied to scenes
-that already pass the cloud-cover test:
+The two drawn categories have INDEPENDENT thresholds -- four numbers, not two --
+because they answer different questions. Masks come from
+``cloud_classification.liquid_mixed_masks``, applied to scenes that already pass
+the cloud-cover test:
 
-    cloudy         tcc >= --min-cloud-fraction       (default 1.0, overcast)
-    liquid-bearing cloudy and LWP > --lwp-min        (default 5 g m-2)
-      liquid only    ... and IWP < --iwp-min         the lower stack segment
-      mixed phase    ... and IWP > --iwp-min         the upper stack segment
-    ice only       cloudy and IWP > --iwp-min and LWP < --lwp-max-ice
+    cloudy        tcc >= --min-cloud-fraction        (default 1.0, overcast)
+    liquid only   cloudy and LWP > --liquid-lwp-min  (5) and IWP < --liquid-iwp-max (1)
+    mixed phase   cloudy and LWP > --mixed-lwp-min   (1) and IWP > --mixed-iwp-min  (1)
+    ice only      cloudy and IWP > --mixed-iwp-min   and LWP < --lwp-max-ice (0.001)
+    neither       cloudy and none of the above
 
-The full height of a bar is the liquid-bearing hours; the colour split is the
-single ice threshold --iwp-min. The two segments therefore PARTITION the bar and
-sum to the total printed in the panel title, which is the only way a stacked bar
-can be read honestly. (``cloud_classification`` leaves a deliberate gap between
-its liquid ceiling and its mixed floor; ``--iwp-max-liquid`` reopens that gap
-here if you want it, and the hours that fall into it are then reported rather
-than silently lost between the segments.)
+"Liquid only" is a claim about a deck that is radiatively liquid: it wants a
+SUBSTANTIAL liquid path and ice near enough to absent to be negligible. "Mixed
+phase" only claims both species are present, so a low floor on each is right.
+Tying them to one shared floor, as ``cloud_phase_masks`` does, makes one of the
+two answer the wrong question.
+
+THE ONE CONSTRAINT BETWEEN THEM
+-------------------------------
+    --liquid-iwp-max <= --mixed-iwp-min
+
+and nothing else. Writing the categories as sets,
+
+    liquid only = {LWP > a} and {IWP < b}
+    mixed phase = {LWP > c} and {IWP > d}
+
+their intersection is ``{LWP > max(a, c)} and {d < IWP < b}``. LWP is unbounded
+above, so the first factor is NEVER empty: the LWP floors cannot separate the
+categories however far apart they are set, and disjointness rests entirely on
+the IWP axis. VERIFIED by exhaustive sweep in
+``cloud_classification.check_liquid_mixed_disjoint``, which raises rather than
+let a scene be counted twice. Equality is allowed and is the tightest useful
+setting.
+
+NOT EXHAUSTIVE, AND THE REMAINDER IS REPORTED
+---------------------------------------------
+The two categories deliberately do not cover every cloud. At the defaults a
+scene with LWP 3 and IWP 0.5 g m-2 is too thin for "liquid only" and too dry for
+"mixed phase", and belongs to neither. That population is real cloud, not error,
+and it is large: over the Barrow strip in Oct-Mar it runs 60-655 hours a season
+depending on the surface class. The report gives it a column of its own, and
+liquid + mixed + ice + neither is CHECKED to reconstruct the cloudy hours
+exactly, with the residual printed.
+
+Because of that, a bar's full height is "liquid + mixed" and the panel title
+says exactly that. It is NOT "all liquid-bearing cloud", and calling it that
+would quietly hide the remainder.
 
 Ice-only scenes are NOT drawn. An ice cloud has no liquid water path to bin, so
 every one of them would pile into the first bar and say nothing about LWP. They
@@ -99,15 +131,18 @@ ice-only is exactly the context the figure lacks.
 
 WHY THE THRESHOLD DEFAULTS ARE NOT cloud_classification's
 ---------------------------------------------------------
-``cloud_classification`` defaults --lwp-min and --iwp-min to 0.03 g m-2, ERA5's
-trace quantum. At that level essentially every overcast Arctic column holds a
-trace of both species, so "mixed phase" degenerates into "overcast" and the
-stack collapses to one colour. MEASURED, Barrow strip, season 2020/21, open
-ocean: of 3,546 overcast hours per cell, 3,446 classified as mixed and 96 as
-liquid only. This script therefore defaults both floors to 5 g m-2, the value
-``plot_surface_class_timeseries.py`` already uses for the same purpose. Raise
---lwp-min to 10-25 to sit near a microwave radiometer's detection floor if the
-figure is going to be compared against a ground-based retrieval.
+``cloud_classification.cloud_phase_masks`` defaults its floors to 0.03 g m-2,
+about ERA5's trace quantum (see ERA5_TYPICAL_PATH_QUANTUM_G below -- the quantum
+is per-field and runs 0.015 to 0.061 g m-2 across this archive, so "the" trace
+level is a range, not a number). At that level essentially every overcast Arctic
+column holds a trace of both species, so "mixed phase" degenerates into
+"overcast" and the stack collapses to one colour. MEASURED, Barrow strip,
+November 2022, tcc >= 0.99: of the overcast columns with LWP > 0.031 g m-2,
+99.92% carry at least two quanta of ice, leaving "liquid only" with 0.08% of the
+drawn hours -- one or two hours a season. ``phase_split_warning`` now catches
+that at run time and says so on the figure. Raise --liquid-lwp-min to 10-25 to
+sit near a microwave radiometer's detection floor when comparing against a
+ground-based retrieval.
 
 Note the two cloud-cover conventions in this directory. ``cloud_classification``
 defines ``cloudy`` as ``tcc > --cloudy-threshold`` with a 0.5 default; the SEB
@@ -150,10 +185,12 @@ Season and years
                              anyway, with a warning.
 
 Cloud phase (all in g m-2)
--------------------------
---lwp-min G                  Liquid-bearing floor, the full bar (default 5).
---iwp-min G                  Mixed-phase floor, the colour split (default 5).
---iwp-max-liquid G           Liquid-only ceiling (default: equal to --iwp-min).
+--------------------------
+--liquid-lwp-min G           Liquid-only LWP floor (default 5).
+--liquid-iwp-max G           Liquid-only IWP ceiling (default 1).
+--mixed-lwp-min G            Mixed-phase LWP floor (default 1).
+--mixed-iwp-min G            Mixed-phase IWP floor (default 1).
+                             Requires --liquid-iwp-max <= --mixed-iwp-min.
 --lwp-max-ice G              Ice-only ceiling (default 0.001). Report only.
 --min-cloud-fraction F       Cloud cover for a cloudy scene (default 1.0).
 
@@ -161,7 +198,7 @@ Binning
 -------
 --lwp-lin-max G              Top of the linear axis (default 600).
 --lwp-lin-bins N             Linear bins below it (default 24, i.e. 25 g m-2).
---lwp-log-min G              First log edge (default: equal to --lwp-min).
+--lwp-log-min G              First log edge (default: the lower LWP floor).
 --lwp-log-max G              Last log edge (default 1000).
 --lwp-log-bins N             Log bins between them (default 12).
 --bin-scale {linear,log,both}  Which copies to write (default both).
@@ -172,7 +209,7 @@ Examples
     ./plot_lwp_histogram_by_surface_class.py --region barrow --years 2015-2025
 
     ./plot_lwp_histogram_by_surface_class.py --region barrow --years 2015-2025 \
-        --season-start 11-01 --season-end 02-28 --lwp-min 5
+        --season-start 11-01 --season-end 02-28 --liquid-lwp-min 25
 
 Requires the mask from ``download_era5_land_sea_mask.py`` for the region.
 """
@@ -180,6 +217,7 @@ Requires the mask from ``download_era5_land_sea_mask.py`` for the region.
 from __future__ import annotations
 
 import argparse
+import calendar
 import sys
 import warnings
 from pathlib import Path
@@ -188,10 +226,21 @@ from types import SimpleNamespace
 import numpy as np
 
 from cloud_classification import (
+    DEFAULT_ICE_FRACTION_MIN,
+    DEFAULT_LIQUID_FRACTION_MIN,
+    DEFAULT_LIQUID_IWP_MAX_G,
+    DEFAULT_LIQUID_LWP_MIN_G,
     DEFAULT_LWP_MAX_ICE_G,
+    DEFAULT_MIN_IWP_G,
+    DEFAULT_MIN_LWP_G,
+    DEFAULT_MIXED_IWP_MIN_G,
+    DEFAULT_MIXED_LWP_MIN_G,
     PHASE_COLORS,
     PHASE_LABELS,
-    cloud_phase_masks,
+    check_fraction_thresholds_disjoint,
+    check_liquid_mixed_disjoint,
+    fraction_phase_masks,
+    liquid_mixed_masks,
 )
 from seb_analysis_common import (
     add_data_source_args,
@@ -218,6 +267,7 @@ from surface_classification import (
 # which cell Utqiagvik is or which seasons a given --years selects.
 from plot_surface_class_timeseries import (
     SITE_COLOR,
+    SITE_KEY,
     SITE_LABEL,
     SITE_LAT,
     SITE_LON,
@@ -238,44 +288,144 @@ REQUIRED_VARS = ("tcc", "tclw", "tciw", "siconc")
 # Phases drawn, in stack order from the bottom. "ice" is accumulated as well but
 # never plotted -- it has no liquid water path to bin. See the module docstring.
 PHASE_STACK: tuple[str, ...] = ("liquid", "mixed")
-PHASE_ORDER_ACC: tuple[str, ...] = ("liquid", "mixed", "ice")
+
+# "none" is every cloudy hour matching no category. Accumulating it explicitly,
+# rather than inferring it by subtraction, makes liquid + mixed + ice + none ==
+# cloudy an INVARIANT the run can assert instead of an assumption -- and with
+# four independent thresholds that population is no longer a rounding-level
+# curiosity. At the defaults it is every cloud holding 1-5 g m-2 of liquid and
+# almost no ice: too thin for "liquid only", too dry for "mixed".
+PHASE_ORDER_ACC: tuple[str, ...] = ("liquid", "mixed", "ice", "none")
 
 # Cloud-cover gate, matching plot_surface_class_timeseries.py and
 # analyze_cloud_liquid_frequency.py rather than cloud_classification's
 # --cloudy-threshold. See the module docstring.
 DEFAULT_MIN_CLOUD_FRACTION = 1.0
 
-# Phase thresholds, g m-2. These are the SEMANTICS of cloud_classification.py --
-# the masks come from its cloud_phase_masks -- but not its defaults, and the
-# departure is deliberate on both counts.
+# Phase thresholds, g m-2. The masks come from
+# ``cloud_classification.liquid_mixed_masks``, which takes FOUR independent
+# numbers so the two drawn categories can be defined on their own terms:
 #
-# 1. 5 g m-2 rather than the 0.03 g m-2 trace quantum. MEASURED on the Barrow
-#    strip, season 2020/21, at the trace defaults: of 3,546 overcast hours per
-#    cell over open ocean, 3,446 came out MIXED and 96 liquid-only. ERA5 carries
-#    a trace of both species in nearly every overcast column, so a trace-level
-#    ice floor makes "mixed phase" mean "overcast", the stack collapses to one
-#    colour, and the figure loses the distinction it exists to draw. 5 g m-2 is
-#    the value plot_surface_class_timeseries.py already uses for the same job.
-# 2. The liquid-only CEILING is tied to the mixed-phase FLOOR (see
-#    resolve_phase_thresholds). cloud_classification leaves a deliberate gap
-#    between them, which is right when classifying every scene into three
-#    labelled bins and wrong here: a stacked bar whose segments do not partition
-#    the population it is labelled with silently drops hours between the
-#    segments and the total printed above them.
-DEFAULT_LWP_MIN_G = 5.0
-DEFAULT_IWP_MIN_G = 5.0
+#     liquid only   LWP > --liquid-lwp-min  and  IWP < --liquid-iwp-max
+#     mixed phase   LWP > --mixed-lwp-min   and  IWP > --mixed-iwp-min
+#
+# The two questions are not symmetric, which is why they need separate floors.
+# "Liquid only" is a claim about a deck that is radiatively liquid, so it wants
+# a substantial liquid path AND ice near enough to absent to be negligible.
+# "Mixed phase" only claims both species are present, so a low floor on each is
+# right. Forcing them onto one shared floor, as ``cloud_phase_masks`` does,
+# makes one of the two answer the wrong question.
+#
+# NOT the trace defaults. cloud_classification uses 0.03 g m-2, ERA5's
+# quantisation scale, at which essentially every overcast Arctic column holds a
+# trace of both species: MEASURED, Barrow strip, November 2022, tcc >= 0.99,
+# 99.92% of columns with LWP > 0.031 carry at least two quanta of ice, so
+# "liquid only" collapses to one or two hours a season and the stack becomes a
+# single colour. See phase_split_warning, which now catches that at runtime.
+DEFAULT_LIQUID_LWP_MIN = DEFAULT_LIQUID_LWP_MIN_G    # 5.0
+DEFAULT_LIQUID_IWP_MAX = DEFAULT_LIQUID_IWP_MAX_G    # 1.0
+DEFAULT_MIXED_LWP_MIN = DEFAULT_MIXED_LWP_MIN_G      # 1.0
+DEFAULT_MIXED_IWP_MIN = DEFAULT_MIXED_IWP_MIN_G      # 1.0
 
-# ERA5 packs tclw/tciw with a GRIB binary scale factor of 2**-15 kg m-2, so the
-# smallest non-zero path the archive can express is this. An ice threshold set
-# within a quantum or two of it does not separate "no ice" from "some ice" -- it
-# separates "literally zero ice" from everything else, and in an overcast Arctic
-# column that essentially never happens. MEASURED, Barrow strip, November 2022,
-# tcc >= 0.99, LWP > 0.031 g m-2: 99.92% of those cell-hours carry at least two
-# quanta of ice, so a 0.031 g m-2 ice threshold leaves "liquid only" holding
-# 0.08% of the liquid-bearing hours -- one or two hours a season.
-ERA5_PATH_QUANTUM_G = 2.0 ** -15 * 1000.0        # 0.0305176 g m-2
+# Ice-only gets its own IWP floor rather than borrowing the mixed-phase one.
+# "How much ice makes a cloud an ice cloud" and "how much ice makes a liquid
+# cloud mixed" are separate judgements, and nothing forces them to agree. The
+# default keeps them equal, so behaviour is unchanged unless it is set.
+DEFAULT_ICE_IWP_MIN = DEFAULT_MIXED_IWP_MIN_G        # 1.0
 
-# A stacked segment below this share of the liquid-bearing hours has collapsed:
+# ---------------------------------------------------------------------------
+# The FRACTION scheme (--phase-mode fraction)
+# ---------------------------------------------------------------------------
+# Classify on each species' share of the cloud water path CWP = LWP + IWP
+# instead of on absolute magnitudes:
+#
+#     liquid only   LWP/CWP >= --liquid-fraction-min   (default 0.90)
+#     ice only      IWP/CWP >= --ice-fraction-min      (default 0.90)
+#     mixed phase   everything else holding cloud water
+#
+# Exhaustive and disjoint by construction, so there is no "neither" population
+# beyond scenes carrying no cloud water at all -- which is the scheme's main
+# advantage over the absolute one, and why it needs no gap accounting. The
+# minimum paths are what keep the ratio off numerical dust: a scene with
+# 0.05 g m-2 of liquid and nothing else is 100% liquid by share, and without a
+# floor would be reported as a liquid cloud.
+DEFAULT_LIQUID_FRACTION = DEFAULT_LIQUID_FRACTION_MIN   # 0.90
+DEFAULT_ICE_FRACTION = DEFAULT_ICE_FRACTION_MIN         # 0.90
+DEFAULT_MIN_LWP = DEFAULT_MIN_LWP_G                     # 0.1 g m-2
+DEFAULT_MIN_IWP = DEFAULT_MIN_IWP_G                     # 0.1 g m-2
+
+# ---------------------------------------------------------------------------
+# The --min-lwp SWEEP (fraction mode only)
+# ---------------------------------------------------------------------------
+# How much of the phase split is a property of the atmosphere and how much is a
+# property of the threshold? The only honest answer is to vary the threshold and
+# look. Every value in the sweep is classified in the SAME streaming pass as the
+# nominal one, so the sensitivity costs one archive read rather than N of them --
+# which, at nine minutes a read, is the difference between a routine check and
+# one nobody runs.
+#
+# Fraction mode only. In absolute mode there is no single "the minimum LWP":
+# liquid-only and mixed-phase carry separate floors, and sweeping them together
+# would change what the categories mean rather than how sensitive they are.
+DEFAULT_SWEEP_LWP_MIN = 0.05      # g m-2
+DEFAULT_SWEEP_LWP_MAX = 20.0      # g m-2
+DEFAULT_SWEEP_POINTS = 21         # linearly spaced: 0.05, ~1.05, ~2.05, ... 20
+
+# MEASURED: over the Barrow strip the phase split barely moves below about
+# 1 g m-2 -- the curves are flat from 0.05 to 1 -- and does nearly all of its
+# moving between 1 and 20. Log spacing put two thirds of its points, and two
+# thirds of the axis, in the flat part. Linear spacing puts the resolution where
+# the answer actually changes. ``--sweep-spacing log`` restores the old
+# behaviour, which is still the better choice for looking at the region where
+# the threshold is fighting ERA5's own quantisation (below ~0.1 g m-2).
+DEFAULT_SWEEP_SPACING = "linear"
+SWEEP_SPACINGS: tuple[str, ...] = ("linear", "log")
+
+# Phase labels the sweep accumulates, in the order it stores them. "none" is
+# carried so the four still partition the overcast hours and the partition can
+# be checked, even though only the first three are drawn.
+SWEEP_PHASES: tuple[str, ...] = ("liquid", "ice", "mixed", "none")
+SWEEP_DRAWN: tuple[str, ...] = ("liquid", "ice", "mixed")
+
+# Class axis of the sweep accumulator: the five classes, then UNCLASSIFIED. This
+# is a genuine partition of every cell, which is what lets one np.bincount fill
+# all six at once; "all cells" is then their sum, exactly, with no assumption
+# that unclassified is empty.
+N_SWEEP_CLASS = len(CLASS_ORDER) + 1
+SWEEP_UNCLASSIFIED_SLOT = len(CLASS_ORDER)
+
+PHASE_MODES: tuple[str, ...] = ("absolute", "fraction")
+DEFAULT_PHASE_MODE = "absolute"
+
+# ERA5's condensate paths are quantised, because GRIB stores them with a binary
+# scale factor. NOTE 2**-15 is TWO TO THE POWER OF MINUS FIFTEEN -- 1/32768, or
+# 3.05e-5 kg m-2 -- not 2e-15; the Python operator is easy to misread as
+# scientific notation, and the difference is ten orders of magnitude.
+#
+# The scale factor is chosen PER FIELD, so the quantum is not one fixed number
+# the way cloud_classification.py's note implies. MEASURED over all 641 barrow
+# files carrying tciw:
+#
+#     2**-14 kg m-2 = 0.0610 g m-2      1 file
+#     2**-15 kg m-2 = 0.0305 g m-2    617 files
+#     2**-16 kg m-2 = 0.0153 g m-2     23 files
+#
+# so the finest path this archive actually expresses is 0.0153 g m-2, half the
+# usually-quoted figure, and a threshold meant to drop "the single-quantum
+# population" drops a different number of quanta depending on which file the
+# hour came from.
+#
+# The common value below is the SCALE for the degeneracy test only, where what
+# matters is the order of magnitude. An ice threshold within a quantum or two of
+# it does not separate "no ice" from "some ice" -- it separates "literally zero
+# ice" from everything else, which in an overcast Arctic column essentially
+# never happens. MEASURED, Barrow strip, November 2022, tcc >= 0.99,
+# LWP > 0.031 g m-2: 99.92% of those cell-hours carry at least two quanta of
+# ice, so a 0.031 g m-2 ice threshold leaves "liquid only" holding 0.08% of the
+# drawn hours -- one or two hours a season.
+ERA5_TYPICAL_PATH_QUANTUM_G = 2.0 ** -15 * 1000.0    # 0.0305176 g m-2
+
+# A stacked segment below this share of the drawn hours has collapsed:
 # the figure is one colour and the split conveys nothing. Not an error -- the
 # thresholds were honoured exactly -- so it is reported, not raised.
 DEGENERATE_SEGMENT_SHARE = 0.01
@@ -284,9 +434,9 @@ DEGENERATE_SEGMENT_SHARE = 0.01
 # 25 g m-2 steps; the log set matches analyze_cloud_liquid_frequency.py.
 DEFAULT_LWP_LIN_MAX_G = 600.0
 DEFAULT_LWP_LIN_BINS = 24
-# None means "start the log axis at --lwp-min". Below that floor there are no
-# liquid-bearing hours by definition, so a fixed 0.1 g m-2 default would spend
-# most of the axis on bins that cannot contain anything.
+# None means "start the log axis at the lower of the two LWP floors". Below
+# that there is nothing to draw by definition, so a fixed 0.1 g m-2 default
+# would spend most of the axis on bins that cannot contain anything.
 DEFAULT_LWP_LOG_MIN_G = None
 DEFAULT_LWP_LOG_MAX_G = 1000.0
 DEFAULT_LWP_LOG_BINS = 12
@@ -307,51 +457,211 @@ DEFAULT_LAYOUT = (2, 3)
 # ----------------------------------------------------------------------------
 # Cloud phase
 # ----------------------------------------------------------------------------
-def resolve_phase_thresholds(args) -> dict:
-    """The four thresholds actually handed to ``cloud_phase_masks``, in g m-2.
+def sweep_lwp_values(lo_g: float, hi_g: float, n: int,
+                     spacing: str = DEFAULT_SWEEP_SPACING) -> np.ndarray:
+    """Minimum-LWP values for the sweep, in g m-2.
 
-    ``--iwp-max-liquid`` defaults to ``--iwp-min`` rather than to
-    cloud_classification's near-zero ceiling, so that
+    Linear by default -- see DEFAULT_SWEEP_SPACING for the measurement behind
+    that choice. ``spacing="log"`` resolves the sub-0.1 g m-2 region instead,
+    where the threshold interacts with ERA5's quantisation rather than with the
+    cloud.
 
-        liquid only   LWP > --lwp-min  and  IWP < --iwp-min
-        mixed phase   LWP > --lwp-min  and  IWP > --iwp-min
-
-    PARTITION the liquid-bearing hours between them. That is what lets a stacked
-    bar be read as a whole: its two segments sum to the total in the panel title
-    with nothing lost in between. Passing ``--iwp-max-liquid`` explicitly
-    reopens the gap, and the hours that fall into it are then reported.
-
-    An hour with IWP EXACTLY equal to the threshold belongs to neither, since
-    both tests are strict. ERA5 quantises the paths to multiples of
-    2**-15 kg m-2 = 0.0305176 g m-2, and 5 g m-2 is not one of them, so at the
-    default this cannot happen; at a threshold that IS on the quantisation grid
-    it costs at most one quantum's worth of hours.
-
-    ``--lwp-max-ice`` is left at cloud_classification's near-zero default, so
-    the ice-only population the report prints means "not a single quantum of
-    liquid" rather than "less liquid than the mixed-phase floor".
+    A lower bound of exactly 0 is allowed under linear spacing and means "any
+    non-zero liquid counts", which is a meaningful left anchor for the axis.
+    Log spacing cannot start there.
     """
-    return {
-        "lwp_min_g": float(args.lwp_min),
-        "iwp_min_g": float(args.iwp_min),
-        "lwp_max_ice_g": float(args.lwp_max_ice),
-        "iwp_max_liquid_g": float(args.iwp_min if args.iwp_max_liquid is None
-                                  else args.iwp_max_liquid),
+    if spacing not in SWEEP_SPACINGS:
+        raise ValueError(f"unknown sweep spacing {spacing!r}; "
+                         f"choose from {list(SWEEP_SPACINGS)}")
+    if hi_g <= lo_g or n < 2:
+        raise ValueError("need sweep min < sweep max and at least 2 points")
+    if spacing == "log":
+        if lo_g <= 0:
+            raise ValueError("log sweep spacing needs a sweep min above 0; "
+                             "use --sweep-spacing linear to start at 0")
+        return np.geomspace(float(lo_g), float(hi_g), int(n))
+    if lo_g < 0:
+        raise ValueError("sweep min cannot be negative")
+    return np.linspace(float(lo_g), float(hi_g), int(n))
+
+
+def month_window_hours(slots: list[tuple[int, int]]) -> np.ndarray:
+    """Hours the season window contains in each of its calendar months.
+
+    Counted from the day-slots actually in the window, not from the calendar, so
+    a window that starts mid-month gives that month its true partial length
+    rather than a full one. This is the denominator that turns a monthly
+    occupancy fraction into hours per month.
+    """
+    months, mi_of_slot = season_month_axis(slots)
+    out = np.zeros(len(months))
+    for mi in mi_of_slot:
+        out[mi] += 24.0
+    return out
+
+
+def resolve_phase_thresholds(args) -> dict:
+    """Validated thresholds for whichever ``--phase-mode`` is selected.
+
+    The returned dict always carries ``"mode"``; every consumer branches on it
+    rather than sniffing which keys are present, so adding a third scheme later
+    does not require finding all the places that guessed.
+
+    ABSOLUTE mode raises via ``check_liquid_mixed_disjoint`` when liquid-only
+    and mixed-phase would overlap. The whole condition is
+    ``--liquid-iwp-max <= --mixed-iwp-min``: the categories are separated on the
+    IWP axis alone, because LWP is unbounded above and no pair of LWP floors can
+    pull them apart. ``--lwp-max-ice`` is validated separately, against the two
+    LWP floors, so an ice-only scene can never also be a drawn one.
+
+    FRACTION mode raises via ``check_fraction_thresholds_disjoint`` unless
+    ``--liquid-fraction-min + --ice-fraction-min > 1``. Nothing else needs
+    checking there: the three categories partition the water-bearing scenes by
+    construction.
+    """
+    mode = getattr(args, "phase_mode", DEFAULT_PHASE_MODE)
+    if mode not in PHASE_MODES:
+        raise ValueError(f"unknown --phase-mode {mode!r}; "
+                         f"choose from {list(PHASE_MODES)}")
+
+    if mode == "fraction":
+        kw = {
+            "mode": "fraction",
+            "liquid_fraction_min": float(args.liquid_fraction_min),
+            "ice_fraction_min": float(args.ice_fraction_min),
+            "min_lwp_g": float(args.min_lwp),
+            "min_iwp_g": float(args.min_iwp),
+        }
+        check_fraction_thresholds_disjoint(kw["liquid_fraction_min"],
+                                           kw["ice_fraction_min"])
+        return kw
+
+    kw = {
+        "mode": "absolute",
+        "liquid_lwp_min_g": float(args.liquid_lwp_min),
+        "liquid_iwp_max_g": float(args.liquid_iwp_max),
+        "mixed_lwp_min_g": float(args.mixed_lwp_min),
+        "mixed_iwp_min_g": float(args.mixed_iwp_min),
+        "ice_iwp_min_g": float(args.ice_iwp_min),
     }
+    check_liquid_mixed_disjoint(kw["liquid_iwp_max_g"], kw["mixed_iwp_min_g"])
+
+    lwp_max_ice = float(args.lwp_max_ice)
+    lowest_drawn_floor = min(kw["liquid_lwp_min_g"], kw["mixed_lwp_min_g"])
+    if lwp_max_ice > lowest_drawn_floor:
+        raise ValueError(
+            f"--lwp-max-ice {lwp_max_ice:g} exceeds the lowest liquid floor "
+            f"{lowest_drawn_floor:g} g m-2, so an 'ice only' scene could also "
+            f"be drawn as liquid only or mixed phase and would be counted "
+            f"twice. Lower --lwp-max-ice below both LWP floors."
+        )
+    kw["lwp_max_ice_g"] = lwp_max_ice
+    return kw
+
+
+def phase_masks(lwp_g, iwp_g, phase_kw: dict) -> dict:
+    """Every accumulated category, mutually exclusive and jointly exhaustive.
+
+    Dispatches on ``phase_kw["mode"]``. The three named categories come from the
+    shared module either way; ``none`` is built here as the remainder by
+    CONSTRUCTION -- everything the other three did not claim -- so the four
+    always partition the cloudy hours and the report's columns are guaranteed to
+    add up whichever scheme is in use.
+
+    In fraction mode ``none`` is exactly the scenes carrying no cloud water
+    above the minimum paths, since the other three are already exhaustive over
+    those that do.
+    """
+    finite = np.isfinite(lwp_g) & np.isfinite(iwp_g)
+
+    if phase_kw["mode"] == "fraction":
+        f = fraction_phase_masks(
+            lwp_g, iwp_g,
+            phase_kw["liquid_fraction_min"], phase_kw["ice_fraction_min"],
+            phase_kw["min_lwp_g"], phase_kw["min_iwp_g"],
+        )
+        out = {"liquid": f["liquid"], "mixed": f["mixed"], "ice": f["ice"]}
+    else:
+        drawn = liquid_mixed_masks(
+            lwp_g, iwp_g,
+            phase_kw["liquid_lwp_min_g"], phase_kw["liquid_iwp_max_g"],
+            phase_kw["mixed_lwp_min_g"], phase_kw["mixed_iwp_min_g"],
+        )
+        with np.errstate(invalid="ignore"):
+            ice = (finite & (iwp_g > phase_kw["ice_iwp_min_g"])
+                          & (lwp_g < phase_kw["lwp_max_ice_g"]))
+        out = {"liquid": drawn["liquid"], "mixed": drawn["mixed"], "ice": ice}
+
+    out["none"] = finite & ~out["liquid"] & ~out["mixed"] & ~out["ice"]
+    return out
+
+
+def lowest_drawn_lwp(phase_kw: dict) -> float:
+    """Smallest LWP any drawn category can hold, for the log axis floor.
+
+    Below it the log axis has nothing to show, by definition rather than by
+    accident. In fraction mode that is the liquid minimum path: a scene whose
+    liquid is under it contributes no LWP at all, so the lowest LWP that can
+    appear on the figure is that floor.
+    """
+    if phase_kw["mode"] == "fraction":
+        return float(phase_kw["min_lwp_g"])
+    return float(min(phase_kw["liquid_lwp_min_g"], phase_kw["mixed_lwp_min_g"]))
+
+
+def phase_definition_label(phase_kw: dict, mathtext: bool = True) -> str:
+    """One-line statement of what the categories mean, for a figure subtitle."""
+    u = "g m$^{-2}$" if mathtext else "g m-2"
+    pk = phase_kw
+    if pk["mode"] == "fraction":
+        return (f"liquid only: LWP/CWP $\\geq$ {pk['liquid_fraction_min']:g}   |   "
+                f"ice only: IWP/CWP $\\geq$ {pk['ice_fraction_min']:g}   |   "
+                f"mixed: the rest   |   CWP = LWP + IWP above "
+                f"{pk['min_lwp_g']:g}/{pk['min_iwp_g']:g} {u}"
+                if mathtext else
+                f"liquid only: LWP/CWP >= {pk['liquid_fraction_min']:g} | "
+                f"ice only: IWP/CWP >= {pk['ice_fraction_min']:g} | "
+                f"mixed: the rest | CWP = LWP + IWP above "
+                f"{pk['min_lwp_g']:g}/{pk['min_iwp_g']:g} {u}")
+    return (f"liquid only: LWP > {pk['liquid_lwp_min_g']:g}, IWP < "
+            f"{pk['liquid_iwp_max_g']:g}   |   "
+            f"mixed: LWP > {pk['mixed_lwp_min_g']:g}, IWP > "
+            f"{pk['mixed_iwp_min_g']:g} {u}"
+            if mathtext else
+            f"liquid only: LWP > {pk['liquid_lwp_min_g']:g} and IWP < "
+            f"{pk['liquid_iwp_max_g']:g} | mixed: LWP > "
+            f"{pk['mixed_lwp_min_g']:g} and IWP > {pk['mixed_iwp_min_g']:g} {u}")
+
+
+def ice_definition_label(phase_kw: dict, mathtext: bool = True) -> str:
+    """How the ice-only category is defined, which the two modes state very differently."""
+    u = "g m$^{-2}$" if mathtext else "g m-2"
+    pk = phase_kw
+    if pk["mode"] == "fraction":
+        return (f"ice only: IWP/CWP $\\geq$ {pk['ice_fraction_min']:g}"
+                if mathtext else f"ice only: IWP/CWP >= {pk['ice_fraction_min']:g}")
+    return (f"ice only: IWP > {pk['ice_iwp_min_g']:g}, LWP < "
+            f"{pk['lwp_max_ice_g']:g} {u}")
 
 
 def phase_split_warning(col: dict) -> str | None:
     """Message naming a collapsed stack segment, or None when the split is real.
 
-    Guards the one failure mode of this figure that produces a plausible-looking
-    picture rather than an error: an ice threshold so close to ERA5's own
-    quantisation floor that "liquid only" means "not a single quantum of ice",
-    which nearly nothing satisfies. The bars are then a single colour and the
-    legend reports a handful of hours, with no indication that the threshold and
-    not the atmosphere is responsible.
+    Guards the one failure mode of the histogram that produces a
+    plausible-looking picture rather than an error: thresholds under which one
+    of the two STACKED categories is empty in practice. The bars then read as a
+    single colour and the legend reports a handful of hours, with nothing to say
+    that the thresholds and not the atmosphere are responsible.
 
-    Summed over the five classes only. The ARM site cell is inside one of them,
-    so including it would count its hours twice.
+    The classic absolute-mode case is an ice ceiling near ERA5's quantisation
+    scale, where "liquid only" comes to mean "not a single quantum of ice" -- a
+    condition almost no overcast Arctic column meets. See
+    ERA5_TYPICAL_PATH_QUANTUM_G. In fraction mode the equivalent is a liquid
+    share cut so close to 1 that any trace of ice disqualifies a cloud, which is
+    why --min-iwp matters as much as --liquid-fraction-min there.
+
+    Summed over the five surface classes only. The ARM site cell sits inside one
+    of them, so including it would count its hours twice.
     """
     mean_h = col["hours"]["linear"]["mean"]              # (class, phase, bar)
     pk = col["phase_kw"]
@@ -370,16 +680,36 @@ def phase_split_warning(col: dict) -> str | None:
                                ("mixed phase", mix / total, "liquid only")):
         if share >= DEGENERATE_SEGMENT_SHARE:
             continue
-        msg = (f"the '{name}' segment holds {100 * share:.3f}% of the "
-               f"liquid-bearing hours, so the stack is effectively all {other}")
-        if name == "liquid only" and pk["iwp_min_g"] <= 3 * ERA5_PATH_QUANTUM_G:
-            msg += (f". --iwp-min {pk['iwp_min_g']:g} g m-2 is within three "
-                    f"quanta of ERA5's {ERA5_PATH_QUANTUM_G:.4f} g m-2 floor, "
-                    f"so 'liquid only' is asking for literally zero ice. Try "
-                    f"--iwp-min {DEFAULT_IWP_MIN_G:g}")
-        elif name == "mixed phase":
-            msg += (f". --iwp-min {pk['iwp_min_g']:g} g m-2 may be high enough "
-                    f"that almost no cloud reaches it")
+        msg = (f"the '{name}' segment holds {100 * share:.3f}% of the drawn "
+               f"hours, so the stack is effectively all {other}")
+        if pk["mode"] == "fraction":
+            if name == "liquid only":
+                msg += (f". --liquid-fraction-min "
+                        f"{pk['liquid_fraction_min']:g} may be strict enough, "
+                        f"or --min-iwp {pk['min_iwp_g']:g} g m-2 permissive "
+                        f"enough, that a trace of ice disqualifies almost every "
+                        f"cloud. Raising --min-iwp is usually the fix")
+            else:
+                msg += (f". --liquid-fraction-min "
+                        f"{pk['liquid_fraction_min']:g} and --ice-fraction-min "
+                        f"{pk['ice_fraction_min']:g} may between them leave "
+                        f"almost nothing in the middle")
+        elif (name == "liquid only"
+                and pk["liquid_iwp_max_g"] <= 3 * ERA5_TYPICAL_PATH_QUANTUM_G):
+            msg += (f". --liquid-iwp-max {pk['liquid_iwp_max_g']:g} g m-2 is "
+                    f"within three quanta of ERA5's typical "
+                    f"{ERA5_TYPICAL_PATH_QUANTUM_G:.4f} g m-2 quantisation "
+                    f"step, so 'liquid only' is asking for literally zero ice. "
+                    f"Try --liquid-iwp-max {DEFAULT_LIQUID_IWP_MAX:g}")
+        elif name == "liquid only":
+            msg += (f". --liquid-lwp-min {pk['liquid_lwp_min_g']:g} g m-2 may "
+                    f"be high enough, or --liquid-iwp-max "
+                    f"{pk['liquid_iwp_max_g']:g} strict enough, that almost no "
+                    f"cloud qualifies")
+        else:
+            msg += (f". --mixed-iwp-min {pk['mixed_iwp_min_g']:g} or "
+                    f"--mixed-lwp-min {pk['mixed_lwp_min_g']:g} g m-2 may be "
+                    f"high enough that almost no cloud reaches them")
         return msg
     return None
 
@@ -452,7 +782,7 @@ def nice_log_values(lo_g: float, hi_g: float) -> list[float]:
 
     Placed by VALUE rather than by bin edge, because the log edges are only
     round numbers when the range happens to start on a decade. With the default
-    axis running from --lwp-min (5 g m-2) the edges are 5, 7.775, 12.09, ...,
+    axis running from a 5 g m-2 LWP floor the edges are 5, 7.775, 12.09, ...,
     and an edge-based rule labels nothing at all.
     """
     out: list[float] = []
@@ -494,7 +824,7 @@ def bar_ticks(edges_g: np.ndarray, log_spaced: bool, has_underflow: bool):
 
     Labels sit at round LWP VALUES, interpolated onto the bar coordinate by
     ``value_to_bar_x``, rather than at whichever bin edges happen to be round.
-    That keeps the axis readable for any --lwp-min / --lwp-lin-max the caller
+    That keeps the axis readable for any LWP floor / --lwp-lin-max the caller
     picks, instead of only for ranges that start on a decade.
 
     The TOP edge deliberately gets no tick of its own. The overflow bar sits
@@ -556,9 +886,27 @@ def weighted_median_from_bins(counts: np.ndarray, edges_g: np.ndarray) -> float:
 # ----------------------------------------------------------------------------
 # Reduction
 # ----------------------------------------------------------------------------
+def season_month_axis(slots: list[tuple[int, int]]):
+    """Calendar months spanned by the season, and each day-slot's index into it.
+
+    Returns ``(months, mi_of_slot)`` where ``months`` is the ordered list of
+    calendar months the window touches -- [8, 9, 10, 11, 12, 1, 2, 3] for a
+    default Aug-Mar season, in SEASON order rather than calendar order, so
+    January follows December -- and ``mi_of_slot[d]`` is the position in that
+    list of day-of-season ``d``.
+
+    Ordered by first appearance rather than sorted, because a wrapping window
+    would otherwise put January first and draw the season backwards.
+    """
+    slot_month = [m for m, _ in slots]
+    months = list(dict.fromkeys(slot_month))
+    index = {m: i for i, m in enumerate(months)}
+    return months, np.array([index[m] for m in slot_month], dtype=np.intp)
+
+
 def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
                      wanted_idx: list[int], edge_sets: dict,
-                     phase_kw: dict) -> dict:
+                     phase_kw: dict, sweep_values: np.ndarray) -> dict:
     """Accumulate the per-season LWP histograms in one streaming pass.
 
     Both bin scales and every phase are filled from the same blocks, so the
@@ -569,10 +917,11 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
     denominators and diagnostics the report and the figures need.
     """
     slots = layout["slots"]
-    # No day-of-season axis here: the histogram pools the whole window, so
-    # layout["dos"] is only needed via in_window, which already encodes it.
-    s_idx, in_window = layout["s_idx"], layout["in_window"]
+    # The histogram itself pools the whole window, but the monthly bar chart
+    # needs each step's calendar month, so the day-of-season axis is carried.
+    dos, s_idx, in_window = layout["dos"], layout["s_idx"], layout["in_window"]
     uniq_seasons = layout["seasons"]
+    months, mi_of_slot = season_month_axis(slots)
 
     wanted = np.zeros(len(uniq_seasons), dtype=bool)
     wanted[wanted_idx] = True
@@ -583,21 +932,50 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
     # never enters an area share that is meant to sum to 100%.
     site_mask, site_lat, site_lon = site_cell_mask(ds)
     site_code = len(CLASS_ORDER)
-    n_class = len(CLASS_ORDER) + 1
+    # And one more slot for EVERY valid cell, which the monthly bar chart uses
+    # as its default. Accumulated as its own selector rather than summed from
+    # the five classes afterwards, so it stays correct even when some cell-hours
+    # are unclassified and the five do not in fact cover the domain.
+    all_code = len(CLASS_ORDER) + 1
+    n_class = len(CLASS_ORDER) + 2
     n_phase = len(PHASE_ORDER_ACC)
     n_season = len(uniq_seasons)
+    n_month = len(months)
 
     hist = {
         scale: np.zeros((n_season, n_class, n_phase, n_bars(edges)))
         for scale, edges in edge_sets.items()
     }
-    qhist = np.zeros((n_season, n_class, len(QUANTILE_EDGES_G) + 1))
+    # One quantile accumulator PER DRAWN PHASE, so liquid-only and mixed-phase
+    # each get their own median rather than sharing one over the pooled bars.
+    # The two distributions are quite different -- a liquid-only deck is not a
+    # mixed-phase one with the ice removed -- so a single pooled median
+    # describes neither.
+    n_stack = len(PHASE_STACK)
+    qhist = np.zeros((n_season, n_class, n_stack, len(QUANTILE_EDGES_G) + 1))
 
     # Denominators and context, all area-weighted cell-hours.
     w_class = np.zeros((n_season, n_class))       # class present at all
     w_domain = np.zeros(n_season)                 # every cell, every step
     w_cloudy = np.zeros((n_season, n_class))      # class and cloudy
     w_steps = np.zeros(n_season)                  # time steps read per season
+
+    # Month-resolved, for the monthly phase bar chart. The denominator is the
+    # class's own valid cell-hours in that month, so a fraction is an occupancy:
+    # "of the hours a cell of this class existed in October, what share had a
+    # cloud of this phase overhead".
+    w_phase_month = np.zeros((n_season, n_month, n_class, n_phase))
+    w_valid_month = np.zeros((n_season, n_month, n_class))
+
+    # --min-lwp sweep. Filled only in fraction mode -- see the note at
+    # DEFAULT_SWEEP_LWP_MIN for why absolute mode has no single knob to sweep.
+    sweep_lwp = (sweep_values if phase_kw["mode"] == "fraction"
+                 else np.empty(0))
+    n_sweep = sweep_lwp.size
+    n_sph = len(SWEEP_PHASES)
+    w_sweep = np.zeros((n_sweep, n_season, n_month, N_SWEEP_CLASS, n_sph))
+    w_sweep_site = np.zeros((n_sweep, n_season, n_month, n_sph))
+    sweep_phase_index = {p: i for i, p in enumerate(SWEEP_PHASES)}
 
     weights_2d = area_weights_2d(ds["latitude"].values, ds.sizes["longitude"])
     w_per_step = float(weights_2d.sum())
@@ -613,6 +991,8 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
         if not keep.any():
             continue
         si = s_idx[sl][keep]
+        mi = mi_of_slot[dos[sl][keep]]                      # month of each step
+        flat_sm = si * n_month + mi                         # (season, month)
 
         siconc = block["siconc"].values
         classes = classify_cells(
@@ -632,7 +1012,7 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
 
         valid = np.isfinite(tcc) & np.isfinite(tclw_g) & np.isfinite(tciw_g)
         cloudy = valid & (tcc >= args.min_cloud_fraction)
-        phases = cloud_phase_masks(tclw_g, tciw_g, **phase_kw)
+        phases = phase_masks(tclw_g, tciw_g, phase_kw)
 
         w = np.broadcast_to(weights_2d, classes.shape)
         np.add.at(w_domain, si, w_per_step)
@@ -653,19 +1033,65 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
         # difference between minutes and an afternoon.
         si_grid = np.broadcast_to(si[:, None, None], classes.shape)
 
+        # --- the --min-lwp sweep ------------------------------------------
+        # One np.bincount per threshold fills all six class slots at once,
+        # because `classes` is already a partition of every cell. Looping class
+        # by class would cost six times as much for the same numbers.
+        if n_sweep:
+            # UNCLASSIFIED (-1) folded onto its own slot so the six are a true
+            # partition and "all cells" can be their exact sum.
+            cls_idx = np.where(classes < 0, SWEEP_UNCLASSIFIED_SLOT,
+                               classes).astype(np.intp)
+            base = ((si[:, None, None] * n_month + mi[:, None, None])
+                    * N_SWEEP_CLASS + cls_idx) * n_sph
+            w_cloudy_cell = np.where(cloudy, w, 0.0)
+            site_base = (si * n_month + mi) * n_sph
+            w_site_cell = w_cloudy_cell[:, site_mask][:, 0]
+            for ti, thr in enumerate(sweep_lwp):
+                f = fraction_phase_masks(
+                    tclw_g, tciw_g,
+                    phase_kw["liquid_fraction_min"], phase_kw["ice_fraction_min"],
+                    float(thr), phase_kw["min_iwp_g"],
+                )
+                label = np.full(classes.shape, sweep_phase_index["none"],
+                                dtype=np.intp)
+                label[f["liquid"]] = sweep_phase_index["liquid"]
+                label[f["ice"]] = sweep_phase_index["ice"]
+                label[f["mixed"]] = sweep_phase_index["mixed"]
+                w_sweep[ti] += np.bincount(
+                    (base + label).ravel(), weights=w_cloudy_cell.ravel(),
+                    minlength=n_season * n_month * N_SWEEP_CLASS * n_sph,
+                ).reshape(n_season, n_month, N_SWEEP_CLASS, n_sph)
+                w_sweep_site[ti] += np.bincount(
+                    site_base + label[:, site_mask][:, 0],
+                    weights=w_site_cell,
+                    minlength=n_season * n_month * n_sph,
+                ).reshape(n_season, n_month, n_sph)
+
         selectors = [(CLASS_CODES[name], classes == CLASS_CODES[name])
                      for name in CLASS_ORDER]
         selectors.append((site_code, np.broadcast_to(site_mask, classes.shape)))
+        selectors.append((all_code, np.ones(classes.shape, dtype=bool)))
 
         for code, in_class in selectors:
             wc = np.where(in_class & valid, w, 0.0)
             np.add.at(w_class, (si, code), wc.sum(axis=(1, 2)))
             np.add.at(w_cloudy, (si, code), (wc * cloudy).sum(axis=(1, 2)))
 
+            # Monthly occupancy. Reduced over cells first, so the per-step
+            # totals are a short (n_t,) vector and the (season, month) grouping
+            # is one small bincount rather than a pass over the full grid.
+            w_valid_month[:, :, code] += np.bincount(
+                flat_sm, weights=wc.sum(axis=(1, 2)),
+                minlength=n_season * n_month).reshape(n_season, n_month)
+            for pi, phase in enumerate(PHASE_ORDER_ACC):
+                w_phase_month[:, :, code, pi] += np.bincount(
+                    flat_sm, weights=(wc * cloudy * phases[phase]).sum(axis=(1, 2)),
+                    minlength=n_season * n_month).reshape(n_season, n_month)
+
             in_cloud = in_class & cloudy
             if not in_cloud.any():
                 continue
-            liquid_here = np.zeros_like(in_cloud)
             for pi, phase in enumerate(PHASE_ORDER_ACC):
                 sel = in_cloud & phases[phase]
                 if not sel.any():
@@ -679,15 +1105,11 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
                         flat, weights=w_sel, minlength=n_season * n_b
                     ).reshape(n_season, n_b)
                 if phase in PHASE_STACK:
-                    liquid_here |= sel
-
-            if liquid_here.any():
-                s_sel = si_grid[liquid_here]
-                flat = s_sel * n_qbar + qbar[liquid_here]
-                qhist[:, code] += np.bincount(
-                    flat, weights=w[liquid_here],
-                    minlength=n_season * n_qbar,
-                ).reshape(n_season, n_qbar)
+                    qi = PHASE_STACK.index(phase)
+                    flat = s_sel * n_qbar + qbar[sel]
+                    qhist[:, code, qi] += np.bincount(
+                        flat, weights=w_sel, minlength=n_season * n_qbar,
+                    ).reshape(n_season, n_qbar)
 
     return {
         "hist": hist,
@@ -696,6 +1118,14 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
         "w_cloudy": w_cloudy,
         "w_domain": w_domain,
         "w_steps": w_steps,
+        "w_phase_month": w_phase_month,
+        "w_valid_month": w_valid_month,
+        "w_sweep": w_sweep,
+        "w_sweep_site": w_sweep_site,
+        "sweep_lwp": sweep_lwp,
+        "sweep_spacing": getattr(args, "sweep_spacing", DEFAULT_SWEEP_SPACING),
+        "months": months,
+        "all_code": all_code,
         "slots": slots,
         "seasons": uniq_seasons,
         "site_code": site_code,
@@ -743,16 +1173,88 @@ def to_hours_per_season(sec: dict, keep_idx: list[int], edge_sets: dict) -> dict
     # unlike the bars above, which give every season equal weight. With seasons
     # at 95-100% coverage the two agree closely; they would not for a season
     # half missing, which --min-season-coverage is there to exclude.
-    q_pooled = sec["qhist"][keep_idx].sum(axis=0)          # (class, qbar)
+    q_pooled = sec["qhist"][keep_idx].sum(axis=0)          # (class, phase, qbar)
     median_lwp_g = np.array([
-        weighted_median_from_bins(q_pooled[c], QUANTILE_EDGES_G)
+        [weighted_median_from_bins(q_pooled[c, i], QUANTILE_EDGES_G)
+         for i in range(q_pooled.shape[1])]
         for c in range(q_pooled.shape[0])
-    ])
+    ])                                                     # (class, phase)
+
+    # Monthly phase occupancy: the share of a class's valid cell-hours in each
+    # calendar month that held a cloud of each phase. Already a fraction, so no
+    # season-length scaling applies and a partly-sampled month is represented by
+    # the hours it does have rather than being scaled up.
+    wpm = sec["w_phase_month"][keep_idx]              # (s, month, class, phase)
+    wvm = sec["w_valid_month"][keep_idx]              # (s, month, class)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        frac_per_season = np.where(wvm[..., None] > 0,
+                                   wpm / np.where(wvm[..., None] > 0,
+                                                  wvm[..., None], 1.0),
+                                   np.nan)
+    month_fraction = {
+        "per_season": frac_per_season,                     # kept for the spread
+        "mean": nanmean_quiet(frac_per_season, axis=0),    # (month, class, phase)
+    }
+
+    # --- the --min-lwp sweep --------------------------------------------
+    # Class axis: the five classes and UNCLASSIFIED, plus two derived slots
+    # appended here -- the ARM site cell, and "all cells" as the exact sum over
+    # the six. Indexed the same way as everything else downstream via
+    # sweep_class_slot().
+    ws = sec["w_sweep"][:, keep_idx]                  # (thr, s, month, cls, ph)
+    sweep = None
+    if ws.size:
+        wss = sec["w_sweep_site"][:, keep_idx]        # (thr, s, month, ph)
+        all_cls = ws.sum(axis=3, keepdims=True)       # exact: the six partition
+        ws_full = np.concatenate([ws, wss[:, :, :, None, :], all_cls], axis=3)
+
+        # Denominators do NOT depend on the threshold: valid cell-hours are a
+        # property of the grid and the classification, not of --min-lwp.
+        den_cls = sec["w_valid_month"][keep_idx]      # (s, month, class7)
+        order = [CLASS_CODES[n] for n in CLASS_ORDER]
+        den = np.concatenate([
+            den_cls[:, :, order],                                    # 5 classes
+            den_cls[:, :, order].sum(axis=2, keepdims=True) * 0.0,   # unclass.
+            den_cls[:, :, [sec["site_code"], sec["all_code"]]],      # site, all
+        ], axis=2)
+        # The unclassified slot has no denominator of its own in
+        # w_valid_month; give it the residual so its fraction is still defined.
+        den[:, :, SWEEP_UNCLASSIFIED_SLOT] = np.maximum(
+            den_cls[:, :, sec["all_code"]] - den_cls[:, :, order].sum(axis=2),
+            0.0)
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            frac = np.where(den[None, ..., None] > 0,
+                            ws_full / np.where(den[None, ..., None] > 0,
+                                               den[None, ..., None], 1.0),
+                            np.nan)                   # (thr, s, month, cls, ph)
+        month_h = month_window_hours(sec["slots"])    # (month,)
+        sweep = {
+            "lwp": sec["sweep_lwp"],
+            "spacing": sec["sweep_spacing"],
+            "month_fraction": nanmean_quiet(frac, axis=1),   # (thr, month, cls, ph)
+            "month_hours_axis": month_h,
+            # Seasonal totals pool the months before dividing, so a long month
+            # counts for more than a short one -- which is what "fraction of the
+            # season" means. Averaging the monthly fractions instead would
+            # silently give February the same weight as December.
+            "season_fraction": nanmean_quiet(
+                np.where(den.sum(axis=1)[None, ..., None] > 0,
+                         ws_full.sum(axis=2)
+                         / np.where(den.sum(axis=1)[None, ..., None] > 0,
+                                    den.sum(axis=1)[None, ..., None], 1.0),
+                         np.nan),
+                axis=1),                                      # (thr, cls, ph)
+        }
 
     return {
+        "sweep": sweep,
         "hours": hours,
         "n_seasons": len(keep_idx),
         "season_hours": season_hours,
+        "month_fraction": month_fraction,
+        "months": sec["months"],
+        "all_code": sec["all_code"],
         "cloudy_hours": nanmean_quiet(cloudy_hours, axis=0),
         "cloudy_hours_per_season": cloudy_hours,
         "area_pct": nanmean_quiet(area_pct, axis=0),
@@ -774,6 +1276,118 @@ def panel_order(site_code: int) -> list[tuple[int, str, bool]]:
     out = [(CLASS_CODES[n], CLASS_LABELS[n], False) for n in CLASS_ORDER]
     out.append((site_code, SITE_LABEL, True))
     return out
+
+
+# Width of the notes column, as a fraction of one panel's width. Wide enough for
+# a threshold line to sit on one row without wrapping, narrow enough that it does
+# not steal the figure from the data.
+NOTE_COL_WIDTH = 0.62
+
+# Style of the side note box, shared by every figure here so the pages match.
+NOTE_BOX = dict(boxstyle="round,pad=0.6", facecolor="#f5f5f2",
+                edgecolor="#bfbfbf", linewidth=0.8)
+
+
+# Median lines: one per drawn phase, told apart by dash pattern rather than by
+# colour, because a line in the bar's own colour disappears against the bar.
+MEDIAN_LINE_COLOR = "#B2182B"
+MEDIAN_LINE_STYLE: dict[str, str] = {"liquid": ":", "mixed": "--"}
+
+
+def wrap_note(text: str, width: int = 34) -> str:
+    """Hard-wrap a sentence to the notes column."""
+    import textwrap
+    return "\n".join(textwrap.wrap(text, width=width))
+
+
+def phase_note_lines(pk: dict, args, col: dict) -> list[str]:
+    """The season, cloud, and phase definitions, as lines for the side note."""
+    lines = [
+        f"Season {args.season_start[0]:02d}-{args.season_start[1]:02d} to "
+        f"{args.season_end[0]:02d}-{args.season_end[1]:02d}",
+        f"  ({col['season_hours']:,.0f} h per season)",
+        "",
+        f"Cloudy: tcc $\\geq$ {args.min_cloud_fraction:g}",
+        "",
+    ]
+    if pk["mode"] == "fraction":
+        lines += [
+            "CWP = LWP + IWP, counting",
+            f"only paths above {pk['min_lwp_g']:g} / "
+            f"{pk['min_iwp_g']:g} g m$^{{-2}}$",
+            "",
+            f"Liquid only: LWP/CWP $\\geq$ {pk['liquid_fraction_min']:g}",
+            f"Ice only: IWP/CWP $\\geq$ {pk['ice_fraction_min']:g}",
+            "Mixed phase: everything else",
+        ]
+    else:
+        lines += [
+            f"Liquid only: LWP > {pk['liquid_lwp_min_g']:g},",
+            f"  IWP < {pk['liquid_iwp_max_g']:g} g m$^{{-2}}$",
+            f"Mixed phase: LWP > {pk['mixed_lwp_min_g']:g},",
+            f"  IWP > {pk['mixed_iwp_min_g']:g} g m$^{{-2}}$",
+            f"Ice only: IWP > {pk['ice_iwp_min_g']:g},",
+            f"  LWP < {pk['lwp_max_ice_g']:g} g m$^{{-2}}$",
+        ]
+    return lines
+
+
+def panel_grid_with_notes(n_r: int, n_c: int, panel_w: float, panel_h: float,
+                          sharex: bool = True, sharey: bool = True):
+    """A panel grid plus a dedicated notes column on the right.
+
+    Returns ``(fig, axes, ax_note)``. ``ax_note`` is an invisible axes spanning
+    every row of an extra narrow column; write into it with axes coordinates.
+
+    Built from an explicit gridspec rather than by dropping a ``fig.text`` at
+    x > 1, because a figure-level text outside the axes is invisible to
+    constrained_layout: it would be clipped in the notebook's inline display and
+    only reappear on save, where ``bbox_inches="tight"`` expands the canvas. A
+    reserved column is laid out like anything else and looks the same in both.
+    """
+    import matplotlib.pyplot as plt
+
+    fig = plt.figure(figsize=(panel_w * (n_c + NOTE_COL_WIDTH), panel_h * n_r),
+                     constrained_layout=True)
+    gs = fig.add_gridspec(n_r, n_c + 1,
+                          width_ratios=[1.0] * n_c + [NOTE_COL_WIDTH])
+    axes = []
+    for r in range(n_r):
+        for c in range(n_c):
+            kw = {}
+            if axes:
+                if sharex:
+                    kw["sharex"] = axes[0]
+                if sharey:
+                    kw["sharey"] = axes[0]
+            axes.append(fig.add_subplot(gs[r, c], **kw))
+    ax_note = fig.add_subplot(gs[:, -1])
+    ax_note.axis("off")
+    return fig, np.array(axes), ax_note
+
+
+def suptitle_over_panels(fig, text: str, n_c: int, **kw) -> None:
+    """Centre the suptitle over the panel area, ignoring the notes column.
+
+    ``fig.suptitle`` centres on the whole canvas, which with a reserved notes
+    column pushes the heading right and lets it collide with the note box. The
+    panels occupy the first ``n_c`` of ``n_c + NOTE_COL_WIDTH`` width units.
+    """
+    fig.suptitle(text, x=0.5 * n_c / (n_c + NOTE_COL_WIDTH), **kw)
+
+
+def draw_notes(ax_note, lines, title: str | None = None) -> None:
+    """Render the side note.
+
+    ``None`` entries are dropped, so a caller can build the list with optional
+    rows inline. An empty STRING is kept and becomes a blank line -- that is how
+    the note is grouped into blocks, so the two must not be conflated.
+    """
+    body = "\n".join(ln for ln in lines if ln is not None)
+    text = f"{title}\n{body}" if title else body
+    ax_note.text(0.0, 1.0, text, transform=ax_note.transAxes,
+                 va="top", ha="left", fontsize=8.8, linespacing=1.6,
+                 bbox=NOTE_BOX)
 
 
 def make_figure(col: dict, scale: str, edges_g: np.ndarray, region: str,
@@ -811,14 +1425,11 @@ def make_figure(col: dict, scale: str, edges_g: np.ndarray, region: str,
     n_r, n_c = args.layout
     if n_r * n_c < len(panels):
         n_c = -(-len(panels) // n_r)
-    fig, axes = plt.subplots(n_r, n_c, figsize=(4.6 * n_c, 3.9 * n_r),
-                             sharex=True, sharey=True, constrained_layout=True)
-    axes = np.atleast_1d(axes).ravel()
+    fig, axes, ax_note = panel_grid_with_notes(n_r, n_c, 4.6, 3.9)
 
     ticks, labels = bar_ticks(edges_g, log_spaced, has_underflow)
     phase_idx = {p: PHASE_ORDER_ACC.index(p) for p in PHASE_STACK}
     pk = col["phase_kw"]
-    partitions = pk["iwp_max_liquid_g"] >= pk["iwp_min_g"]
 
     for k, (code, label, is_site) in enumerate(panels):
         ax = axes[k]
@@ -865,30 +1476,51 @@ def make_figure(col: dict, scale: str, edges_g: np.ndarray, region: str,
         share = col["area_pct"][code]
         total_h = sum(totals.values())
         pct_season = 100.0 * total_h / col["season_hours"]
-        where = "1 cell, inside another class" if is_site else f"{share:.1f}% of area"
-        # Only the partitioning case may call the stack "liquid-bearing". With
-        # --iwp-max-liquid below --iwp-min the segments leave a gap, and the sum
-        # of what is DRAWN is then less than the liquid-bearing hours.
-        stack_name = "liquid-bearing" if partitions else "shown"
-        ax.set_title(f"{label}   ({where})\n"
-                     f"{total_h:,.0f} h {stack_name} = "
-                     f"{pct_season:.1f}% of the season",
+        # No area share in the title. Three of the five classes are defined by
+        # sea ice concentration and migrate through the season, so any single
+        # number is a time average of a moving quantity -- which invites being
+        # read as a fixed property of the panel. The report still carries it,
+        # labelled as a mean.
+        where = "1 cell, inside another class" if is_site else None
+        head = f"{label}   ({where})" if where else label
+        # "liquid + mixed", never "liquid-bearing". With independent thresholds
+        # the two categories no longer partition any simply-stated superset, so
+        # the title names exactly what the bars hold and nothing more. The
+        # remainder is the report's 'neither' column.
+        # "of all hours", not "of the season": the denominator is every hour in
+        # the window, CLEAR ONES INCLUDED, not the overcast subset. The algebra
+        # makes this exact -- a bar is
+        #     (phase cell-hours / valid cell-hours) x season_hours
+        # so dividing the summed bars by season_hours cancels it, leaving
+        # phase cell-hours / valid cell-hours. The conditional version, "of the
+        # overcast hours, what share was liquid-bearing", is a different and
+        # larger number, and lives in the report's 'liq+mix %' column.
+        ax.set_title(f"{head}\n"
+                     f"{total_h:,.0f} h liquid + mixed = "
+                     f"{pct_season:.1f}% of all hours",
                      fontsize=10.5, pad=6,
                      fontweight="bold" if is_site else "normal",
                      color=SITE_COLOR if is_site else "black")
 
-        med = col["median_lwp_g"][code]
-        xm = value_to_bar_x(med, edges_g, log_spaced)
+        # One median per drawn phase. A liquid-only deck and a mixed-phase one
+        # have genuinely different LWP distributions, so a single median over
+        # the pooled bars describes neither of them.
         handles, hlabels = ax.get_legend_handles_labels()
-        if xm is not None and xm >= first_bar - 0.5:
-            ax.axvline(xm, color="#B2182B", lw=1.5, ls=":", zorder=6)
-            hlabels = hlabels + [f"median LWP = {med:,.3g} g m$^{{-2}}$"]
-            handles = handles + [plt.Line2D([], [], color="#B2182B", lw=1.5,
-                                            ls=":")]
+        for pi, phase in enumerate(PHASE_STACK):
+            med = col["median_lwp_g"][code, pi]
+            xm = value_to_bar_x(med, edges_g, log_spaced)
+            if xm is None or xm < first_bar - 0.5:
+                continue
+            style = MEDIAN_LINE_STYLE[phase]
+            ax.axvline(xm, color=MEDIAN_LINE_COLOR, lw=1.5, ls=style, zorder=6)
+            hlabels.append(f"median LWP, {MONTH_BAR_LABELS[phase].lower()}"
+                           f" = {med:,.3g} g m$^{{-2}}$")
+            handles.append(plt.Line2D([], [], color=MEDIAN_LINE_COLOR, lw=1.5,
+                                      ls=style))
         if share < args.min_class_area and not is_site:
-            hlabels = hlabels + [f"only {share:.2f}% of the domain"]
-            handles = handles + [plt.Line2D([], [], color="none")]
-        ax.legend(handles, hlabels, fontsize=8.5, framealpha=0.85, loc="best")
+            hlabels.append(f"class averages only {share:.2f}% of the domain")
+            handles.append(plt.Line2D([], [], color="none"))
+        ax.legend(handles, hlabels, fontsize=8.0, framealpha=0.85, loc="best")
 
     for ax in axes[len(panels):]:
         ax.set_visible(False)
@@ -902,27 +1534,403 @@ def make_figure(col: dict, scale: str, edges_g: np.ndarray, region: str,
     degenerate = phase_split_warning(col)
     bin_note = ("log-spaced bins" if log_spaced else
                 f"linear bins, {edges_g[1] - edges_g[0]:g} g m$^{{-2}}$ wide")
-    fig.suptitle(
+    # The title says what the figure IS; every parameter that defines it goes in
+    # the side note, so the heading never outruns the plot it labels.
+    suptitle_over_panels(
+        fig,
         f"Liquid-bearing cloud hours by LWP and surface class — {region}\n"
-        f"{mode_label}{', mean across seasons' if col['n_seasons'] > 1 else ''}"
-        f"   |   "
-        f"season = {args.season_start[0]:02d}-{args.season_start[1]:02d} to "
-        f"{args.season_end[0]:02d}-{args.season_end[1]:02d} "
-        f"({col['season_hours']:,.0f} h)   |   "
-        f"cloudy: tcc $\\geq$ {args.min_cloud_fraction:g}   |   "
-        f"liquid-bearing: LWP > {pk['lwp_min_g']:g}, split at IWP = "
-        f"{pk['iwp_min_g']:g} g m$^{{-2}}$   |   {bin_note}"
-        + ("" if partitions else
-           f"   |   !! IWP {pk['iwp_max_liquid_g']:g}-{pk['iwp_min_g']:g} "
-           f"g m$^{{-2}}$ falls in neither segment and is not drawn")
-        + ("" if degenerate is None else f"\n!!  {degenerate}"),
-        fontsize=11.5,
-    )
+        f"{mode_label}"
+        f"{', mean across seasons' if col['n_seasons'] > 1 else ''}",
+        n_c, fontsize=12.5)
+    draw_notes(
+        ax_note,
+        phase_note_lines(pk, args, col)
+        + ["", f"Bins: {bin_note}", "",
+           wrap_note("Panel % is of ALL hours in the window, clear ones "
+                     "included. For the share of OVERCAST hours instead, see "
+                     "the report's 'liq+mix %' column.", 34)]
+        + ([] if degenerate is None else
+           ["", "!! " + wrap_note(degenerate, 34)]))
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output_path, dpi=dpi or args.dpi, bbox_inches="tight")
         print(f"  -> {output_path}")
     return fig
+
+
+# Bars drawn by the monthly figure, in order. Unlike the histogram, ice-only IS
+# shown here: the x axis is a category, not LWP, so an ice cloud has somewhere to
+# go and its seasonal rise is the point of the figure.
+MONTH_BAR_PHASES: tuple[str, ...] = ("liquid", "ice", "mixed")
+
+MONTH_BAR_LABELS: dict[str, str] = {
+    "liquid": "Liquid only",
+    "ice": "Ice only",
+    "mixed": "Mixed phase",
+}
+
+
+def resolve_series_code(col: dict, surface_class: str | None) -> tuple[int, str]:
+    """(class-axis index, label) for a named surface class, the site, or all.
+
+    ``None`` or ``"all"`` selects every valid cell in the domain, which is the
+    default for the monthly figure: the question it answers -- how the phase mix
+    turns over through the season -- is about the region, and the histogram
+    already carries the per-class breakdown.
+    """
+    if surface_class in (None, "all"):
+        return col["all_code"], "all cells"
+    if surface_class in (SITE_KEY, "site", "arm"):
+        return col["site_code"], SITE_LABEL
+    if surface_class in CLASS_CODES:
+        return CLASS_CODES[surface_class], CLASS_LABELS[surface_class]
+    raise KeyError(
+        f"unknown surface class {surface_class!r}; choose from "
+        f"{['all', SITE_KEY] + list(CLASS_ORDER)}"
+    )
+
+
+def fig_monthly_phase_fraction(A: Analysis, out_dir=None, dpi: int | None = None,
+                               surface_class: str | None = None):
+    """Monthly phase occupancy: one panel per month, three bars per panel.
+
+    Each bar is the share of that month's cell-hours spent under a cloud of one
+    phase -- liquid only, ice only, mixed phase -- averaged over the seasons,
+    with the spread across seasons drawn as a whisker when there is more than
+    one.
+
+    The three bars do NOT sum to 100%. They are three of the four categories
+    that partition the overcast hours (the fourth, "neither", is the remainder
+    named in the report), and clear hours are in none of them. The panel
+    subtitle states the overcast share so the gap is accounted for rather than
+    left for the reader to wonder about.
+
+    Panel grid is two rows by however many columns the season needs: 2 x 3 for
+    an Oct-Mar window, 2 x 4 for Aug-Mar.
+
+    ``surface_class`` picks which cells to average over -- ``None``/``"all"``
+    for the whole domain, any name in ``CLASS_ORDER``, or ``"arm_site"``.
+    """
+    col, args = A.col, A.args
+    code, series_label = resolve_series_code(col, surface_class)
+    months = col["months"]
+    mean_frac = col["month_fraction"]["mean"]          # (month, class, phase)
+    per_season = col["month_fraction"]["per_season"]   # (s, month, class, phase)
+    n_m = len(months)
+
+    n_r = 2
+    n_c = -(-n_m // n_r)              # ceil: 6 months -> 2x3, 8 -> 2x4
+    fig, axes, ax_note = panel_grid_with_notes(n_r, n_c, 3.3, 3.7, sharex=False)
+
+    x = np.arange(len(MONTH_BAR_PHASES))
+    colors = [PHASE_COLORS[p] for p in MONTH_BAR_PHASES]
+    labels = [MONTH_BAR_LABELS[p] for p in MONTH_BAR_PHASES]
+    idx = [PHASE_ORDER_ACC.index(p) for p in MONTH_BAR_PHASES]
+
+    ymax = 0.0
+    for k, month in enumerate(months):
+        ax = axes[k]
+        y = 100.0 * np.array([mean_frac[k, code, i] for i in idx])
+        y = np.nan_to_num(y)
+        # Spread across seasons, drawn as a whisker rather than a symmetric
+        # error bar: the quantity is a bounded fraction and its across-season
+        # distribution is not symmetric near 0 or 100%.
+        lo = hi = None
+        if per_season.shape[0] > 1:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                block = 100.0 * per_season[:, k, code, :][:, idx]   # (s, phase)
+                lo = np.nanmin(block, axis=0)
+                hi = np.nanmax(block, axis=0)
+            if np.all(np.isfinite(lo)) and np.all(np.isfinite(hi)):
+                ax.errorbar(x, y, yerr=[np.maximum(y - lo, 0),
+                                        np.maximum(hi - y, 0)],
+                            fmt="none", ecolor="#333333", elinewidth=1.0,
+                            capsize=4, zorder=5)
+                ymax = max(ymax, float(np.nanmax(hi)))
+        ymax = max(ymax, float(y.max()))
+
+        ax.bar(x, y, width=0.62, color=colors, edgecolor="none", zorder=3)
+        # Label above the WHISKER, not the bar: at the bar top it collides with
+        # the upper cap wherever the across-season spread is wide, which is
+        # exactly the months worth reading carefully.
+        tops = y if hi is None else np.maximum(y, np.nan_to_num(hi, nan=0.0))
+        for xi, v, top in zip(x, y, tops):
+            ax.text(xi, top, f"{v:.1f}%", ha="center", va="bottom",
+                    fontsize=8.5, zorder=6)
+
+        overcast = 100.0 * float(np.nansum(
+            [mean_frac[k, code, PHASE_ORDER_ACC.index(pp)]
+             for pp in PHASE_ORDER_ACC]))
+        ax.set_title(f"{calendar.month_name[month]}\n"
+                     f"{overcast:.0f}% of hours overcast",
+                     fontsize=10.5, pad=6)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=9, rotation=20, ha="right")
+        ax.grid(True, axis="y", alpha=0.25, linewidth=0.5)
+        ax.set_axisbelow(True)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        ax.tick_params(axis="y", labelsize=9.5)
+
+    for ax in axes[n_m:]:
+        ax.set_visible(False)
+    for k in range(0, len(axes), n_c):
+        if axes[k].get_visible():
+            axes[k].set_ylabel("Share of ALL cell-hours\nin the month [%]",
+                               fontsize=10.5)
+    axes[0].set_ylim(0, max(5.0, ymax * 1.22))
+
+    pk = col["phase_kw"]
+    suptitle_over_panels(
+        fig,
+        f"Monthly cloud-phase occupancy — {args.region}, {series_label}\n"
+        f"{A.mode_label}"
+        f"{', mean across seasons' if col['n_seasons'] > 1 else ''}",
+        n_c, fontsize=12.5)
+    extra = ["", wrap_note("Bars are three of the four categories that "
+                           "partition the overcast hours; the fourth is the "
+                           "report's 'neither' column, and clear hours are in "
+                           "none. They need not sum to the overcast share.", 34)]
+    if col["n_seasons"] > 1:
+        extra += ["", "Whiskers span the min-max", "across seasons."]
+    draw_notes(ax_note, phase_note_lines(pk, args, col) + extra)
+
+    if out_dir is not None:
+        tag = "all" if surface_class in (None, "all") else str(surface_class)
+        path = (Path(out_dir) /
+                f"{args.region}_monthly_phase_fraction_{tag}_{A.tag}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi or args.dpi, bbox_inches="tight")
+        print(f"  -> {path}")
+    return fig
+
+
+# Sweep class axis: five classes, unclassified, then the two derived slots.
+SWEEP_SITE_SLOT = N_SWEEP_CLASS
+SWEEP_ALL_SLOT = N_SWEEP_CLASS + 1
+
+
+def sweep_class_slot(surface_class: str | None) -> tuple[int, str]:
+    """(sweep class-axis index, label) for a class name, the site, or all."""
+    if surface_class in (None, "all"):
+        return SWEEP_ALL_SLOT, "all cells"
+    if surface_class in (SITE_KEY, "site", "arm"):
+        return SWEEP_SITE_SLOT, SITE_LABEL
+    if surface_class in CLASS_CODES:
+        return CLASS_ORDER.index(surface_class), CLASS_LABELS[surface_class]
+    raise KeyError(
+        f"unknown surface class {surface_class!r}; choose from "
+        f"{['all', SITE_KEY] + list(CLASS_ORDER)}")
+
+
+def require_sweep(A: Analysis) -> dict:
+    """The sweep data, or a message explaining why there is none."""
+    sweep = A.col.get("sweep")
+    if sweep is None:
+        raise ValueError(
+            "no --min-lwp sweep was accumulated. It exists only in "
+            "phase_mode='fraction': absolute mode carries separate LWP floors "
+            "for liquid-only and mixed-phase, so there is no single minimum to "
+            "sweep. Re-run prepare(phase_mode='fraction').")
+    return sweep
+
+
+def _sweep_axes(ax, lwp, spacing: str = DEFAULT_SWEEP_SPACING,
+                log_y: bool = False) -> None:
+    """Axis furniture for a sweep panel.
+
+    The x SCALE follows the sampling: points laid out linearly on a log axis (or
+    the reverse) would bunch up and misrepresent where the resolution actually
+    is.
+    """
+    if spacing == "log":
+        ax.set_xscale("log")
+    ax.set_xlim(lwp[0], lwp[-1])
+    ax.grid(True, alpha=0.25, linewidth=0.5)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.tick_params(labelsize=9.5)
+    if log_y:
+        ax.set_yscale("log")
+
+
+def fig_sweep_monthly(A: Analysis, out_dir=None, dpi: int | None = None,
+                      surface_class: str | None = None, as_hours: bool = False):
+    """Phase occupancy against the minimum LWP threshold, one panel per month.
+
+    Three lines per panel -- liquid only, ice only, mixed phase -- against
+    ``--min-lwp`` on a log x axis. ``as_hours=False`` plots the share of the
+    month's cell-hours (the same quantity the monthly bar chart shows);
+    ``as_hours=True`` plots that share times the month's own length in the
+    window, i.e. average hours per month.
+
+    Every threshold on the axis was classified in the same pass over the
+    archive, so the curves are exactly comparable -- no reload, no resampling,
+    and identical cell-hours behind every point.
+    """
+    sweep = require_sweep(A)
+    col, args = A.col, A.args
+    slot, series_label = sweep_class_slot(surface_class)
+    lwp = sweep["lwp"]
+    months = col["months"]
+    frac = sweep["month_fraction"]                    # (thr, month, cls, ph)
+    month_h = sweep["month_hours_axis"]
+    n_m = len(months)
+
+    n_r = 2
+    n_c = -(-n_m // n_r)
+    fig, axes, ax_note = panel_grid_with_notes(n_r, n_c, 3.5, 3.4, sharex=True,
+                                               sharey=True)
+
+    for k, month in enumerate(months):
+        ax = axes[k]
+        for phase in SWEEP_DRAWN:
+            pi = SWEEP_PHASES.index(phase)
+            y = frac[:, k, slot, pi] * (month_h[k] if as_hours else 100.0)
+            ax.plot(lwp, y, color=PHASE_COLORS[phase], lw=1.9,
+                    marker="o", markersize=2.8,
+                    label=MONTH_BAR_LABELS[phase])
+        ax.set_title(f"{calendar.month_name[month]}"
+                     + (f"   ({month_h[k]:,.0f} h)" if as_hours else ""),
+                     fontsize=10.5, pad=6)
+        _sweep_axes(ax, lwp, sweep["spacing"])
+        if k == 0:
+            ax.legend(fontsize=8.5, framealpha=0.9, loc="best")
+
+    for ax in axes[n_m:]:
+        ax.set_visible(False)
+    ylab = ("Hours per month\nper grid cell" if as_hours else
+            "Share of ALL cell-hours\nin the month [%]")
+    for k in range(0, len(axes), n_c):
+        if axes[k].get_visible():
+            axes[k].set_ylabel(ylab, fontsize=10.5)
+    for k in range(len(axes) - n_c, len(axes)):
+        if axes[k].get_visible():
+            axes[k].set_xlabel("minimum LWP [g m$^{-2}$]", fontsize=10.5)
+
+    what = "hours per month" if as_hours else "share of the month"
+    suptitle_over_panels(
+        fig,
+        f"Cloud phase vs the minimum LWP threshold — {args.region}, "
+        f"{series_label}\n{A.mode_label}"
+        f"{', mean across seasons' if col['n_seasons'] > 1 else ''}"
+        f"   |   {what}",
+        n_c, fontsize=12.5)
+    draw_notes(ax_note, sweep_note_lines(
+        col, args,
+        "y axis: hours per month = the month's share of cell-hours times its "
+        "own length in the window." if as_hours else
+        "Denominator: ALL cell-hours in that month, clear ones included."))
+
+    if out_dir is not None:
+        tag = "all" if surface_class in (None, "all") else str(surface_class)
+        kind = "hours" if as_hours else "fraction"
+        path = (Path(out_dir) / f"{args.region}_sweep_monthly_{kind}_{tag}_"
+                                f"{A.tag}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi or args.dpi, bbox_inches="tight")
+        print(f"  -> {path}")
+    return fig
+
+
+def fig_sweep_season(A: Analysis, out_dir=None, dpi: int | None = None,
+                     surface_class: str | None = None, as_hours: bool = False):
+    """The same sweep pooled over the whole season, in one panel.
+
+    ``as_hours=False`` plots the share of all cell-hours in the season window;
+    ``as_hours=True`` multiplies by the window length to give hours per season.
+
+    Months are pooled BEFORE dividing, so a 31-day month carries more weight
+    than a 28-day one -- which is what "fraction of the season" means. Averaging
+    the six monthly curves instead would quietly give February December's
+    weight.
+    """
+    sweep = require_sweep(A)
+    col, args = A.col, A.args
+    slot, series_label = sweep_class_slot(surface_class)
+    lwp = sweep["lwp"]
+    frac = sweep["season_fraction"]                   # (thr, cls, ph)
+    season_h = col["season_hours"]
+
+    fig, axes, ax_note = panel_grid_with_notes(1, 1, 7.6, 5.0)
+    ax = axes[0]
+    unit = "" if as_hours else "%"
+    for phase in SWEEP_DRAWN:
+        pi = SWEEP_PHASES.index(phase)
+        y = frac[:, slot, pi] * (season_h if as_hours else 100.0)
+        # Endpoint values in the LEGEND rather than annotated on the axes: how
+        # far the answer moves between the ends is the whole point of the
+        # figure, but at the low end the three curves converge and on-axes
+        # labels land on top of each other.
+        ax.plot(lwp, y, color=PHASE_COLORS[phase], lw=2.2, marker="o",
+                markersize=4,
+                label=f"{MONTH_BAR_LABELS[phase]}:  {y[0]:,.1f}{unit} "
+                      f"$\\rightarrow$ {y[-1]:,.1f}{unit}")
+    _sweep_axes(ax, lwp, sweep["spacing"])
+    ax.set_xlabel("minimum LWP [g m$^{-2}$]", fontsize=11)
+    ax.set_ylabel("Hours per season\nper grid cell" if as_hours else
+                  "Share of ALL cell-hours\nin the season [%]", fontsize=11)
+    ax.legend(fontsize=9.5, framealpha=0.9, loc="best")
+
+    what = "hours per season" if as_hours else "share of the season"
+    suptitle_over_panels(
+        fig,
+        f"Cloud phase vs the minimum LWP threshold — {args.region}, "
+        f"{series_label}\n{A.mode_label}"
+        f"{', mean across seasons' if col['n_seasons'] > 1 else ''}"
+        f"   |   {what}",
+        1, fontsize=12.5)
+    draw_notes(ax_note, sweep_note_lines(
+        col, args,
+        "y axis: hours per season = the season's share of cell-hours times the "
+        "window length." if as_hours else
+        "Denominator: ALL cell-hours in the season window, clear ones "
+        "included."))
+
+    if out_dir is not None:
+        tag = "all" if surface_class in (None, "all") else str(surface_class)
+        kind = "hours" if as_hours else "fraction"
+        path = (Path(out_dir) / f"{args.region}_sweep_season_{kind}_{tag}_"
+                                f"{A.tag}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi or args.dpi, bbox_inches="tight")
+        print(f"  -> {path}")
+    return fig
+
+
+def sweep_note_lines(col: dict, args, denom: str) -> list[str]:
+    """Side-note text for the sweep figures.
+
+    ``denom`` is passed in rather than derived from a flag, because it differs
+    along two axes at once -- monthly vs seasonal, fraction vs hours -- and a
+    single boolean got it wrong for the seasonal figures.
+    """
+    pk = col["phase_kw"]
+    lwp = col["sweep"]["lwp"]
+    return [
+        f"Season {args.season_start[0]:02d}-{args.season_start[1]:02d} to "
+        f"{args.season_end[0]:02d}-{args.season_end[1]:02d}",
+        f"  ({col['season_hours']:,.0f} h per season)",
+        "",
+        f"Cloudy: tcc $\\geq$ {args.min_cloud_fraction:g}",
+        "",
+        "CWP = LWP + IWP",
+        f"Liquid only: LWP/CWP $\\geq$ {pk['liquid_fraction_min']:g}",
+        f"Ice only: IWP/CWP $\\geq$ {pk['ice_fraction_min']:g}",
+        "Mixed phase: everything else",
+        "",
+        f"IWP floor held at {pk['min_iwp_g']:g} g m$^{{-2}}$",
+        "x axis sweeps the LWP floor,",
+        f"  {lwp[0]:g} to {lwp[-1]:g} g m$^{{-2}}$",
+        f"  ({lwp.size} {col['sweep']['spacing']}ly spaced points)",
+        "",
+        wrap_note("Every point was classified in the same pass over the "
+                  "archive, so the curves share identical cell-hours.", 34),
+        "",
+        wrap_note(denom, 34),
+    ]
 
 
 # ----------------------------------------------------------------------------
@@ -931,39 +1939,95 @@ def make_figure(col: dict, scale: str, edges_g: np.ndarray, region: str,
 def add_phase_args(parser: argparse.ArgumentParser) -> None:
     """Cloud phase thresholds, all in g m-2.
 
-    Same four flag names and the same meaning as
-    ``cloud_classification.add_cloud_phase_args``, because the masks are built
-    by that module's ``cloud_phase_masks``. The DEFAULTS differ, for the two
-    reasons set out at DEFAULT_LWP_MIN_G above; they are defined here rather
-    than by calling the shared adder so the ``--help`` text states the value
-    that is actually used.
+    Four independent numbers, two per drawn category, so each can be defined on
+    its own terms. The only constraint between them is
+    ``--liquid-iwp-max <= --mixed-iwp-min``, which is what keeps the categories
+    from overlapping; it is checked at run time and the error explains itself.
     """
-    group = parser.add_argument_group("cloud phase (all thresholds in g m-2)")
-    group.add_argument(
-        "--lwp-min", type=float, default=DEFAULT_LWP_MIN_G, metavar="G",
-        help=f"LWP above which a cloud counts as liquid-bearing (default "
-             f"{DEFAULT_LWP_MIN_G:g}). Sets the full height of every bar. "
-             f"cloud_classification's trace default of 0.03 makes almost every "
-             f"overcast ERA5 column qualify.",
+    group = parser.add_argument_group(
+        "cloud phase (all thresholds in g m-2)",
+        "liquid only:  LWP > --liquid-lwp-min  AND  IWP < --liquid-iwp-max\n"
+        "mixed phase:  LWP > --mixed-lwp-min   AND  IWP > --mixed-iwp-min\n"
+        "Requires --liquid-iwp-max <= --mixed-iwp-min, or the two would "
+        "overlap and hours would be counted twice.",
     )
     group.add_argument(
-        "--iwp-min", type=float, default=DEFAULT_IWP_MIN_G, metavar="G",
-        help=f"IWP above which a liquid-bearing cloud counts as MIXED PHASE "
-             f"rather than liquid only (default {DEFAULT_IWP_MIN_G:g}). This "
-             f"is the split between the two stacked colours.",
+        "--liquid-lwp-min", type=float, default=DEFAULT_LIQUID_LWP_MIN,
+        metavar="G",
+        help=f"Liquid path a LIQUID-ONLY cloud must exceed (default "
+             f"{DEFAULT_LIQUID_LWP_MIN:g}). Deliberately higher than the mixed "
+             f"floor: the category claims a radiatively liquid deck, not a "
+             f"trace.",
     )
     group.add_argument(
-        "--iwp-max-liquid", type=float, default=None, metavar="G",
-        help="IWP below which a liquid-bearing cloud counts as liquid ONLY "
-             "(default: equal to --iwp-min, so the two colours partition the "
-             "bar). Set it lower to reopen cloud_classification's gap; the "
-             "hours that then fall between the two are reported, not drawn.",
+        "--liquid-iwp-max", type=float, default=DEFAULT_LIQUID_IWP_MAX,
+        metavar="G",
+        help=f"Ice path a LIQUID-ONLY cloud must stay below (default "
+             f"{DEFAULT_LIQUID_IWP_MAX:g}). Must not exceed --mixed-iwp-min.",
+    )
+    group.add_argument(
+        "--mixed-lwp-min", type=float, default=DEFAULT_MIXED_LWP_MIN,
+        metavar="G",
+        help=f"Liquid path a MIXED-PHASE cloud must exceed (default "
+             f"{DEFAULT_MIXED_LWP_MIN:g}). Only has to show liquid is present.",
+    )
+    group.add_argument(
+        "--mixed-iwp-min", type=float, default=DEFAULT_MIXED_IWP_MIN,
+        metavar="G",
+        help=f"Ice path a MIXED-PHASE cloud must exceed (default "
+             f"{DEFAULT_MIXED_IWP_MIN:g}). Also the floor for the ice-only "
+             f"column in the report.",
+    )
+    group.add_argument(
+        "--ice-iwp-min", type=float, default=DEFAULT_ICE_IWP_MIN, metavar="G",
+        help=f"Ice path an ICE-ONLY cloud must exceed (default "
+             f"{DEFAULT_ICE_IWP_MIN:g}). Independent of --mixed-iwp-min: how "
+             f"much ice makes a cloud an ice cloud and how much makes a liquid "
+             f"cloud mixed are separate judgements.",
     )
     group.add_argument(
         "--lwp-max-ice", type=float, default=DEFAULT_LWP_MAX_ICE_G, metavar="G",
         help=f"LWP below which a cloudy scene counts as ice only (default "
-             f"{DEFAULT_LWP_MAX_ICE_G:g}). Affects the REPORT only: an ice "
-             f"cloud has no liquid water path to bin and is never drawn.",
+             f"{DEFAULT_LWP_MAX_ICE_G:g}). Report only: an ice cloud has no "
+             f"liquid water path to bin and is never drawn. Must sit below "
+             f"both LWP floors.",
+    )
+
+
+def add_fraction_phase_args(parser: argparse.ArgumentParser) -> None:
+    """Thresholds for ``--phase-mode fraction``. Ignored in absolute mode."""
+    group = parser.add_argument_group(
+        "cloud phase - fraction mode (--phase-mode fraction)",
+        "CWP = LWP + IWP, counting only species above their minimum path.\n"
+        "liquid only:  LWP/CWP >= --liquid-fraction-min\n"
+        "ice only:     IWP/CWP >= --ice-fraction-min\n"
+        "mixed phase:  everything else holding cloud water.\n"
+        "Requires --liquid-fraction-min + --ice-fraction-min > 1, or "
+        "liquid-only and ice-only would overlap.",
+    )
+    group.add_argument(
+        "--liquid-fraction-min", type=float, default=DEFAULT_LIQUID_FRACTION,
+        metavar="F",
+        help=f"Share of CWP that must be liquid for a LIQUID-ONLY cloud "
+             f"(default {DEFAULT_LIQUID_FRACTION:g}).",
+    )
+    group.add_argument(
+        "--ice-fraction-min", type=float, default=DEFAULT_ICE_FRACTION,
+        metavar="F",
+        help=f"Share of CWP that must be ice for an ICE-ONLY cloud (default "
+             f"{DEFAULT_ICE_FRACTION:g}).",
+    )
+    group.add_argument(
+        "--min-lwp", type=float, default=DEFAULT_MIN_LWP, metavar="G",
+        help=f"Liquid below this g m-2 is treated as absent -- it enters "
+             f"neither CWP nor its own share (default {DEFAULT_MIN_LWP:g}). "
+             f"Without it a scene holding 0.05 g m-2 of liquid and nothing "
+             f"else is 100%% liquid by share.",
+    )
+    group.add_argument(
+        "--min-iwp", type=float, default=DEFAULT_MIN_IWP, metavar="G",
+        help=f"Ice below this g m-2 is treated as absent, the same way "
+             f"(default {DEFAULT_MIN_IWP:g}).",
     )
 
 
@@ -985,7 +2049,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     add_data_source_args(parser)
     add_classification_args(parser)
+    parser.add_argument("--phase-mode", choices=PHASE_MODES,
+                        default=DEFAULT_PHASE_MODE,
+                        help="How the three cloud-phase categories are defined: "
+                             "'absolute' by g m-2 thresholds on LWP and IWP, "
+                             "'fraction' by each species' share of the cloud "
+                             f"water path (default {DEFAULT_PHASE_MODE}). Each "
+                             "mode reads only its own threshold group below.")
     add_phase_args(parser)
+    add_fraction_phase_args(parser)
     parser.add_argument("--season-start", type=parse_month_day, default=(8, 1),
                         metavar="MM-DD", help="Season start (default 08-01).")
     parser.add_argument("--season-end", type=parse_month_day, default=(3, 31),
@@ -1020,8 +2092,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lwp-log-min", type=float,
                         default=DEFAULT_LWP_LOG_MIN_G, metavar="G",
                         help="First log edge, g m-2 (default: equal to "
-                             "--lwp-min, below which there are no "
-                             "liquid-bearing hours to draw). Set it lower to "
+                             "the lower LWP floor, below which there is "
+                             "nothing to draw). Set it lower to "
                              "widen the axis; an underflow bar appears only if "
                              "hours actually fall below it.")
     parser.add_argument("--lwp-log-max", type=float,
@@ -1041,6 +2113,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Scale of the HOURS axis (default linear). This is "
                              "independent of --bin-scale, which sets the LWP "
                              "axis.")
+    parser.add_argument("--sweep-lwp-min", type=float,
+                        default=DEFAULT_SWEEP_LWP_MIN, metavar="G",
+                        help=f"Low end of the --min-lwp sweep, g m-2 (default "
+                             f"{DEFAULT_SWEEP_LWP_MIN:g}). Fraction mode only.")
+    parser.add_argument("--sweep-lwp-max", type=float,
+                        default=DEFAULT_SWEEP_LWP_MAX, metavar="G",
+                        help=f"High end of the sweep (default "
+                             f"{DEFAULT_SWEEP_LWP_MAX:g}).")
+    parser.add_argument("--sweep-points", type=int,
+                        default=DEFAULT_SWEEP_POINTS, metavar="N",
+                        help=f"Thresholds between them (default "
+                             f"{DEFAULT_SWEEP_POINTS}). All are classified in "
+                             f"one pass over the archive.")
+    parser.add_argument("--sweep-spacing", choices=SWEEP_SPACINGS,
+                        default=DEFAULT_SWEEP_SPACING,
+                        help=f"How the sweep thresholds are laid out, and the "
+                             f"scale of the resulting x axis (default "
+                             f"{DEFAULT_SWEEP_SPACING}). Linear puts the "
+                             f"resolution above 1 g m-2, where the phase split "
+                             f"actually moves; log resolves the sub-0.1 region "
+                             f"where the threshold meets ERA5's quantisation.")
+    parser.add_argument("--monthly-class", nargs="+", default=["all"],
+                        choices=["all", SITE_KEY] + list(CLASS_ORDER),
+                        metavar="NAME",
+                        help="Which cells the monthly phase bar chart averages "
+                             "over, one figure each (default: all, the whole "
+                             f"domain). Choose from: all, {SITE_KEY}, "
+                             f"{', '.join(CLASS_ORDER)}.")
     parser.add_argument("--layout", type=parse_layout, default=DEFAULT_LAYOUT,
                         metavar="RxC",
                         help=f"Panel grid (default "
@@ -1095,6 +2195,20 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
     print("Liquid-bearing cloud hours by LWP and surface class")
     print("=" * 72)
 
+    # Validate every option that depends only on the arguments BEFORE opening
+    # anything, so a bad threshold pair fails in milliseconds instead of after a
+    # nine-minute read of the archive. It also avoids leaving a half-built
+    # Dataset behind when the validation raises.
+    phase_kw = resolve_phase_thresholds(args)
+    # The lowest LWP either drawn category can admit. Below it the log axis has
+    # nothing to show, by definition rather than by accident.
+    log_min = (lowest_drawn_lwp(phase_kw) if args.lwp_log_min is None
+               else args.lwp_log_min)
+    edge_sets = {
+        "linear": linear_bin_edges(args.lwp_lin_max, args.lwp_lin_bins),
+        "log": log_bin_edges(log_min, args.lwp_log_max, args.lwp_log_bins),
+    }
+
     region_dir = resolve_region_dir(args)
     ds = load_seb_data(args.region, None, None, region_dir.parent)
     lsm_da = load_land_sea_mask(
@@ -1108,14 +2222,6 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
         raise KeyError(f"dataset is missing {missing}. Re-download with "
                        f"--var-set recommended or extended")
 
-    phase_kw = resolve_phase_thresholds(args)
-    log_min = (phase_kw["lwp_min_g"] if args.lwp_log_min is None
-               else args.lwp_log_min)
-    edge_sets = {
-        "linear": linear_bin_edges(args.lwp_lin_max, args.lwp_lin_bins),
-        "log": log_bin_edges(log_min, args.lwp_log_max, args.lwp_log_bins),
-    }
-
     print(f"  Source     : {region_dir}")
     print(f"  Grid       : {ds.sizes['latitude']} x {ds.sizes['longitude']} "
           f"cells, {ds.sizes['valid_time']:,} time steps")
@@ -1127,13 +2233,9 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
           f"{args.open_ocean_max_siconc:g} | pack ice > "
           f"{args.sea_ice_min_siconc:g}")
     print(f"  Cloudy     : tcc >= {args.min_cloud_fraction:g}")
-    print(f"  Phase      : liquid-bearing = LWP > {phase_kw['lwp_min_g']:g} | "
-          f"liquid only = IWP < {phase_kw['iwp_max_liquid_g']:g} | "
-          f"mixed = IWP > {phase_kw['iwp_min_g']:g}  (g m-2)")
-    if phase_kw["iwp_max_liquid_g"] < phase_kw["iwp_min_g"]:
-        print("               !! --iwp-max-liquid is below --iwp-min, so "
-              "liquid-bearing hours with IWP between them belong to neither "
-              "segment and are not drawn.")
+    print(f"  Phase mode : {phase_kw['mode']}")
+    print(f"  Categories : {phase_definition_label(phase_kw, mathtext=False)}")
+    print(f"               {ice_definition_label(phase_kw, mathtext=False)}")
     print(f"  LWP bins   : linear 0-{args.lwp_lin_max:g} in "
           f"{args.lwp_lin_bins} | log {log_min:g}-"
           f"{args.lwp_log_max:g} in {args.lwp_log_bins}")
@@ -1142,7 +2244,15 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
     keep_idx, used, mode_label = select_seasons(layout, args)
     print(f"\n  Reading {len(used)} season(s): {used}")
 
-    sec = build_histograms(ds, lsm, args, layout, keep_idx, edge_sets, phase_kw)
+    sweep_values = (sweep_lwp_values(args.sweep_lwp_min, args.sweep_lwp_max,
+                                     args.sweep_points, args.sweep_spacing)
+                    if phase_kw["mode"] == "fraction" else np.empty(0))
+    if sweep_values.size:
+        print(f"  LWP sweep  : {sweep_values[0]:g} to {sweep_values[-1]:g} "
+              f"g m-2 in {sweep_values.size} {args.sweep_spacing}ly spaced "
+              f"steps, all in one pass")
+    sec = build_histograms(ds, lsm, args, layout, keep_idx, edge_sets, phase_kw,
+                           sweep_values)
     if sec["n_unclassified"]:
         print(f"  !! {sec['n_unclassified']:,} unclassified cell-times; run "
               f"surface_classification.py for the breakdown.", file=sys.stderr)
@@ -1169,32 +2279,64 @@ def print_report(A: Analysis) -> None:
 
     print(f"\n  Hours per season per grid cell ({season_h:,.0f} h in the window),"
           f" mean over {len(A.used)} season(s):")
-    print(f"    {'class':<22}{'area %':>8}{'cloudy':>10}{'liquid':>10}"
-          f"{'mixed':>10}{'ice':>10}{'liq+mix %':>11}{'med LWP':>10}")
-    print("    " + "-" * 91)
+    print(f"    {'class':<22}{'mean area %':>12}{'cloudy':>9}{'liquid':>9}"
+          f"{'mixed':>9}{'ice':>9}{'neither':>9}{'liq+mix %':>11}"
+          f"{'med LWP liq':>13}{'med LWP mix':>13}")
+    print("    " + "-" * 116)
+    worst_residual = 0.0
     for code, label, _ in panel_order(col["site_code"]):
         liq = float(np.nansum(mean_lin[code, phase_i["liquid"]]))
         mix = float(np.nansum(mean_lin[code, phase_i["mixed"]]))
         ice = float(np.nansum(mean_lin[code, phase_i["ice"]]))
+        non = float(np.nansum(mean_lin[code, phase_i["none"]]))
         cloudy = col["cloudy_hours"][code]
+        # The four categories partition the cloudy hours by construction, so
+        # this has to close. Tracked rather than trusted: a silent leak here
+        # would be invisible on the figure, which only ever draws two of them.
+        if np.isfinite(cloudy) and cloudy > 0:
+            worst_residual = max(worst_residual,
+                                 abs(liq + mix + ice + non - cloudy) / cloudy)
         pct = 100.0 * (liq + mix) / cloudy if cloudy > 0 else float("nan")
         area = col["area_pct"][code]
-        area_s = "  1 cell" if code == col["site_code"] else f"{area:8.2f}"
-        print(f"    {label:<22}{area_s}{cloudy:>10.0f}{liq:>10.0f}{mix:>10.0f}"
-              f"{ice:>10.0f}{pct:>11.1f}{col['median_lwp_g'][code]:>10.3g}")
-    print("    " + "-" * 91)
+        area_s = "      1 cell" if code == col["site_code"] else f"{area:12.2f}"
+        med_liq = col["median_lwp_g"][code, PHASE_STACK.index("liquid")]
+        med_mix = col["median_lwp_g"][code, PHASE_STACK.index("mixed")]
+        print(f"    {label:<22}{area_s}{cloudy:>9.0f}{liq:>9.0f}{mix:>9.0f}"
+              f"{ice:>9.0f}{non:>9.0f}{pct:>11.1f}"
+              f"{med_liq:>13.3g}{med_mix:>13.3g}")
+    print("    " + "-" * 116)
+    print("    'mean area %' is a time average: three of the five classes "
+          "follow the ice edge and")
+    print("    move through the season, so it is not a fixed property of the "
+          "class.")
+    print("    The two medians are over that class's liquid-only and "
+          "mixed-phase hours separately,")
+    print("    not over the pooled bars.")
     pk = col["phase_kw"]
-    print("    liquid + mixed is the bar height drawn; 'cloudy' is every "
-          "overcast hour, which also")
-    print("    holds the ice-only scenes and the ones whose LWP falls "
-          "between --lwp-max-ice")
-    print(f"    ({pk['lwp_max_ice_g']:g}) and --lwp-min ({pk['lwp_min_g']:g} "
-          f"g m-2) and so belong to no phase at all.")
-    if pk["iwp_max_liquid_g"] < pk["iwp_min_g"]:
-        print(f"    !! --iwp-max-liquid ({pk['iwp_max_liquid_g']:g}) is below "
-              f"--iwp-min ({pk['iwp_min_g']:g}), so liquid-bearing")
-        print("    hours with IWP between them are in NEITHER column and "
-              "are not drawn.", file=sys.stderr)
+    print("    liquid + mixed is the bar height drawn. The four category "
+          "columns partition 'cloudy'")
+    print(f"    exactly (max residual {100 * worst_residual:.2e}% of cloudy "
+          f"hours across the classes).")
+    if pk["mode"] == "fraction":
+        # The fraction scheme is exhaustive over anything holding cloud water,
+        # so 'neither' means one thing only and is worth stating plainly.
+        print("    'neither' is every overcast hour with no cloud water above "
+              "the minimum paths")
+        print(f"    ({pk['min_lwp_g']:g} g m-2 liquid, {pk['min_iwp_g']:g} ice)."
+              f" The three phases are exhaustive over the rest, so")
+        print("    nothing else can land there.")
+    else:
+        print("    'neither' is every overcast hour matching no category: at "
+              "these thresholds, mostly")
+        print(f"    cloud holding between {pk['mixed_lwp_min_g']:g} and "
+              f"{pk['liquid_lwp_min_g']:g} g m-2 of liquid with under "
+              f"{pk['mixed_iwp_min_g']:g} g m-2 of ice --")
+        print("    too thin for 'liquid only', too dry for 'mixed phase'. It "
+              "is real cloud, not error.")
+    if worst_residual > 1e-9:
+        print(f"    !! the categories do not close to rounding "
+              f"({100 * worst_residual:.3g}% residual); this is a bug, not a "
+              f"threshold choice.", file=sys.stderr)
 
     degenerate = phase_split_warning(col)
     if degenerate:
@@ -1210,7 +2352,7 @@ def print_report(A: Analysis) -> None:
               f"  Bar heights are rates scaled to the full window.")
 
     if len(A.used) > 1:
-        print("\n  Spread across seasons, liquid-bearing hours per season:")
+        print("\n  Spread across seasons, liquid + mixed hours per season:")
         per = A.col["hours"]["linear"]["per_season"]      # (s, class, phase, bar)
         stack_i = [phase_i[p] for p in PHASE_STACK]
         tot = np.nansum(per[:, :, stack_i, :], axis=(2, 3))   # (season, class)
@@ -1264,7 +2406,7 @@ def fig_log(A: Analysis, out_dir=None, dpi: int | None = None):
     return figure(A, "log", out_dir, dpi)
 
 
-ALL_FIGURES = (fig_linear, fig_log)
+ALL_FIGURES = (fig_linear, fig_log, fig_monthly_phase_fraction)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1287,6 +2429,11 @@ def main(argv: list[str] | None = None) -> int:
     print()
     for scale in scales:
         figure(A, scale, out_dir=out_dir)
+    # Not gated on --bin-scale: that option selects between two BINNINGS of the
+    # histogram, and this figure has no LWP axis to bin.
+    for surface_class in args.monthly_class:
+        fig_monthly_phase_fraction(A, out_dir=out_dir,
+                                   surface_class=surface_class)
 
     if args.show:
         import matplotlib.pyplot as plt

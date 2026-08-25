@@ -223,11 +223,14 @@ DEFAULT_IWP_THRESHOLD_G = 0.0
 DEFAULT_MIN_CLOUD_FRACTION = 1.0
 
 # Matches plot_monthly_lwp_maps.py's trace guard.
-# MEASURED: ERA5's tclw/tciw here are quantised to exact multiples of
-# 2**-15 kg m-2 = 0.0305176 g m-2 (a GRIB binary scale factor), so the smallest
-# non-zero path the archive can express is 0.03052 g m-2. A threshold BELOW that
-# quantum selects exactly the same cell-hours as "> 0" and guards nothing. To
-# actually drop the single-quantum population, use >= 0.031.
+# MEASURED: ERA5's tclw/tciw are quantised by GRIB's per-message binary scale
+# factor, so the step is not fixed -- it is 0.0305176 g m-2 (2**-15 kg m-2, i.e.
+# two to the power of minus fifteen, NOT 2e-15) for tclw throughout this
+# archive, but tciw also shows 2**-14 and 2**-16 steps, sometimes within one
+# file. Any threshold below the finest step, 0.0152588 g m-2, is identical to
+# "> 0". There is no value that excises "one quantum" everywhere; read 0.03
+# g m-2 as "essentially zero", not as a quantum count. Full survey and the
+# reasoning are in cloud_classification.py, next to DEFAULT_LWP_MIN_G.
 DEFAULT_TRACE_THRESHOLD_G = 0.03
 
 # A class holding less than this share of the domain has its line blanked.
