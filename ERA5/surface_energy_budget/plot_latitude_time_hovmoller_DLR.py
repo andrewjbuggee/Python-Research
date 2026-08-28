@@ -96,6 +96,7 @@ import sys
 import warnings
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from matplotlib import patheffects
@@ -464,6 +465,53 @@ def make_hovmoller(
     return fig
 
 
+def select_seasons(sec: dict, args) -> tuple[list[int], list[int], str]:
+    """Pick which seasons to use, printing the coverage table as it goes.
+
+    Shared by the command line and by :func:`prepare`, so the two can never
+    disagree about which seasons a given set of options selects. Raises
+    ValueError with a usable message rather than exiting, leaving the caller in
+    charge of its own error path.
+
+    Returns ``(indices into sec["seasons"], the season years, a label)``.
+    """
+    n_slot = len(sec["slots"])
+    print(f"\n  Seasons found ({len(sec['seasons'])}), coverage of the "
+          f"{n_slot}-day window:")
+    frac = {}
+    for s_i, s in enumerate(sec["seasons"]):
+        f = float((sec["counts"][s_i] > 0).sum()) / n_slot
+        frac[s] = f
+        print(f"    {s}/{s+1}: {f*100:5.1f}%" + ("" if f >= args.min_season_coverage
+                                                 else "   (below --min-season-coverage)"))
+
+    if args.years is not None:
+        missing = [y for y in args.years if y not in sec["seasons"]]
+        if missing:
+            raise ValueError(f"no data for season(s) {missing}. "
+                             f"Available: {sec['seasons']}")
+        # An explicit request is honoured as given: --min-season-coverage only
+        # guards the automatic default, it does not silently drop a season the
+        # user named. Short ones are flagged instead.
+        keep_idx = [sec["seasons"].index(y) for y in args.years]
+        thin = [y for y in args.years if frac[y] < args.min_season_coverage]
+        if thin:
+            print(f"\n  !! Requested season(s) {thin} cover less than "
+                  f"{args.min_season_coverage:.0%} of the window and are included "
+                  f"anyway because you named them.", file=sys.stderr)
+    else:
+        keep_idx = [i for i, s in enumerate(sec["seasons"])
+                    if frac[s] >= args.min_season_coverage]
+        if not keep_idx:
+            raise ValueError(f"no season meets --min-season-coverage "
+                             f"{args.min_season_coverage}.")
+
+    used = [sec["seasons"][i] for i in keep_idx]
+    mode_label = format_used_seasons(used, stat="mean")
+    print(f"\n  Using {len(used)} season(s): {used}")
+    return keep_idx, used, mode_label
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -511,6 +559,160 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+class Analysis(SimpleNamespace):
+    """Everything the figures need, loaded once.
+
+    Built by :func:`prepare`. Holding the strip in one object is what lets a
+    notebook read the archive once -- the slow step, minutes of it -- and then
+    draw a figure per season for free. ``build_section`` already keeps the
+    season axis intact, so a per-season figure is a slice, not a re-read.
+    """
+
+
+def prepare(argv=None, args=None, **overrides) -> Analysis:
+    """Load the archive and reduce it to the latitude-time strip.
+
+    ``argv`` takes the same strings as the command line; ``overrides`` sets
+    individual options by name, e.g. ``prepare(region="barrow",
+    quantity="dlwd_dlat", years=(2015, 2016))``. Returns an :class:`Analysis`.
+
+    This is the slow step. Every quantity named by ``quantity`` (or all three
+    for ``"all"``) is sectioned here, so the figure calls below never touch the
+    archive again.
+    """
+    if args is None:
+        args = parse_args([] if argv is None else argv)
+    for k, v in overrides.items():
+        if not hasattr(args, k):
+            raise TypeError(f"unknown option {k!r}")
+        setattr(args, k, v)
+
+    print("=" * 72)
+    print("Latitude-time sections of surface longwave")
+    print("=" * 72)
+
+    region_dir = resolve_region_dir(args)
+    ds = load_seb_data(args.region, None, None, region_dir.parent)
+
+    needed = {"msdwlwrf", "msnlwrf", "siconc"}
+    missing = sorted(needed - set(ds.data_vars))
+    if missing:
+        raise KeyError(f"dataset is missing {missing}")
+
+    lat_north = (args.lat_north if args.lat_north is not None
+                 else float(ds["latitude"].max()))
+    lat_south = (args.lat_south if args.lat_south is not None
+                 else float(ds["latitude"].min()))
+
+    print(f"  Source     : {region_dir}")
+    print(f"  Strip      : {lat_south:.3f}N to {lat_north:.3f}N, "
+          f"{args.n_lon_cells} cells about {args.lon_center:.3f}E")
+    print(f"  Season     : {args.season_start[0]:02d}-{args.season_start[1]:02d} to "
+          f"{args.season_end[0]:02d}-{args.season_end[1]:02d}"
+          + ("  (wraps the new year)"
+             if args.season_end < args.season_start else ""))
+
+    quantities = list(QUANTITIES) if args.quantity == "all" else [args.quantity]
+    sections = {
+        q: build_section(ds, q, args.lon_center, args.n_lon_cells,
+                         lat_south, lat_north, args.season_start, args.season_end)
+        for q in quantities
+    }
+
+    first = sections[quantities[0]]
+    keep_idx, used, mode_label = select_seasons(first, args)
+    if first["land_edge"] is not None:
+        print(f"  Land edge  : {first['land_edge']:.2f}N "
+              f"(northernmost latitude with any land in the strip)")
+
+    return Analysis(args=args, ds=ds, sections=sections, quantities=quantities,
+                    keep_idx=keep_idx, used=used, mode_label=mode_label,
+                    lat_south=lat_south, lat_north=lat_north)
+
+
+def _resolve_quantity(A: Analysis, quantity: str | None) -> str:
+    q = quantity or A.quantities[0]
+    if q not in A.sections:
+        raise KeyError(f"{q!r} was not sectioned by prepare(); it built "
+                       f"{sorted(A.sections)}. Re-run prepare(quantity={q!r}) "
+                       f"or quantity='all'.")
+    return q
+
+
+def _slice_seasons(sec: dict, idx: list[int]) -> dict:
+    """A copy of the section holding only the named seasons."""
+    out = dict(sec)
+    out["field"] = sec["field"][idx]
+    out["ice"] = sec["ice"][idx]
+    out["counts"] = sec["counts"][idx]
+    out["seasons"] = [sec["seasons"][i] for i in idx]
+    return out
+
+
+def print_report(A: Analysis) -> None:
+    """Mean and range of each sectioned quantity over the kept seasons."""
+    for q in A.quantities:
+        s = _slice_seasons(A.sections[q], A.keep_idx)
+        mean_field = nanmean_quiet(s["field"], axis=0)
+        finite = mean_field[np.isfinite(mean_field)]
+        label = QUANTITIES[q][1]
+        plain = (QUANTITIES[q][2].replace("$", "").replace("^{-2}", "-2")
+                 .replace("^\\circ", "deg ").replace("\\", ""))
+        print(f"  {label}: mean={finite.mean():.2f}, "
+              f"range {finite.min():.2f} to {finite.max():.2f} [{plain}]")
+
+
+def season_figure(A: Analysis, season: int, out_dir=None, dpi: int | None = None,
+                  quantity: str | None = None):
+    """One Hovmoller for a single season, drawn from the prepared strip.
+
+    ``season`` is the year the season STARTS in, matching ``--years``.
+    """
+    q = _resolve_quantity(A, quantity)
+    sec = A.sections[q]
+    if season not in sec["seasons"]:
+        raise KeyError(f"no season {season} in the record; "
+                       f"available: {sec['seasons']}")
+    s = _slice_seasons(sec, [sec["seasons"].index(season)])
+    path = None
+    if out_dir is not None:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{A.args.region}_hovmoller_{q}_season{season}.png"
+    return make_hovmoller(s, q, A.args.region,
+                          format_used_seasons([season], stat="mean"),
+                          tuple(A.args.ice_levels),
+                          contour_style=A.args.contour_style,
+                          output_path=path, dpi=dpi or A.args.dpi)
+
+
+def mean_figure(A: Analysis, out_dir=None, dpi: int | None = None,
+                quantity: str | None = None):
+    """The climatology: one Hovmoller averaging every kept season."""
+    q = _resolve_quantity(A, quantity)
+    s = _slice_seasons(A.sections[q], A.keep_idx)
+    path = None
+    if out_dir is not None:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        tag = (f"season{A.used[0]}" if len(A.used) == 1
+               else f"mean{A.used[0]}-{A.used[-1]}")
+        path = out_dir / f"{A.args.region}_hovmoller_{q}_{tag}.png"
+    return make_hovmoller(s, q, A.args.region, A.mode_label,
+                          tuple(A.args.ice_levels),
+                          contour_style=A.args.contour_style,
+                          output_path=path, dpi=dpi or A.args.dpi)
+
+
+def all_season_figures(A: Analysis, out_dir=None, dpi: int | None = None,
+                       quantity: str | None = None) -> list:
+    """One figure per kept season, in order. Returns the list of figures."""
+    q = _resolve_quantity(A, quantity)
+    seasons = [A.sections[q]["seasons"][i] for i in A.keep_idx]
+    return [season_figure(A, y, out_dir=out_dir, dpi=dpi, quantity=q)
+            for y in seasons]
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
@@ -554,42 +756,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Error: {exc}", file=sys.stderr)
         return 1
 
-    n_slot = len(sec["slots"])
-    print(f"\n  Seasons found ({len(sec['seasons'])}), coverage of the "
-          f"{n_slot}-day window:")
-    frac = {}
-    for s_i, s in enumerate(sec["seasons"]):
-        f = float((sec["counts"][s_i] > 0).sum()) / n_slot
-        frac[s] = f
-        print(f"    {s}/{s+1}: {f*100:5.1f}%" + ("" if f >= args.min_season_coverage
-                                                 else "   (below --min-season-coverage)"))
-
-    if args.years is not None:
-        missing = [y for y in args.years if y not in sec["seasons"]]
-        if missing:
-            print(f"\n  Error: no data for season(s) {missing}. "
-                  f"Available: {sec['seasons']}", file=sys.stderr)
-            return 1
-        # An explicit request is honoured as given: --min-season-coverage only
-        # guards the automatic default, it does not silently drop a season the
-        # user named. Short ones are flagged instead.
-        keep_idx = [sec["seasons"].index(y) for y in args.years]
-        thin = [y for y in args.years if frac[y] < args.min_season_coverage]
-        if thin:
-            print(f"\n  !! Requested season(s) {thin} cover less than "
-                  f"{args.min_season_coverage:.0%} of the window and are included "
-                  f"anyway because you named them.", file=sys.stderr)
-    else:
-        keep_idx = [i for i, s in enumerate(sec["seasons"])
-                    if frac[s] >= args.min_season_coverage]
-        if not keep_idx:
-            print(f"\n  Error: no season meets --min-season-coverage "
-                  f"{args.min_season_coverage}.", file=sys.stderr)
-            return 1
-
-    used = [sec["seasons"][i] for i in keep_idx]
-    mode_label = format_used_seasons(used, stat="mean")
-    print(f"\n  Using {len(used)} season(s): {used}")
+    try:
+        keep_idx, used, mode_label = select_seasons(sec, args)
+    except ValueError as exc:
+        print(f"\n  Error: {exc}", file=sys.stderr)
+        return 1
 
     if sec["land_edge"] is not None:
         print(f"  Land edge  : {sec['land_edge']:.2f}N "

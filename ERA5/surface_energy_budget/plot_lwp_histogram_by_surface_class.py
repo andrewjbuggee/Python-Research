@@ -387,6 +387,19 @@ SWEEP_SPACINGS: tuple[str, ...] = ("linear", "log")
 SWEEP_PHASES: tuple[str, ...] = ("liquid", "ice", "mixed", "none")
 SWEEP_DRAWN: tuple[str, ...] = ("liquid", "ice", "mixed")
 
+
+def sweep_drawn_phases(args: argparse.Namespace) -> tuple[str, ...]:
+    """Phases the sweep figures draw, honouring ``--show-ice-only``.
+
+    Off by default: the ice-only curve rises whenever liquid gets zeroed out
+    of a mixed-phase scene, not when ice itself increases, which reads as
+    "more ice" to anyone who hasn't seen the reclassification argument in the
+    notebook. See the 'Reading these figures' section there.
+    """
+    if getattr(args, "show_ice_only", False):
+        return SWEEP_DRAWN
+    return tuple(p for p in SWEEP_DRAWN if p != "ice")
+
 # Class axis of the sweep accumulator: the five classes, then UNCLASSIFIED. This
 # is a genuine partition of every cell, which is what lets one np.bincount fill
 # all six at once; "all cells" is then their sum, exactly, with no assumption
@@ -1778,6 +1791,7 @@ def fig_sweep_monthly(A: Analysis, out_dir=None, dpi: int | None = None,
     frac = sweep["month_fraction"]                    # (thr, month, cls, ph)
     month_h = sweep["month_hours_axis"]
     n_m = len(months)
+    drawn = sweep_drawn_phases(args)
 
     n_r = 2
     n_c = -(-n_m // n_r)
@@ -1786,7 +1800,7 @@ def fig_sweep_monthly(A: Analysis, out_dir=None, dpi: int | None = None,
 
     for k, month in enumerate(months):
         ax = axes[k]
-        for phase in SWEEP_DRAWN:
+        for phase in drawn:
             pi = SWEEP_PHASES.index(phase)
             y = frac[:, k, slot, pi] * (month_h[k] if as_hours else 100.0)
             ax.plot(lwp, y, color=PHASE_COLORS[phase], lw=1.9,
@@ -1853,11 +1867,12 @@ def fig_sweep_season(A: Analysis, out_dir=None, dpi: int | None = None,
     lwp = sweep["lwp"]
     frac = sweep["season_fraction"]                   # (thr, cls, ph)
     season_h = col["season_hours"]
+    drawn = sweep_drawn_phases(args)
 
     fig, axes, ax_note = panel_grid_with_notes(1, 1, 7.6, 5.0)
     ax = axes[0]
     unit = "" if as_hours else "%"
-    for phase in SWEEP_DRAWN:
+    for phase in drawn:
         pi = SWEEP_PHASES.index(phase)
         y = frac[:, slot, pi] * (season_h if as_hours else 100.0)
         # Endpoint values in the LEGEND rather than annotated on the axes: how
@@ -2156,6 +2171,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         metavar="N",
                         help=f"Time steps held in memory at once (default "
                              f"{DEFAULT_BLOCK_HOURS}).")
+    parser.add_argument("--show-ice-only", action="store_true",
+                        help="Draw the ice-only curve on the sweep figures "
+                             "(default off). It is easy to misread: min_lwp is "
+                             "the level below which liquid is declared absent, "
+                             "not a bar a cloud must clear, so raising it can "
+                             "only push scenes INTO ice-only, never out. See "
+                             "'Reading these figures' in the sweep notebook "
+                             "before turning this on.")
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--dpi", type=int, default=200)
     parser.add_argument("--show", action="store_true")
@@ -2396,6 +2419,185 @@ def figure(A: Analysis, scale: str, out_dir=None, dpi: int | None = None):
                        A.mode_label, A.args, path, dpi)
 
 
+# ----------------------------------------------------------------------------
+# Season phase stack
+# ----------------------------------------------------------------------------
+# Stack order from the bottom, plus the residual. "none" is drawn last, in a
+# neutral grey, so the bar genuinely reaches the cloudy total instead of
+# stopping short of the annotation printed above it. In fraction mode it is
+# exactly the overcast hours carrying no cloud water above the minimum paths,
+# so it is usually a sliver; in absolute mode it can be substantial.
+SEASON_STACK_ORDER: tuple[str, ...] = ("liquid", "mixed", "ice", "none")
+NONE_COLOR = "#c8cdd2"
+
+
+def _save_stack(fig, A, out_dir, stem, dpi):
+    """Write a season-stack figure, matching the naming the other figures use."""
+    if out_dir is None:
+        return fig
+    path = Path(out_dir) / f"{A.args.region}_{stem}_{A.tag}.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi or A.args.dpi, bbox_inches="tight")
+    print(f"  -> {path}")
+    return fig
+
+
+def season_phase_hours(A: Analysis):
+    """Cell-hours per phase, per season, for a TYPICAL cell of each class.
+
+    Returns ``(season_labels, hours, cloudy, season_h)`` with ``hours`` shaped
+    ``(n_season, n_class, n_phase)`` in ``SEASON_STACK_ORDER``.
+
+    Built by summing the already-accumulated LWP histogram over its bar axis,
+    which means it inherits the module's normalisation exactly:
+
+        hours = counts / (cell-hours the cell spent IN the class) * season_hours
+
+    That matters, and a more obvious construction gets it wrong. Multiplying a
+    monthly phase FRACTION by the month's calendar hours looks equivalent but is
+    not: three of the five classes are defined by sea ice concentration, so a
+    cell is open ocean in September and sea ice in February, and the fraction's
+    denominator is only the hours the cell actually spent in that class. Scaling
+    it by the whole month credits the class with hours it did not exist for. On
+    this archive that discrepancy reached 1,595 h -- a third of the season.
+
+    So a bar reads: "if a cell were in this class for the whole season, it would
+    spend N hours under a cloud of this phase". Identical to the convention the
+    per-class histogram panels and the printed report already use, which is what
+    makes the totals here agree with theirs.
+    """
+    col = A.col
+    per_season = col["hours"]["linear"]["per_season"]   # (s, class, phase, bar)
+    idx = [PHASE_ORDER_ACC.index(p) for p in SEASON_STACK_ORDER]
+    hours = np.nansum(per_season, axis=-1)[..., idx]    # (s, class, phase)
+    cloudy = hours.sum(axis=-1)
+    labels = [f"{y}/{(y + 1) % 100:02d}" for y in A.used]
+    return labels, hours, cloudy, float(col["season_hours"])
+
+
+def _stack_one_axis(ax, season_labels, hours, cloudy, season_h, label,
+                    annotate=True, fontsize=8, ylim=None):
+    """Draw one stacked-bar panel: seasons on x, phase hours stacked."""
+    x = np.arange(len(season_labels))
+    bottom = np.zeros(len(season_labels))
+    drawn = []
+    for pi, phase in enumerate(SEASON_STACK_ORDER):
+        h = np.nan_to_num(hours[:, pi])
+        if phase == "none" and h.max() <= 0:
+            continue
+        color = NONE_COLOR if phase == "none" else PHASE_COLORS[phase]
+        lab = "no phase" if phase == "none" else PHASE_LABELS[phase].lower()
+        ax.bar(x, h, width=0.68, bottom=bottom, color=color, label=lab,
+               edgecolor="white", linewidth=0.4)
+        bottom += h
+        drawn.append(phase)
+
+    # The y limit is set from the tallest bar across EVERY panel, not this one,
+    # because the axes share a y scale: sizing each panel to its own maximum
+    # would let the tallest class overflow into the row above, which is exactly
+    # what the annotations then collide with.
+    top = ylim if ylim is not None else max(bottom.max(), 1.0) * 1.28
+    if annotate:
+        for xi, tot in zip(x, bottom):
+            if not np.isfinite(tot) or tot <= 0:
+                continue
+            ax.text(xi, tot + 0.015 * top,
+                    f"{tot:,.0f} h\n({100.0 * tot / season_h:.1f}%)",
+                    ha="center", va="bottom", fontsize=fontsize, linespacing=1.1)
+    ax.set_ylim(0, top)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(season_labels, fontsize=fontsize + 0.5)
+    ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.set_title(label, fontsize=10)
+    return drawn
+
+
+def _stack_subtitle(A, season_h):
+    pk = A.col["phase_kw"]
+    return (f"cell-hours for a typical cell of each class   |   "
+            f"season window {season_h:,.0f} h   |   "
+            f"{phase_definition_label(pk)}")
+
+
+def fig_season_phase_stack(A: Analysis, out_dir=None, dpi: int | None = None):
+    """Stacked phase hours per season -- one panel per surface class.
+
+    Liquid on the bottom, mixed in the middle, ice on top, matching the order
+    the caller asked for. Each bar's total is the overcast cell-hours a typical
+    cell of that class saw in that season; the figure above each bar prints that
+    total and, in parentheses, its share of the whole season window.
+
+    The bar heights are per-cell hours, NOT summed over the class, so panels are
+    directly comparable to the single ARM cell and to each other regardless of
+    how many cells each class holds.
+    """
+    import matplotlib.pyplot as plt
+
+    args = A.args
+    labels, hours, cloudy, season_h = season_phase_hours(A)
+    panels = panel_order(A.col["site_code"])
+    n_r, n_c = DEFAULT_LAYOUT
+    fig, axes = plt.subplots(n_r, n_c, figsize=(4.3 * n_c, 4.3 * n_r),
+                             sharey=True, constrained_layout=True)
+    fig.get_layout_engine().set(hspace=0.10)
+    axes = np.atleast_1d(axes).ravel()
+
+    # One headroom for every panel: 28% above the tallest bar anywhere, which is
+    # what the two-line annotation needs without running into the row above.
+    codes = [c for c, _, _ in panels]
+    top = float(np.nanmax(cloudy[:, codes])) * 1.28
+
+    drawn = []
+    for ax, (code, label, is_site) in zip(axes, panels):
+        if np.all(~np.isfinite(hours[:, code, :])) or cloudy[:, code].max() <= 0:
+            ax.set_visible(False)
+            continue
+        d = _stack_one_axis(ax, labels, hours[:, code, :], cloudy[:, code],
+                            season_h, label + ("  (1 cell)" if is_site else ""),
+                            ylim=top)
+        drawn = d or drawn
+    for ax in axes[len(panels):]:
+        ax.set_visible(False)
+    for k in range(0, len(axes), n_c):
+        if axes[k].get_visible():
+            axes[k].set_ylabel("Cell-hours in season", fontsize=10)
+    handles, lbls = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, lbls, loc="lower center", ncol=len(handles),
+                   fontsize=9, frameon=False, bbox_to_anchor=(0.5, -0.03))
+    fig.suptitle(f"Cloud phase hours by season and surface class \u2014 "
+                 f"{args.region}\n{_stack_subtitle(A, season_h)}", fontsize=12)
+    return _save_stack(fig, A, out_dir, "season_phase_stack", dpi)
+
+
+def fig_season_phase_stack_site(A: Analysis, out_dir=None, dpi: int | None = None):
+    """The same stack for the ARM cell alone, at full size.
+
+    One grid cell, so no averaging over cells is involved -- this is what ERA5
+    says the column over the facility did, season by season.
+    """
+    import matplotlib.pyplot as plt
+
+    args = A.args
+    labels, hours, cloudy, season_h = season_phase_hours(A)
+    code = A.col["site_code"]
+    fig, ax = plt.subplots(figsize=(1.5 + 1.25 * len(labels), 6.0),
+                           constrained_layout=True)
+    _stack_one_axis(ax, labels, hours[:, code, :], cloudy[:, code], season_h,
+                    "", fontsize=9.5)
+    ax.set_ylabel("Cell-hours in season", fontsize=11)
+    ax.legend(fontsize=9.5, framealpha=0.9)
+    ax.set_title(f"Cloud phase hours by season \u2014 {SITE_LABEL}\n"
+                 f"{args.region}   |   season window {season_h:,.0f} h   |   "
+                 f"{phase_definition_label(A.col['phase_kw'])}",
+                 fontsize=12, pad=10)
+    return _save_stack(fig, A, out_dir, "season_phase_stack_site", dpi)
+
+
 def fig_linear(A: Analysis, out_dir=None, dpi: int | None = None):
     """Linear LWP bins -- the physical-axis copy."""
     return figure(A, "linear", out_dir, dpi)
@@ -2406,7 +2608,8 @@ def fig_log(A: Analysis, out_dir=None, dpi: int | None = None):
     return figure(A, "log", out_dir, dpi)
 
 
-ALL_FIGURES = (fig_linear, fig_log, fig_monthly_phase_fraction)
+ALL_FIGURES = (fig_linear, fig_log, fig_monthly_phase_fraction,
+               fig_season_phase_stack, fig_season_phase_stack_site)
 
 
 def main(argv: list[str] | None = None) -> int:
