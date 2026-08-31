@@ -1,0 +1,54 @@
+# DOE ARM Utqiagvik seasonal cloud hours -- DIGITISED FROM A FIGURE
+# ============================================================================
+#
+# ***  THESE ARE READ-OFF ESTIMATES, NOT GENIE'S ACTUAL NUMBERS.  ***
+#
+# The values below were measured by eye from the rendered stacked bar chart,
+# because the underlying numbers were not supplied. Expect roughly +/- 75 h on
+# any thick segment and worse on thin ones (the precipitating segments are only
+# a few tens of hours tall and are the least reliable rows here).
+#
+# That uncertainty is COMPARABLE TO THE ERA5-minus-observation residual this
+# file is meant to help plot. Treat every residual below ~150 h as consistent
+# with zero until the real numbers replace these.
+#
+# TO FIX: ask Genie for the CSV behind the figure and overwrite this file,
+# keeping the column order. Then delete this warning block. Nothing else has to
+# change -- the plotting code reads this file by name.
+#
+# ---------------------------------------------------------------------------
+# WHAT THE DIGITISATION IS ANCHORED ON
+# The figure legend states the record MEAN for each category, and those values
+# ARE exact. They are reproduced here and the loader checks the per-season
+# columns average to them, so a gross misreading would be caught:
+#
+#   with liquid            1474 h
+#   ice only               1071 h
+#   with liquid (precip)    282 h
+#   ice only (precip)       255 h
+#   clear sky               898 h
+#   others                   36 h
+#   missing / no data       339 h
+#
+# SEASON LABELLING -- CORRECTED, AND EASY TO GET WRONG
+# Genie's figure labels each bar by the year the season ENDS: her bar
+# marked '2015' is the 2014/15 season. This file uses the START year, to
+# match the ERA5 side, so every label here is HER LABEL MINUS ONE.
+# Her record therefore runs 2014/15 to 2024/25 (11 seasons).
+# Getting this wrong shifts every comparison by a full season and would
+# not look obviously wrong on the plot, which is why it is stated here.
+# Hours are per season for the single ARM site.
+# 'missing' is hours with no observation; ERA5 has no counterpart to it.
+# ---------------------------------------------------------------------------
+# season  with_liquid  ice_only  liq_precip  ice_precip  clear_sky  others  missing
+2014           1420       1370        380        280        900          0          0
+2015           1995       1085         40        110        995          0          0
+2016           1460       1060        180        140        780         40        680
+2017           1450        990        420        430       1030          0          0
+2018           1235       1140        225        350       1400          0          0
+2019           1400        900        100        190       1000          0        750
+2020            830        820         10         30         10         10       1680
+2021           1500       1090        255        320        900         30        240
+2022           1590       1105        285        345        620        150        210
+2023           1520       1235        285        340        810        130         60
+2024           1780        870        290        335        920          0        180

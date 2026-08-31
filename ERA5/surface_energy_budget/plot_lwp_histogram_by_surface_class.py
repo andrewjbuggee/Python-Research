@@ -285,6 +285,78 @@ HOURS_PER_STEP = 1.0
 
 REQUIRED_VARS = ("tcc", "tclw", "tciw", "siconc")
 
+# ----------------------------------------------------------------------------
+# Precipitation filter
+# ----------------------------------------------------------------------------
+# The literature threshold for "ERA5 says it is precipitating" is 0.1 mm/hr,
+# chosen to match a rain gauge's minimum measurable amount. That is a RATE, and
+# ERA5 carries it directly as tp. tcrw + tcsw is a suspended MASS PATH, a
+# different quantity, so the two are not interchangeable and the mass-path
+# threshold below was CALIBRATED against the rate rather than assumed.
+#
+# The mass-path threshold below matters only for precip_var="path". The default
+# is precip_var="rate", which needs no calibration at all.
+#
+# MEASURED on this archive (40 files spanning the record):
+#
+#   median rain+snow path where tp is 0.08-0.12 mm/hr      48.8 g m-2
+#   physical estimate  W = R*H/v, H = 1 km, rain  v=4 m/s    6.9 g m-2
+#                                          snow  v=1 m/s   27.8 g m-2
+#
+# 50 g m-2 sits at the measured median and is consistent with the physical
+# estimate for a 1.5-2 km deep snow layer, which is what an Arctic precipitating
+# column looks like. Classification agreement against the rate threshold is
+# 93.6% (4.9% false wet, 1.5% false dry).
+#
+# THE MAPPING IS LOOSE, AND THAT IS A PROPERTY OF THE DATA, NOT THE CHOICE.
+# Among cell-hours with tp >= 0.1 mm/hr the rain+snow path spans 21 to 599
+# g m-2 between the 5th and 95th percentiles, so NO single mass-path cut
+# reproduces the rate cut cleanly. If the comparison needs the literature
+# definition exactly, use precip_var="rate", which applies 0.1 mm/hr to tp.
+DEFAULT_PRECIP_PATH_MAX_G = 50.0     # g m-2 of tcrw + tcsw
+DEFAULT_PRECIP_RATE_MAX_MM_HR = 0.1  # mm hr-1 of tp
+PRECIP_VARS: tuple[str, ...] = ("path", "rate")
+# tp is the default because it is the quantity the published 0.1 mm/hr
+# convention is actually defined on, and it is already in the archive -- present
+# in all 654 single-level files, covering every season 2014/15-2025/26 with no
+# gaps. The mass-path route below stays available, but it estimates a rate from
+# a suspended burden and the two only agree to about 94%; there is no reason to
+# accept that error when the rate itself is on disk.
+DEFAULT_PRECIP_VAR = "rate"
+
+# Only loaded when the filter is on, so an archive without them still works.
+PRECIP_SOURCE_VARS = {"path": ("tcrw", "tcsw"), "rate": ("tp",)}
+
+
+def precip_mask(block, keep, args) -> np.ndarray:
+    """True where the scene is PRECIPITATING and should be filtered out.
+
+    Returns an all-False mask when the filter is off, so the caller can apply
+    it unconditionally.
+    """
+    if not args.no_precip:
+        return np.zeros(block["tcc"].values[keep].shape, dtype=bool)
+
+    if args.precip_var == "rate":
+        # tp is an hourly accumulation in metres; 1 m over 1 h = 1000 mm/hr.
+        rate = block["tp"].values[keep] * 1000.0
+        return np.isfinite(rate) & (rate >= args.precip_rate_max)
+
+    path_g = (block["tcrw"].values[keep] + block["tcsw"].values[keep]) * 1000.0
+    return np.isfinite(path_g) & (path_g >= args.precip_path_max)
+
+
+def precip_label(args) -> str:
+    """One-line description of the filter, for figure subtitles."""
+    if not args.no_precip:
+        return "no precipitation filter"
+    if args.precip_var == "rate":
+        return f"non-precipitating: tp < {args.precip_rate_max:g} mm hr$^{{-1}}$"
+    return (f"non-precipitating: rain+snow path < "
+            f"{args.precip_path_max:g} g m$^{{-2}}$")
+
+
+
 # Phases drawn, in stack order from the bottom. "ice" is accumulated as well but
 # never plotted -- it has no liquid water path to bin. See the module docstring.
 PHASE_STACK: tuple[str, ...] = ("liquid", "mixed")
@@ -994,9 +1066,15 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
     w_per_step = float(weights_2d.sum())
 
     n_unclassified = 0
+    n_precip_removed = 0.0     # cloudy cell-hours the filter dropped
+    n_cloudy_before = 0.0      # cloudy cell-hours before it
     site_class_counts = np.zeros(len(CLASS_ORDER) + 1, dtype=np.int64)
 
-    for i0, block in iter_time_blocks(ds, list(REQUIRED_VARS), args.block_hours,
+    read_vars = list(REQUIRED_VARS)
+    if args.no_precip:
+        read_vars += [v for v in PRECIP_SOURCE_VARS[args.precip_var]
+                      if v not in read_vars]
+    for i0, block in iter_time_blocks(ds, read_vars, args.block_hours,
                                       keep_mask=use_step):
         n_t = block.sizes["valid_time"]
         sl = slice(i0, i0 + n_t)
@@ -1024,7 +1102,15 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
         tcc = block["tcc"].values[keep]
 
         valid = np.isfinite(tcc) & np.isfinite(tclw_g) & np.isfinite(tciw_g)
-        cloudy = valid & (tcc >= args.min_cloud_fraction)
+        # A precipitating scene is removed from the CLOUDY population, not
+        # reclassified: it stops counting toward every phase and toward the
+        # cloudy total alike, so the four phases still partition what is left.
+        raining = precip_mask(block, keep, args)
+        n_precip_removed += float(np.count_nonzero(raining & valid
+                                                   & (tcc >= args.min_cloud_fraction)))
+        n_cloudy_before += float(np.count_nonzero(valid
+                                                  & (tcc >= args.min_cloud_fraction)))
+        cloudy = valid & (tcc >= args.min_cloud_fraction) & ~raining
         phases = phase_masks(tclw_g, tciw_g, phase_kw)
 
         w = np.broadcast_to(weights_2d, classes.shape)
@@ -1125,6 +1211,8 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
                     ).reshape(n_season, n_qbar)
 
     return {
+        "precip_removed": n_precip_removed,
+        "cloudy_before_precip": n_cloudy_before,
         "hist": hist,
         "qhist": qhist,
         "w_class": w_class,
@@ -1273,6 +1361,8 @@ def to_hours_per_season(sec: dict, keep_idx: list[int], edge_sets: dict) -> dict
         "area_pct": nanmean_quiet(area_pct, axis=0),
         "median_lwp_g": median_lwp_g,
         "site_code": sec["site_code"],
+        "precip_removed": sec.get("precip_removed", 0.0),
+        "cloudy_before_precip": sec.get("cloudy_before_precip", 0.0),
     }
 
 
@@ -2162,6 +2252,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              f"{DEFAULT_LAYOUT[0]}x{DEFAULT_LAYOUT[1]} for the "
                              "five classes plus the ARM site). Widened "
                              "automatically if too small.")
+    parser.add_argument("--no-precip", action="store_true",
+                        help="Drop precipitating scenes from the cloudy "
+                             "population. Off by default.")
+    parser.add_argument("--precip-var", choices=PRECIP_VARS,
+                        default=DEFAULT_PRECIP_VAR,
+                        help="What decides 'precipitating'. 'path' uses the "
+                             "column rain+snow water content, 'rate' uses tp "
+                             "against the literature 0.1 mm/hr. See the "
+                             "calibration note in the source.")
+    parser.add_argument("--precip-path-max", type=float,
+                        default=DEFAULT_PRECIP_PATH_MAX_G, metavar="G",
+                        help=f"g m-2 of tcrw+tcsw at or above which a scene "
+                             f"counts as precipitating (default "
+                             f"{DEFAULT_PRECIP_PATH_MAX_G:g}).")
+    parser.add_argument("--precip-rate-max", type=float,
+                        default=DEFAULT_PRECIP_RATE_MAX_MM_HR, metavar="MM_HR",
+                        help=f"mm hr-1 of tp at or above which a scene counts "
+                             f"as precipitating (default "
+                             f"{DEFAULT_PRECIP_RATE_MAX_MM_HR:g}).")
     parser.add_argument("--min-class-area", type=float,
                         default=DEFAULT_MIN_CLASS_AREA_PCT, metavar="PCT",
                         help="Stamp a warning on a panel whose class holds less "
@@ -2598,6 +2707,334 @@ def fig_season_phase_stack_site(A: Analysis, out_dir=None, dpi: int | None = Non
     return _save_stack(fig, A, out_dir, "season_phase_stack_site", dpi)
 
 
+# ----------------------------------------------------------------------------
+# Two-category view, for comparison against the ARM observations
+# ----------------------------------------------------------------------------
+# Colours taken from Genie's observational figure so the two can be read side by
+# side without a mental translation: plain red for anything containing liquid,
+# plain blue for ice-only. Matplotlib's named "red"/"blue", which is what her
+# plot uses.
+GENIE_LIQUID_COLOR = "red"
+GENIE_ICE_COLOR = "blue"
+GENIE_CLEAR_COLOR = "#c8cdd2"
+
+
+def season_phase_binary(A: Analysis):
+    """Collapse the three phases to ``liquid-containing`` and ``ice-only``.
+
+    Liquid-containing is liquid-only PLUS mixed-phase: both are scenes a
+    ground-based instrument would report as having liquid somewhere in the
+    column. Ice-only is unchanged. The small "no phase" residual is folded into
+    ice-only rather than dropped, so the two categories still sum to the
+    overcast total -- it is overcast time carrying no cloud water above the
+    minimum paths, which no instrument would call liquid.
+
+    Returns ``(labels, liquid, ice, clear, season_h)``, each hours array shaped
+    ``(n_season, n_class)``.
+    """
+    labels, hours, cloudy, season_h = season_phase_hours(A)
+    i = {p: SEASON_STACK_ORDER.index(p) for p in SEASON_STACK_ORDER}
+    liquid = hours[..., i["liquid"]] + hours[..., i["mixed"]]
+    ice = hours[..., i["ice"]] + hours[..., i["none"]]
+    clear = np.clip(season_h - (liquid + ice), 0.0, None)
+    return labels, liquid, ice, clear, season_h
+
+
+def fig_season_phase_binary(A: Analysis, out_dir=None, dpi: int | None = None,
+                            surface_class: str = "arm_site",
+                            include_clear: bool = False):
+    """Liquid-containing vs ice-only hours per season, in Genie's colours.
+
+    ``include_clear`` adds a grey remainder so each bar spans the whole season
+    window, matching the layout of the observational figure. It is OFF by
+    default because the caller asked for two categories; turn it on when placing
+    the two figures side by side, since her bars run to the full season and
+    these otherwise stop at the overcast total.
+
+    WHAT IS AND IS NOT COMPARABLE against the ARM figure:
+
+      * The coloured hours ARE comparable. Both are hours per season in which a
+        liquid-containing or ice-only cloud was overhead.
+      * Her figure splits PRECIPITATING cases into their own lighter shades.
+        This one applies no precipitation filter, so its liquid-containing bar
+        corresponds to her red PLUS pink, and its ice-only bar to her blue PLUS
+        light blue.
+      * She has a hatched "missing / no data" category. ERA5 has no gaps, so
+        there is no counterpart; a season short of hours here is scaled up to
+        the nominal window instead (see the module docstring).
+      * ERA5 is a 0.25 deg grid-box average sampled hourly; the ARM instruments
+        see a point, far faster. Occupancy fractions compare; event durations
+        do not.
+    """
+    import matplotlib.pyplot as plt
+
+    args = A.args
+    labels, liquid, ice, clear, season_h = season_phase_binary(A)
+    code, series_label = resolve_series_code(A.col, surface_class)
+    liq, ic, clr = liquid[:, code], ice[:, code], clear[:, code]
+
+    fig, ax = plt.subplots(figsize=(1.6 + 1.15 * len(labels), 6.2),
+                           constrained_layout=True)
+    x = np.arange(len(labels))
+    tot_cloud = liq + ic
+    ax.bar(x, liq, width=0.68, color=GENIE_LIQUID_COLOR,
+           label="liquid containing", edgecolor="white", linewidth=0.4)
+    ax.bar(x, ic, width=0.68, bottom=liq, color=GENIE_ICE_COLOR,
+           label="ice only", edgecolor="white", linewidth=0.4)
+    top = tot_cloud
+    if include_clear:
+        ax.bar(x, clr, width=0.68, bottom=tot_cloud, color=GENIE_CLEAR_COLOR,
+               label="clear / not overcast", edgecolor="white", linewidth=0.4)
+        top = tot_cloud + clr
+
+    headroom = float(np.nanmax(top)) * 1.20
+    for xi, cloud_h, bar_h in zip(x, tot_cloud, top):
+        if not np.isfinite(cloud_h) or cloud_h <= 0:
+            continue
+        ax.text(xi, bar_h + 0.012 * headroom,
+                f"{cloud_h:,.0f} h\n({100.0 * cloud_h / season_h:.1f}%)",
+                ha="center", va="bottom", fontsize=9, linespacing=1.1)
+    ax.set_ylim(0, headroom)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=10, rotation=45, ha="right")
+    ax.set_ylabel("Hours per season", fontsize=11)
+    ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.legend(fontsize=10, framealpha=0.9, loc="upper left")
+    note = ("annotation = overcast hours"
+            if include_clear else "bar = overcast hours")
+    ax.set_title(f"Liquid-containing vs ice-only cloud hours \u2014 "
+                 f"{series_label}\n{args.region}   |   season window "
+                 f"{season_h:,.0f} h   |   {note}   |   "
+                 f"{phase_definition_label(A.col['phase_kw'])}",
+                 fontsize=11.5, pad=10)
+    tag = "site" if surface_class == "arm_site" else str(surface_class)
+    return _save_stack(fig, A, out_dir, f"season_phase_binary_{tag}", dpi)
+
+
+# ----------------------------------------------------------------------------
+# Side-by-side comparison against the ARM observations
+# ----------------------------------------------------------------------------
+DEFAULT_OBS_FILE = "genie_arm_seasonal_hours.txt"
+OBS_COLUMNS = ("with_liquid", "ice_only", "liq_precip", "ice_precip",
+               "clear_sky", "others", "missing")
+OBS_LEGEND_MEANS = {"with_liquid": 1474, "ice_only": 1071, "liq_precip": 282,
+                    "ice_precip": 255, "clear_sky": 898, "others": 36,
+                    "missing": 339}
+OBS_BAR_COLOR = "#d1495b"
+ERA5_HATCH = "...."  # stippling that marks ERA5 bars apart from the solid obs bars
+
+# Text sizes for fig_era5_vs_obs, exposed as function arguments so a notebook
+# can bump them per call rather than editing the source.
+DEFAULT_COMPARISON_LABEL_FONTSIZE = 13.0   # axis labels
+DEFAULT_COMPARISON_TICK_FONTSIZE = 12.0    # tick labels on both axes
+DEFAULT_COMPARISON_LEGEND_FONTSIZE = 11.5  # both panels' legends
+
+
+def load_observations(path=DEFAULT_OBS_FILE, check: bool = True) -> dict:
+    """Read the ARM seasonal hours table.
+
+    Returns ``{"seasons": [...], <column>: array, ...}``. With ``check``, the
+    per-season columns are averaged and compared against the record means the
+    source figure's legend states; a departure of more than 100 h is reported,
+    since the file may hold values digitised from a figure rather than the
+    observations themselves.
+    """
+    seasons, rows = [], []
+    for line in Path(path).read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != len(OBS_COLUMNS) + 1:
+            raise ValueError(f"{path}: expected {len(OBS_COLUMNS) + 1} fields, "
+                             f"got {len(parts)} in {line!r}")
+        seasons.append(int(parts[0]))
+        rows.append([float(v) for v in parts[1:]])
+    if not rows:
+        raise ValueError(f"{path} holds no data rows")
+    arr = np.asarray(rows)
+    out = {"seasons": seasons}
+    out.update({c: arr[:, i] for i, c in enumerate(OBS_COLUMNS)})
+
+    if check:
+        bad = [(c, arr[:, i].mean(), OBS_LEGEND_MEANS[c])
+               for i, c in enumerate(OBS_COLUMNS)
+               if abs(arr[:, i].mean() - OBS_LEGEND_MEANS[c]) > 100]
+        for c, got, want in bad:
+            print(f"  !! {path}: {c} averages {got:,.0f} h but the source "
+                  f"figure's legend says {want:,.0f} h", file=sys.stderr)
+    return out
+
+
+def obs_binary(obs: dict, exclude_precip: bool):
+    """Collapse the observation table to liquid-containing and ice-only.
+
+    ``exclude_precip`` decides whether the precipitating categories are dropped
+    or folded in, and it MUST match how the ERA5 side was built. That pairing is
+    the whole point of the precipitation filter: with the filter on, ERA5's
+    cloudy population excludes precipitating scenes, so it has to be compared
+    against the observations' non-precipitating categories alone.
+    """
+    if exclude_precip:
+        return obs["with_liquid"].copy(), obs["ice_only"].copy()
+    return (obs["with_liquid"] + obs["liq_precip"],
+            obs["ice_only"] + obs["ice_precip"])
+
+
+def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
+                    dpi: int | None = None, surface_class: str = "arm_site",
+                    label_fontsize: float = DEFAULT_COMPARISON_LABEL_FONTSIZE,
+                    tick_fontsize: float = DEFAULT_COMPARISON_TICK_FONTSIZE,
+                    legend_fontsize: float = DEFAULT_COMPARISON_LEGEND_FONTSIZE):
+    """ERA5 beside the ARM observations, with the residual underneath.
+
+    Upper panel: two stacked bars per season -- ERA5 on the left, observations
+    on the right -- each split into liquid-containing and ice-only.
+
+    Lower panel: ERA5 minus observations, one bar per category per season.
+
+    The precipitation filter decides which observation categories are used, so
+    that the two sides mean the same thing. With ``--no-precip`` set, ERA5's
+    cloudy population has precipitating scenes removed and the observations are
+    compared on their non-precipitating categories alone; without it, both sides
+    include precipitation. Getting that pairing wrong is worth more than any
+    threshold choice in the filter.
+
+    Seasons present on only one side are dropped, and how many is reported in
+    the subtitle rather than left silent.
+
+    ``label_fontsize``, ``tick_fontsize``, and ``legend_fontsize`` size the
+    axis labels, the tick labels on both axes, and both panels' legends
+    respectively -- tune per call rather than editing the source.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    args = A.args
+    obs = load_observations(obs_path)
+    labels, liquid, ice, _clear, season_h = season_phase_binary(A)
+    code, series_label = resolve_series_code(A.col, surface_class)
+
+    era_years = [int(l.split("/")[0]) for l in labels]
+    obs_liq_all, obs_ice_all = obs_binary(obs, exclude_precip=args.no_precip)
+    obs_idx = {y: i for i, y in enumerate(obs["seasons"])}
+
+    shared = [y for y in era_years if y in obs_idx]
+    dropped = len(era_years) - len(shared)
+    if not shared:
+        raise ValueError("no season appears in both the ERA5 run and "
+                         f"{obs_path}")
+    ei = {y: i for i, y in enumerate(era_years)}
+    e_liq = np.array([liquid[ei[y], code] for y in shared])
+    e_ice = np.array([ice[ei[y], code] for y in shared])
+    o_liq = np.array([obs_liq_all[obs_idx[y]] for y in shared])
+    o_ice = np.array([obs_ice_all[obs_idx[y]] for y in shared])
+    miss = np.array([obs["missing"][obs_idx[y]] for y in shared])
+
+    x = np.arange(len(shared))
+    w = 0.38
+    fig, (ax, ax_r) = plt.subplots(
+        2, 1, figsize=(2.0 + 1.35 * len(shared), 9.0), sharex=True,
+        gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+
+    # ERA5 bars carry the same liquid/ice colors as the obs bars but stippled
+    # rather than solid, so the two datasets no longer need a second, easily
+    # confused color (a colored outline) layered on top of the phase colors.
+    for off, (lq, ic, name, stippled) in (
+            (-w / 2, (e_liq, e_ice, "ERA5", True)),
+            (+w / 2, (o_liq, o_ice, "ARM obs", False))):
+        hatch = ERA5_HATCH if stippled else None
+        ax.bar(x + off, lq, width=w,
+               color="white" if stippled else GENIE_LIQUID_COLOR,
+               edgecolor=GENIE_LIQUID_COLOR if stippled else "none",
+               linewidth=0.7, hatch=hatch)
+        ax.bar(x + off, ic, width=w, bottom=lq,
+               color="white" if stippled else GENIE_ICE_COLOR,
+               edgecolor=GENIE_ICE_COLOR if stippled else "none",
+               linewidth=0.7, hatch=hatch)
+
+    # Mark seasons where the observations are substantially incomplete: their
+    # totals are not comparable however good the ERA5 side is.
+    top = float(max((e_liq + e_ice).max(), (o_liq + o_ice).max())) * 1.20
+    for xi, m in zip(x, miss):
+        if m > 0.05 * season_h:
+            ax.text(xi + w / 2, (o_liq + o_ice)[list(x).index(xi)] + 0.02 * top,
+                    f"{m:,.0f} h\nmissing", ha="center", va="bottom",
+                    fontsize=7.5, color=OBS_BAR_COLOR, linespacing=1.1)
+    ax.set_ylim(0, top)
+    ax.set_ylabel("Hours per season", fontsize=label_fontsize)
+    ax.tick_params(axis="both", labelsize=tick_fontsize)
+    ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, fc=GENIE_LIQUID_COLOR, ec="none"),
+        plt.Rectangle((0, 0), 1, 1, fc=GENIE_ICE_COLOR, ec="none"),
+        plt.Rectangle((0, 0), 1, 1, fc="white", ec="0.35", lw=0.8,
+                      hatch=ERA5_HATCH),
+        plt.Rectangle((0, 0), 1, 1, fc="0.55", ec="none"),
+    ]
+    ax.legend(handles, ["liquid containing", "ice only",
+                        "ERA5 (left, stippled)", "ARM obs (right, solid)"],
+              fontsize=legend_fontsize, ncol=2, framealpha=0.9, loc="upper left")
+
+    # ---- residual panel ----------------------------------------------------
+    d_liq, d_ice = e_liq - o_liq, e_ice - o_ice
+    ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
+             edgecolor="white", linewidth=0.5, label="liquid containing")
+    ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
+             edgecolor="white", linewidth=0.5, label="ice only")
+    ax_r.axhline(0.0, color="0.3", lw=1.0)
+    # Digitisation uncertainty band, when the file still holds read-off values.
+    ax_r.axhspan(-150, 150, color="0.85", zorder=0)
+    ax_r.text(0.995, 0.04, "grey band: +/-150 h, the digitisation uncertainty "
+              "of the observation file", transform=ax_r.transAxes, ha="right",
+              va="bottom", fontsize=7.5, color="0.35")
+
+    # Star the same seasons flagged "missing" in the upper panel, so the
+    # residual there is not read as if it were on equal footing with the rest.
+    missing_mask = miss > 0.05 * season_h
+    if missing_mask.any():
+        resid_span = float(max(np.abs(d_liq).max(), np.abs(d_ice).max(), 150.0))
+        star_margin = 0.05 * resid_span
+        for xi in x[missing_mask]:
+            y_top = max(d_liq[xi], d_ice[xi], 0.0) + star_margin
+            ax_r.text(xi, y_top, "*", ha="center", va="bottom",
+                      fontsize=13, fontweight="bold", color="0.25")
+
+    ax_r.set_ylabel("ERA5 - observations [h]", fontsize=label_fontsize)
+    ax_r.tick_params(axis="both", labelsize=tick_fontsize)
+    ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax_r.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax_r.spines[sp].set_visible(False)
+    r_handles, r_labels = ax_r.get_legend_handles_labels()
+    if missing_mask.any():
+        r_handles.append(Line2D([0], [0], marker="*", linestyle="None",
+                                 markersize=11, color="0.25"))
+        r_labels.append("season has ≥5% missing obs hours (top panel)")
+    ax_r.legend(r_handles, r_labels, fontsize=legend_fontsize, ncol=1,
+                framealpha=0.9, loc="upper right")
+    ax_r.set_xticks(x)
+    ax_r.set_xticklabels([f"{y}/{(y + 1) % 100:02d}" for y in shared],
+                         rotation=45, ha="right", fontsize=tick_fontsize)
+
+    pair = ("precipitating scenes EXCLUDED from both sides" if args.no_precip
+            else "precipitation INCLUDED on both sides")
+    note = f"   |   {dropped} ERA5 season(s) not in the obs file" if dropped else ""
+    fig.suptitle(f"ERA5 against ARM observations \u2014 {series_label}\n"
+                 f"{args.region}   |   {pair}   |   {precip_label(args)}{note}",
+                 fontsize=12.5, y=0.965)
+    fig.subplots_adjust(top=0.90, bottom=0.10, left=0.09, right=0.985)
+    tag = "noprecip" if args.no_precip else "allsky"
+    return _save_stack(fig, A, out_dir, f"era5_vs_obs_{tag}", dpi)
+
+
 def fig_linear(A: Analysis, out_dir=None, dpi: int | None = None):
     """Linear LWP bins -- the physical-axis copy."""
     return figure(A, "linear", out_dir, dpi)
@@ -2609,7 +3046,8 @@ def fig_log(A: Analysis, out_dir=None, dpi: int | None = None):
 
 
 ALL_FIGURES = (fig_linear, fig_log, fig_monthly_phase_fraction,
-               fig_season_phase_stack, fig_season_phase_stack_site)
+               fig_season_phase_stack, fig_season_phase_stack_site,
+               fig_season_phase_binary)
 
 
 def main(argv: list[str] | None = None) -> int:

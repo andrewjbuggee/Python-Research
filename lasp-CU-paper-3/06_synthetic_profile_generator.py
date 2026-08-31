@@ -17,11 +17,14 @@ then samples N new synthetic profiles. Each synthetic sample carries:
 
 Method
 ======
-1. Load every .mat file in MAT_DIR. Keep only files that
-     (a) contain 'alpha_param'  → this filters out VOCALS-REx, since only
-         ORACLES profiles store alpha_param,
-     (b) have tau_c ≥ TAU_C_MIN   (default 3, per request),
-     (c) are not duplicate profile fingerprints.
+1. Load the in-situ profiles from MAT_DIR, which may be either
+     (a) the consolidated .mat file built by
+         build_synthetic_profile_inputs_from_insitu_and_ERA5.m, holding both
+         campaigns with alpha for every profile (preferred), or
+     (b) the legacy directory of one .mat file per profile, where only the
+         ORACLES files store 'alpha_param'.
+   Keep only profiles that have tau_c ≥ TAU_C_MIN (default 3, per request)
+   and are not duplicate profile fingerprints.
 2. Project raw re and lwc onto a common normalized-altitude grid of length
    L_COMMON (≥ 60), then take logs:
        Y_re  = log(re_common)              (always positive, no offset)
@@ -30,8 +33,13 @@ Method
    the raw altitude axis and stored as log(mean_alpha) for the joint MVN.
 3. PCA via SVD on Y_re and Y_lwc separately. Keep K_RE / K_LWC modes
    chosen so cumulative variance ≥ VAR_TARGET (default 0.99).
-4. Single joint multivariate normal over the (K_RE + K_LWC + 3)-dim feature
-       [re_scores; lwc_scores; log(mean_alpha); z_base; log(thickness)]
+4. Single joint multivariate normal over the feature
+       [re_scores; lwc_scores; T_scores; vapor_scores;
+        log(mean_alpha); z_base; log(thickness)]
+   log(mean_alpha) is included whenever every kept profile carries an alpha,
+   which is always true for the consolidated input. With the legacy input,
+   where only ORACLES files store alpha_param, it is dropped from the joint
+   feature and sampled from a 1-D log-normal on the ORACLES subset instead.
    The cross-covariance terms encode the physical coupling between r_e
    and LWC shape, between cloud thickness and shape, etc.
 5. Draw N samples from this MVN. Inverse-PCA gives Y_re and Y_lwc on the
@@ -56,12 +64,29 @@ from pathlib import Path
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-MAT_DIR          = Path('/Volumes/My Passport/CU_Boulder/neural_network_training_data/saz0_allProfiles/')
+# MAT_DIR accepts either input layout (see "Input loading" below):
+#   - the consolidated .mat file, or the directory holding it (preferred), or
+#   - the legacy directory of one .mat file per profile.
+# The layout is detected from what the path actually points at.
+MAT_DIR          = Path('/Users/andrewbuggee/Documents/MATLAB/Matlab-Research/'
+                        'Hyperspectral_Cloud_Retrievals/Neural_Network/'
+                        'Training_data_set/synthetic_profile_inputs/')
+
+# Legacy per-profile data set (VOCALS-REx profiles there carry no alpha):
+# MAT_DIR = Path('/Volumes/My Passport/CU_Boulder/neural_network_training_data/saz0_allProfiles/')
 
 TAU_C_MIN        = 3.0          # only use clouds with cloud optical depth ≥ this
+
+# Which optical thickness the TAU_C_MIN filter uses (consolidated input only):
+#   'stored'   - max of the in-situ tau profile, as recorded by the campaign code
+#   'computed' - recomputed from the measured r_e and LWC with QEXT_EFF
+# A handful of stored ORACLES tau profiles are corrupt (τ ~ 1e-4 for clouds with
+# LWP > 50 g/m²); 'computed' rescues those but runs ~20% lower than 'stored' on
+# the profiles where both are sound, so don't mix the two within one run.
+TAU_C_SOURCE     = 'stored'
 L_COMMON         = 80           # length of the common normalized-altitude grid (≥ 60)
 N_FIXED_LEVELS   = 7            # every synthetic profile is on this fixed grid
-N_SAMPLES        = 100
+N_SAMPLES        = 400000
 
 VAR_TARGET       = 0.99         # cumulative variance target for picking K_RE, K_LWC, K_T, K_VAPOR
 K_RE_MAX         = 12           # hard cap on number of re modes kept
@@ -78,7 +103,7 @@ RANDOM_SEED      = 0
 RUN_DATE         = datetime.date.today().strftime('%Y-%m-%d')
 
 OUT_DIR          = Path(__file__).parent / 'synthetic_profiles'
-OUT_PATH         = OUT_DIR / f'synthetic_profiles_jointMVN_N{N_SAMPLES}_L{N_FIXED_LEVELS}.npz'
+OUT_PATH         = OUT_DIR / f'synthetic_profiles_jointMVN_N{N_SAMPLES}_L{N_FIXED_LEVELS}_{RUN_DATE}.npz'
 FIG_PATH         = OUT_DIR / f'synthetic_profiles_jointMVN_diagnostic_N{N_SAMPLES}_{RUN_DATE}.png'
 FIG_EXAMPLES_PATH = OUT_DIR / f'synthetic_profiles_jointMVN_examples_N{N_SAMPLES}_{RUN_DATE}.png'
 FIG_ATMOS_PATH    = OUT_DIR / f'synthetic_profiles_jointMVN_atmos_diagnostic_N{N_SAMPLES}_{RUN_DATE}.png'
@@ -175,6 +200,220 @@ def compute_tau_c(re_top_to_base, lwc_top_to_base, z_top_to_base,
     return factor * abs(np.trapezoid(integrand, z_top_to_base))
 
 
+# ── Input loading ──────────────────────────────────────────────────────────────
+# Two input layouts are supported.
+#
+# 1. Consolidated (preferred). A single .mat file written by
+#      Matlab-Research/Hyperspectral_Cloud_Retrievals/Neural_Network/
+#      build_synthetic_profile_inputs_from_insitu_and_ERA5.m
+#    holding every VOCALS-REx and ORACLES in-situ profile together with its
+#    paired ERA5 profile. Both campaigns carry a per-level gamma shape
+#    parameter, so alpha is available for every profile.
+#
+# 2. Per-profile (legacy). A directory of one .mat file per profile from the
+#    neural-network training data set (saz0_allProfiles). Each file holds
+#    're', 'lwc', 'z', 'tau', an 'era5' struct, reflectances, and — for ORACLES
+#    only — 'alpha_param'; VOCALS-REx profiles there have no alpha.
+#
+# The layout is detected from what MAT_DIR points at rather than from the
+# literal path, so either drive or folder works.
+
+CONSOLIDATED_GLOB = 'insitu_era5_synthetic_inputs_*.mat'
+
+
+def resolve_input_path(path: Path) -> tuple[str, Path]:
+    """Work out which input layout `path` refers to.
+
+    Returns ('consolidated', <.mat file>) or ('per_profile', <directory>).
+    A directory is treated as consolidated when it holds at least one
+    CONSOLIDATED_GLOB file; the 'combined' one (both campaigns) wins, and the
+    most recently modified breaks any remaining tie.
+    """
+    if path.is_file():
+        if path.suffix != '.mat':
+            raise SystemExit(f'MAT_DIR is a file but not a .mat file: {path}')
+        return 'consolidated', path
+
+    if not path.is_dir():
+        raise SystemExit(
+            f'MAT_DIR does not exist: {path} '
+            f'(is the external drive mounted?)'
+        )
+
+    candidates = [f for f in path.glob(CONSOLIDATED_GLOB)
+                  if not f.name.startswith('._')]
+
+    if candidates:
+        combined = [f for f in candidates if 'combined' in f.name]
+        pick = max(combined or candidates, key=lambda f: f.stat().st_mtime)
+        return 'consolidated', pick
+
+    return 'per_profile', path
+
+
+def load_profiles_consolidated(path: Path) -> dict:
+    """Load every profile from the consolidated .mat file.
+
+    In-cloud vectors are stored cloud top → base and ERA5 profiles surface →
+    TOA, which is the orientation the rest of this script assumes.
+    """
+    d = scipy.io.loadmat(path, squeeze_me=True)
+
+    required = {'re', 'lwc', 'z', 'alpha', 'tau_c', 'era5_T_K',
+                'era5_vapor_concentration_cm3', 'era5_pressure_hPa'}
+    missing = required - set(d.keys())
+    if missing:
+        raise SystemExit(
+            f'{path.name} is missing expected variables: {sorted(missing)}'
+        )
+
+    if TAU_C_SOURCE not in ('stored', 'computed'):
+        raise SystemExit(f"TAU_C_SOURCE must be 'stored' or 'computed', "
+                         f'got {TAU_C_SOURCE!r}')
+
+    tau_c_stored   = np.atleast_1d(np.asarray(d['tau_c'],          dtype=np.float64))
+    tau_c_computed = np.atleast_1d(np.asarray(d['tau_c_computed'], dtype=np.float64))
+    tau_c_all      = tau_c_stored if TAU_C_SOURCE == 'stored' else tau_c_computed
+
+    # Campaign label per profile; the single-campaign files carry one label for
+    # the whole file rather than a per-profile vector.
+    n_file = len(tau_c_all)
+    if 'campaign_each' in d:
+        campaign_all = np.atleast_1d(np.asarray(d['campaign_each'], dtype=object))
+    else:
+        campaign_all = np.asarray([str(d['campaign'])] * n_file, dtype=object)
+
+    out = {k: [] for k in ('re', 'lwc', 'z', 'mean_alpha', 'campaign',
+                           'z_top', 'z_base', 'tau_c', 'lwp', 'n_levels',
+                           'T', 'vapor')}
+    skips = dict(low_tau=0, dup=0, missing=0, no_era5=0)
+    seen_fingerprints = set()
+
+    for i in range(n_file):
+
+        re    = np.atleast_1d(np.asarray(d['re'][i],    dtype=np.float64))
+        lwc   = np.atleast_1d(np.asarray(d['lwc'][i],   dtype=np.float64))
+        z     = np.atleast_1d(np.asarray(d['z'][i],     dtype=np.float64))
+        alpha = np.atleast_1d(np.asarray(d['alpha'][i], dtype=np.float64))
+
+        if tau_c_all[i] < TAU_C_MIN:
+            skips['low_tau'] += 1
+            continue
+
+        fp = tuple(np.round(re[:5], 4))
+        if fp in seen_fingerprints:
+            skips['dup'] += 1
+            continue
+        seen_fingerprints.add(fp)
+
+        out['re'].append(re)
+        out['lwc'].append(lwc)
+        out['z'].append(z)
+        out['mean_alpha'].append(trapz_vertical_mean(alpha, z))
+        out['campaign'].append(str(campaign_all[i]))
+        out['z_top'].append(float(z[0]))
+        out['z_base'].append(float(z[-1]))
+        out['tau_c'].append(float(tau_c_all[i]))
+        out['lwp'].append(compute_lwp(lwc, z))
+        out['n_levels'].append(len(re))
+        out['T'].append(np.asarray(d['era5_T_K'][i], dtype=np.float64))
+        out['vapor'].append(
+            np.asarray(d['era5_vapor_concentration_cm3'][i], dtype=np.float64))
+
+    out['era5_pressure'] = np.asarray(d['era5_pressure_hPa'][0], dtype=np.float64)
+    out['skips'] = skips
+
+    # Say how much the other tau_c choice would change the filter, since the two
+    # are not interchangeable.
+    other = tau_c_computed if TAU_C_SOURCE == 'stored' else tau_c_stored
+    n_other = int((other >= TAU_C_MIN).sum() - (tau_c_all >= TAU_C_MIN).sum())
+    print(f"  tau_c source: '{TAU_C_SOURCE}' "
+          f"(the other choice would keep {n_other:+d} profiles)")
+
+    return out
+
+
+def load_profiles_per_profile(mat_dir: Path) -> dict:
+    """Load the legacy data set: one .mat file per profile.
+
+    VOCALS-REx files there have no 'alpha_param', so their mean alpha is NaN and
+    they contribute nothing to the alpha part of the joint model.
+    """
+    mat_files = sorted(f for f in mat_dir.glob('*.mat')
+                       if not f.name.startswith('._'))
+    print(f'Found {len(mat_files)} .mat files in {mat_dir}')
+
+    if not mat_files:
+        raise SystemExit(f'No .mat files found in {mat_dir}.')
+
+    out = {k: [] for k in ('re', 'lwc', 'z', 'mean_alpha', 'campaign',
+                           'z_top', 'z_base', 'tau_c', 'lwp', 'n_levels',
+                           'T', 'vapor')}
+    skips = dict(low_tau=0, dup=0, missing=0, no_era5=0)
+    seen_fingerprints = set()
+    era5_pressure = None
+
+    for path in mat_files:
+        d = scipy.io.loadmat(path, squeeze_me=True)
+
+        if not {'re', 'z', 'tau', 'lwc'}.issubset(d.keys()):
+            skips['missing'] += 1
+            continue
+
+        era5_fields = load_era5_fields(d)
+        if era5_fields is None:
+            skips['no_era5'] += 1
+            continue
+        T_prof, vapor_prof, P_grid = era5_fields
+        if era5_pressure is None:
+            era5_pressure = P_grid                               # snapshot once
+
+        re    = np.asarray(d['re'][()],  dtype=np.float64)
+        lwc   = np.asarray(d['lwc'][()], dtype=np.float64)
+        z     = np.asarray(d['z'][()],   dtype=np.float64)
+        tau_c = float(np.asarray(d['tau'][()]).max())
+
+        has_alpha = 'alpha_param' in d.keys()
+        if has_alpha:
+            alpha = np.asarray(d['alpha_param'][()], dtype=np.float64)
+
+        if tau_c < TAU_C_MIN:
+            skips['low_tau'] += 1
+            continue
+
+        fp = tuple(np.round(re[:5], 4))
+        if fp in seen_fingerprints:
+            skips['dup'] += 1
+            continue
+        seen_fingerprints.add(fp)
+
+        # Defensive: trim to common length if any of re / lwc / alpha drift in size
+        if has_alpha:
+            n_use = min(len(re), len(lwc), len(z), len(alpha))
+            alpha = alpha[:n_use]
+        else:
+            n_use = min(len(re), len(lwc), len(z))
+        re, lwc, z = re[:n_use], lwc[:n_use], z[:n_use]
+
+        out['re'].append(re)
+        out['lwc'].append(lwc)
+        out['z'].append(z)
+        out['mean_alpha'].append(
+            trapz_vertical_mean(alpha, z) if has_alpha else np.nan)
+        out['campaign'].append('oracles' if has_alpha else 'vocals-rex')
+        out['z_top'].append(float(z[0]))
+        out['z_base'].append(float(z[-1]))
+        out['tau_c'].append(tau_c)
+        out['lwp'].append(compute_lwp(lwc, z))
+        out['n_levels'].append(n_use)
+        out['T'].append(T_prof)
+        out['vapor'].append(vapor_prof)
+
+    out['era5_pressure'] = era5_pressure
+    out['skips'] = skips
+    return out
+
+
 def load_era5_fields(d):
     """Pull (T, vapor_concentration, pressure_levels) from a loaded ORACLES .mat.
 
@@ -199,86 +438,36 @@ def load_era5_fields(d):
     return T, vap, P
 
 
-# ── Load ORACLES profiles with tau_c ≥ TAU_C_MIN ───────────────────────────────
-mat_files = sorted(f for f in MAT_DIR.glob('*.mat') if not f.name.startswith('._'))
-print(f'Found {len(mat_files)} .mat files in {MAT_DIR}')
-if not mat_files:
-    raise SystemExit(
-        f'No .mat files found in {MAT_DIR}. '
-        f'Is the external drive mounted? (exists={MAT_DIR.exists()})'
-    )
+# ── Load the in-situ + ERA5 profiles with tau_c ≥ TAU_C_MIN ────────────────────
+input_layout, input_path = resolve_input_path(MAT_DIR)
+print(f'Input layout: {input_layout}  →  {input_path}')
 
-profiles_re   = []   # raw arrays (top → base)
-profiles_lwc  = []
-altitudes_raw = []
-mean_alpha    = []   # per-profile vertical-mean alpha (NaN for VOCALS-REx files)
-campaign_each = []   # 'oracles' or 'vocals-rex' per profile
-z_top_each    = []
-z_base_each   = []
-tau_c_each    = []
-lwp_each      = []
-n_levels_each = []
-T_each        = []   # (37,) ERA5 temperature, surface → TOA
-vapor_each    = []   # (37,) ERA5 vapor_concentration, surface → TOA
-era5_pressure = None
+if input_layout == 'consolidated':
+    data = load_profiles_consolidated(input_path)
+else:
+    data = load_profiles_per_profile(input_path)
 
-seen_fingerprints = set()
-n_skip_low_tau = n_skip_dup = n_skip_missing = n_skip_no_era5 = 0
+profiles_re   = data['re']          # raw arrays (top → base)
+profiles_lwc  = data['lwc']
+altitudes_raw = data['z']
+mean_alpha    = data['mean_alpha']  # per-profile vertical-mean alpha
+campaign_each = data['campaign']    # 'oracles' or 'vocals-rex' per profile
+z_top_each    = data['z_top']
+z_base_each   = data['z_base']
+tau_c_each    = data['tau_c']
+lwp_each      = data['lwp']
+n_levels_each = data['n_levels']
+T_each        = data['T']           # (37,) ERA5 temperature, surface → TOA
+vapor_each    = data['vapor']       # (37,) ERA5 vapor_concentration, surface → TOA
+era5_pressure = data['era5_pressure']
 
-for path in mat_files:
-    d = scipy.io.loadmat(path, squeeze_me=True)
+n_skip_low_tau  = data['skips']['low_tau']
+n_skip_dup      = data['skips']['dup']
+n_skip_missing  = data['skips']['missing']
+n_skip_no_era5  = data['skips']['no_era5']
 
-    if not {'re', 'z', 'tau', 'lwc'}.issubset(d.keys()):
-        n_skip_missing += 1
-        continue
-
-    era5_fields = load_era5_fields(d)
-    if era5_fields is None:
-        n_skip_no_era5 += 1
-        continue
-    T_prof, vapor_prof, P_grid = era5_fields
-    if era5_pressure is None:
-        era5_pressure = P_grid                               # snapshot once
-
-    re    = np.asarray(d['re'][()],  dtype=np.float64)
-    lwc   = np.asarray(d['lwc'][()], dtype=np.float64)
-    z     = np.asarray(d['z'][()],   dtype=np.float64)
-    tau_c = float(np.asarray(d['tau'][()]).max())
-
-    has_alpha = 'alpha_param' in d.keys()
-    if has_alpha:
-        alpha = np.asarray(d['alpha_param'][()], dtype=np.float64)
-
-    if tau_c < TAU_C_MIN:
-        n_skip_low_tau += 1
-        continue
-
-    fp = tuple(np.round(re[:5], 4))
-    if fp in seen_fingerprints:
-        n_skip_dup += 1
-        continue
-    seen_fingerprints.add(fp)
-
-    # Defensive: trim to common length if any of re / lwc / alpha drift in size
-    if has_alpha:
-        n_use = min(len(re), len(lwc), len(z), len(alpha))
-        alpha = alpha[:n_use]
-    else:
-        n_use = min(len(re), len(lwc), len(z))
-    re, lwc, z = re[:n_use], lwc[:n_use], z[:n_use]
-
-    profiles_re.append(re)
-    profiles_lwc.append(lwc)
-    altitudes_raw.append(z)
-    mean_alpha.append(trapz_vertical_mean(alpha, z) if has_alpha else np.nan)
-    campaign_each.append('oracles' if has_alpha else 'vocals-rex')
-    z_top_each.append(float(z[0]))
-    z_base_each.append(float(z[-1]))
-    tau_c_each.append(tau_c)
-    lwp_each.append(compute_lwp(lwc, z))
-    n_levels_each.append(n_use)
-    T_each.append(T_prof)
-    vapor_each.append(vapor_prof)
+if not profiles_re:
+    raise SystemExit(f'No usable profiles found in {input_path}')
 
 n_train         = len(profiles_re)
 mean_alpha      = np.asarray(mean_alpha,   dtype=np.float64)
@@ -307,11 +496,16 @@ print(f'  tau_c   : [{tau_c_each.min():.2f}, {tau_c_each.max():.2f}], '
       f'median={np.median(tau_c_each):.2f}')
 print(f'  thick km: [{thickness_each.min():.3f}, {thickness_each.max():.3f}]')
 
-# Alpha is only measured in ORACLES; VOCALS-REx files lack alpha_param.
+# The consolidated file carries alpha for both campaigns. In the legacy layout
+# only the ORACLES files store alpha_param, so VOCALS-REx alphas are NaN.
 mask_alpha = ~np.isnan(mean_alpha)
 alpha_obs  = mean_alpha[mask_alpha]
-print(f'  alpha   : measured for {mask_alpha.sum()}/{n_train} profiles '
-      f'(ORACLES only); '
+alpha_note = '' if mask_alpha.all() else ' (ORACLES only)'
+
+# Which campaigns actually contribute an alpha, for labelling prints and figures.
+ALPHA_SOURCE_LABEL = ' + '.join(sorted(set(campaign_each[mask_alpha])))
+print(f'  alpha   : measured for {mask_alpha.sum()}/{n_train} profiles'
+      f'{alpha_note}; '
       f'[{alpha_obs.min():.2f}, {alpha_obs.max():.2f}], '
       f'median={np.median(alpha_obs):.2f}')
 print(f'  ERA5    : {N_ERA5} pressure levels '
@@ -379,33 +573,46 @@ K_T,   K_vapor          = scores_T.shape[1],    scores_vapor.shape[1]
 
 
 # ── Joint MVN over the cross-campaign feature ─────────────────────────────────
-# Alpha is omitted from the joint MVN because VOCALS-REx files don't store it
-# (only ~75% of profiles have it). It is sampled independently from a 1-D
-# log-normal fit on the ORACLES subset; this loses any (mild) alpha–shape
-# correlation but avoids imputing a quarter of the dataset.
-log_thickness  = np.log(thickness_each)
+# log(mean_alpha) joins the joint feature vector whenever every kept profile
+# carries an alpha, so the MVN's cross-covariance captures the coupling between
+# the gamma shape parameter and the r_e / LWC / thickness structure. The legacy
+# per-profile layout stores alpha for ORACLES only; rather than impute a quarter
+# of the rows there, alpha falls back to an independent 1-D log-normal fit on
+# the profiles that do have one.
+ALPHA_IN_MVN = bool(mask_alpha.all())
 
-features = np.hstack([
-    scores_re,
-    scores_lwc,
-    scores_T,
-    scores_vapor,
-    z_base_each[:,    None],
-    log_thickness[:,  None],
-])
-mu_f  = features.mean(axis=0)
-cov_f = np.cov(features, rowvar=False)
-print(f'\nJoint MVN feature dimension: {features.shape[1]} '
-      f'(K_re={K_re} + K_lwc={K_lwc} + K_T={K_T} + K_vapor={K_vapor} '
-      f'+ z_base + log(thickness))')
+log_thickness = np.log(thickness_each)
 
-# 1-D log-normal model for alpha (fit on ORACLES profiles only).
-log_alpha_obs = np.log(np.maximum(alpha_obs, 1e-3))
+# 1-D log-normal statistics for alpha. These set the sampling clip bounds in
+# both modes, and are the sampling distribution itself when ALPHA_IN_MVN is False.
+log_alpha_obs    = np.log(np.maximum(alpha_obs, 1e-3))
 mu_alpha_log     = float(log_alpha_obs.mean())
 sigma_alpha_log  = float(log_alpha_obs.std(ddof=1)) if len(log_alpha_obs) > 1 else 0.0
 alpha_obs_min, alpha_obs_max = float(alpha_obs.min()), float(alpha_obs.max())
-print(f'Alpha (ORACLES-only) fit: log-N(mu={mu_alpha_log:.3f}, sigma={sigma_alpha_log:.3f})  '
-      f'clip [{alpha_obs_min:.2f}, {alpha_obs_max:.2f}]')
+
+feature_blocks = [scores_re, scores_lwc, scores_T, scores_vapor]
+feature_names  = [f'K_re={K_re}', f'K_lwc={K_lwc}', f'K_T={K_T}', f'K_vapor={K_vapor}']
+
+if ALPHA_IN_MVN:
+    feature_blocks.append(np.log(np.maximum(mean_alpha, 1e-3))[:, None])
+    feature_names.append('log(alpha)')
+
+feature_blocks += [z_base_each[:, None], log_thickness[:, None]]
+feature_names  += ['z_base', 'log(thickness)']
+
+features = np.hstack(feature_blocks)
+mu_f  = features.mean(axis=0)
+cov_f = np.cov(features, rowvar=False)
+print(f'\nJoint MVN feature dimension: {features.shape[1]} '
+      f'({" + ".join(feature_names)})')
+
+if ALPHA_IN_MVN:
+    print(f'Alpha ({ALPHA_SOURCE_LABEL}) is in the joint MVN; '
+          f'clip [{alpha_obs_min:.2f}, {alpha_obs_max:.2f}]')
+else:
+    print(f'Alpha ({ALPHA_SOURCE_LABEL}) sampled independently: '
+          f'log-N(mu={mu_alpha_log:.3f}, sigma={sigma_alpha_log:.3f})  '
+          f'clip [{alpha_obs_min:.2f}, {alpha_obs_max:.2f}]')
 
 
 # ── Sample N synthetic profiles (with rejection on tau_c) ─────────────────────
@@ -413,7 +620,8 @@ slc_re    = slice(0,                                 K_re)
 slc_lwc   = slice(K_re,                              K_re + K_lwc)
 slc_T     = slice(K_re + K_lwc,                      K_re + K_lwc + K_T)
 slc_vapor = slice(K_re + K_lwc + K_T,                K_re + K_lwc + K_T + K_vapor)
-idx_zbase = K_re + K_lwc + K_T + K_vapor
+idx_alpha = K_re + K_lwc + K_T + K_vapor if ALPHA_IN_MVN else None
+idx_zbase = K_re + K_lwc + K_T + K_vapor + (1 if ALPHA_IN_MVN else 0)
 idx_thick = idx_zbase + 1
 u_grid_b2t = np.linspace(0.0, 1.0, L_COMMON)
 
@@ -438,12 +646,16 @@ def reconstruct_batch(samples_batch):
                             thickness_each.min(), thickness_each.max())
     new_z_top     = new_z_base + new_thickness
 
-    # Alpha is sampled INDEPENDENTLY from a 1-D log-normal fit on ORACLES data,
-    # not from the joint MVN (VOCALS-REx files lack alpha_param so it can't go
-    # in the joint feature without imputing 25% of rows). Clipped to observed
-    # ORACLES bounds so we never extrapolate alpha past the measured envelope.
-    new_log_alpha = rng.normal(mu_alpha_log, sigma_alpha_log, size=n)
-    new_alpha     = np.clip(np.exp(new_log_alpha), alpha_obs_min, alpha_obs_max)
+    # Alpha comes out of the joint MVN when every training profile carried one,
+    # so it keeps its correlation with the r_e / LWC / thickness features. With
+    # the legacy layout (alpha for ORACLES only) it is drawn from the standalone
+    # 1-D log-normal instead. Either way it is clipped to the observed envelope
+    # so we never extrapolate alpha past the measured range.
+    if ALPHA_IN_MVN:
+        new_log_alpha = samples_batch[:, idx_alpha]
+    else:
+        new_log_alpha = rng.normal(mu_alpha_log, sigma_alpha_log, size=n)
+    new_alpha = np.clip(np.exp(new_log_alpha), alpha_obs_min, alpha_obs_max)
 
     # Inverse PCA in log-space, then exp() back to physical units.
     log_re_recon    = mu_re    + new_scores_re    @ comps_re
@@ -756,7 +968,8 @@ ax = axes[2, 2]
 bins = np.linspace(min(alpha_obs.min(), new_alpha.min()),
                    max(alpha_obs.max(), new_alpha.max()), 40)
 ax.hist(alpha_obs, bins=bins, density=True, alpha=0.55,
-        color='firebrick', label=f'In-situ (ORACLES, n={alpha_obs.size})')
+        color='firebrick',
+        label=f'In-situ ({ALPHA_SOURCE_LABEL}, n={alpha_obs.size})')
 ax.hist(new_alpha, bins=bins, density=True, alpha=0.55,
         color='steelblue', label=f'Synthetic (n={N_SAMPLES})')
 ax.set_xlabel(r'Vertical-mean $\alpha$ (libRadtran shape)')

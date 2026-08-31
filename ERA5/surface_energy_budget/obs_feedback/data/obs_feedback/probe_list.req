@@ -1,0 +1,6 @@
+list,
+    class=ea,
+    type=ofb,
+    expver=1,
+    obsgroup=conv,
+    date=2015-01-15

@@ -261,6 +261,19 @@ REGIONS: dict[str, Region] = {
     "barrow": Region(80.0, -165.0, 70.0, -150.0, "Barrow strip: 70-80N, 165-150W"),
     # Beaufort/Chukchi shelf and slope, for context around the Barrow strip.
     "beaufort_chukchi": Region(80.0, -170.0, 68.0, -120.0, "Beaufort-Chukchi: 68-80N, 170-120W"),
+    # --- SASSIE 2022 ship track: the three tiles "barrow" does not cover -----
+    # The R/V Woldstad ran 69.20-73.52 N, 165.96-144.89 W (Drushka et al., 2024).
+    # Enclosing that on the 0.25 deg grid with one cell of margin needs
+    # 69.00-73.75 N, 166.25-144.50 W, of which "barrow" (70-80 N, 165-150 W)
+    # supplies only the middle. These three boxes tile the remainder exactly:
+    # no overlap with barrow, no overlap with each other, no gaps. See
+    # sassie_comparison/download_era5_sassie_gap.py.
+    "sassie_gap_south": Region(69.75, -166.25, 69.00, -144.50,
+                               "SASSIE gap, south of the Barrow strip: 69.00-69.75N, 166.25-144.50W"),
+    "sassie_gap_west": Region(73.75, -166.25, 70.00, -165.25,
+                              "SASSIE gap, west of the Barrow strip: 70.00-73.75N, 166.25-165.25W"),
+    "sassie_gap_east": Region(73.75, -149.75, 70.00, -144.50,
+                              "SASSIE gap, east of the Barrow strip: 70.00-73.75N, 149.75-144.50W"),
 }
 
 # Edit this to define an ad hoc region, then run with --region custom.
