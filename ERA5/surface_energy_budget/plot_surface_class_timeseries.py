@@ -421,6 +421,33 @@ def month_ticks(slots: list[tuple[int, int]]) -> tuple[list[int], list[str]]:
 # ----------------------------------------------------------------------------
 # Reduction
 # ----------------------------------------------------------------------------
+def season_slot_exists(slots, start_md, season_year: int,
+                       wraps: bool) -> np.ndarray:
+    """Which slots of the shared calendar actually exist in ONE season.
+
+    ``season_calendar`` builds its slot list on a leap reference year so that
+    29 February always has a column. Most seasons do not have that day, and
+    counting it against them is what made a non-leap Oct-Mar season report
+    182/183 = 99.5% coverage when it was in fact complete.
+
+    For a wrapping window, a slot at or after the start date belongs to the
+    season's own year and an earlier one to the next year -- so 29 February in
+    an Oct-Mar season exists exactly when the SECOND year is a leap year.
+    """
+    from datetime import date as _date
+
+    start_md = tuple(start_md)
+    out = np.ones(len(slots), dtype=bool)
+    for i, (m, d) in enumerate(slots):
+        year = (season_year if (not wraps or (m, d) >= start_md)
+                else season_year + 1)
+        try:
+            _date(year, m, d)
+        except ValueError:          # 29 Feb of a common year, and nothing else
+            out[i] = False
+    return out
+
+
 def season_layout(ds, args) -> dict:
     """Map every time step to a season and a day-of-season slot.
 
@@ -449,9 +476,33 @@ def season_layout(ds, args) -> dict:
     sel = in_window & (s_idx >= 0)
     np.add.at(counts, (s_idx[sel], dos[sel]), 1)
 
+    # How long each season's window REALLY is, and how many days of each
+    # calendar month it holds. Both differ between leap and common years, and
+    # both are denominators downstream: the first normalises hours per season,
+    # the second hours per month. Using the shared 183-slot calendar for either
+    # silently inflates a common year's denominator -- by 1 day over the season,
+    # and by a full 1-in-28 over February.
+    wraps = tuple(args.season_end) < tuple(args.season_start)
+    # Same ordering as season_month_axis in the histogram module: first
+    # appearance, not sorted, so a wrapping window keeps January after December.
+    # Inlined rather than imported because that module imports THIS one.
+    slot_month = [m for m, _ in slots]
+    months = list(dict.fromkeys(slot_month))
+    _mi = {m: i for i, m in enumerate(months)}
+    mi_of_slot = np.array([_mi[m] for m in slot_month], dtype=np.intp)
+    days_per_season = np.zeros(len(uniq_seasons), dtype=int)
+    month_days_per_season = np.zeros((len(uniq_seasons), len(months)), dtype=int)
+    for s_i, s in enumerate(uniq_seasons):
+        exists = season_slot_exists(slots, args.season_start, int(s), wraps)
+        days_per_season[s_i] = int(exists.sum())
+        np.add.at(month_days_per_season, (s_i, mi_of_slot[exists]), 1)
+
     return {
         "slots": slots, "dos": dos, "s_idx": s_idx,
         "in_window": in_window, "seasons": uniq_seasons, "counts": counts,
+        "days_per_season": days_per_season,
+        "month_days_per_season": month_days_per_season,
+        "months": months,
     }
 
 
@@ -465,13 +516,21 @@ def select_seasons(layout: dict, args) -> tuple[list[int], list[int], str]:
     Returns ``(indices into layout["seasons"], the season years, a label)``.
     """
     n_slot = len(layout["slots"])
+    # Denominator is the season's OWN length, not the shared leap-year calendar,
+    # so a complete common year reads 100% instead of 99.5%.
+    dps = layout.get("days_per_season")
+    if dps is None:
+        dps = np.full(len(layout["seasons"]), n_slot, dtype=int)
+    span = (f"{int(dps.min())}-{int(dps.max())}" if dps.min() != dps.max()
+            else f"{int(dps.max())}")
     print(f"\n  Seasons found ({len(layout['seasons'])}), coverage of the "
-          f"{n_slot}-day window:")
+          f"{span}-day window:")
     frac = {}
     for s_i, s in enumerate(layout["seasons"]):
-        f = float((layout["counts"][s_i] > 0).sum()) / n_slot
+        f = float((layout["counts"][s_i] > 0).sum()) / float(dps[s_i])
         frac[s] = f
-        print(f"    {s}/{s+1}: {f*100:5.1f}%"
+        leap = "" if dps[s_i] == n_slot else "  (common year)"
+        print(f"    {s}/{s+1}: {f*100:5.1f}%{leap}"
               + ("" if f >= args.min_season_coverage else "   (below --min-season-coverage)"))
 
     if args.years is not None:

@@ -218,6 +218,48 @@ def station_census(table: pd.DataFrame) -> pd.DataFrame:
     return census.sort_values("n_rows", ascending=False)
 
 
+def position_history(table: pd.DataFrame, tol_deg: float = 0.02) -> pd.DataFrame:
+    """Detect station relocations: one statid reporting from more than one place.
+
+    This is not hypothetical at Utqiagvik. NWS Service Change Notice 18-89
+    moved the WMO 70026 radiosonde release point on 12 February 2019, from the
+    legacy site to 71.32267 N, 156.61784 W -- 4.6 miles northeast, which is the
+    DOE ARM North Slope of Alaska C1 site. So a multi-year query on 70026 spans
+    two physically different launch points, and the median position reported by
+    ``station_census`` is a blend of both that corresponds to neither.
+
+    Any statistic computed across the move -- departure bias especially -- mixes
+    two records. Split on the move date rather than averaging through it.
+    """
+    if not {"lat", "lon"}.issubset(table.columns):
+        return pd.DataFrame()
+
+    rows: List[Dict[str, object]] = []
+    for statid, group in table.groupby("statid", dropna=False):
+        # Cluster positions onto a coarse grid; tol_deg sets what counts as
+        # "the same place" against ordinary reporting jitter.
+        lat_key = (group["lat"] / tol_deg).round() * tol_deg
+        lon_key = (group["lon"] / tol_deg).round() * tol_deg
+        for (lat_c, lon_c), cluster in group.groupby([lat_key, lon_key]):
+            rows.append(
+                {
+                    "statid": statid,
+                    "lat_deg": float(cluster["lat"].median()),
+                    "lon_deg": float(cluster["lon"].median()),
+                    "alt_m": float(cluster["stalt"].median())
+                    if "stalt" in cluster.columns else np.nan,
+                    "n_rows": len(cluster),
+                    "first_date": cluster["date"].min() if "date" in cluster.columns else np.nan,
+                    "last_date": cluster["date"].max() if "date" in cluster.columns else np.nan,
+                }
+            )
+
+    history = pd.DataFrame(rows)
+    if history.empty:
+        return history
+    return history.sort_values(["statid", "first_date"])
+
+
 def usage_summary(table: pd.DataFrame) -> pd.DataFrame:
     """Per station and variable: how many data were used, monitored, rejected.
 
@@ -382,6 +424,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     census = station_census(table)
     summary = usage_summary(table)
+    history = position_history(table)
 
     # Output defaults to <in-dir>/summary rather than a fixed path. A fixed
     # default lets a run over the synthetic fixture write fabricated numbers
@@ -396,9 +439,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     prefix = "SYNTHETIC_" if any(p.name.startswith("SYNTHETIC") for p in paths) else ""
     census.to_csv(out_dir / f"{prefix}station_census.csv")
     summary.to_csv(out_dir / f"{prefix}usage_summary.csv", index=False)
+    if not history.empty:
+        history.to_csv(out_dir / f"{prefix}position_history.csv", index=False)
 
     print("\nStations found in the box:")
     print(census.to_string())
+
+    if not history.empty:
+        moved = history.groupby("statid").size()
+        moved = moved[moved > 1]
+        if len(moved):
+            print("\nRELOCATION WARNING -- these identifiers report from more")
+            print("than one position, so any statistic averaged across the whole")
+            print("period mixes physically different sites:")
+            print(history[history["statid"].isin(moved.index)].to_string(index=False))
+            print("\nAt Utqiagvik this is expected: NWS SCN 18-89 moved WMO 70026")
+            print("to 71.32267 N, 156.61784 W on 2019-02-12 -- the ARM NSA C1 site.")
 
     print_verdict(census, summary)
     print(f"\nTables written to {out_dir}")

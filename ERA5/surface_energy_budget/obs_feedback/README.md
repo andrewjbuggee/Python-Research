@@ -12,11 +12,12 @@ MARS. This answers, per station, per variable, per report: was the observation
 Two parts of the question are already settled, and knowing which is which will
 save you from over-interpreting the output.
 
-**1. Nothing from ARM/NSA or NOAA-BRW radiation instrumentation is in ERA5.**
+**1. No ARM/NSA or NOAA-BRW *cloud or radiation* instrumentation is in ERA5.**
 ERA5 assimilates no surface broadband irradiance, no cloud radar reflectivity,
-and no microwave-radiometer LWP. There is no observation operator for
-downwelling longwave in the IFS. This is not something the ODB query can
-overturn — it is a property of the observing-system configuration. The useful
+no ceilometer cloud base and no microwave-radiometer LWP. See "Evidence, and
+its limits" below for the basis and for what this does NOT cover -- notably ARM
+radiosondes, which ARE on the GTS under WMO 70026 and, since February 2019,
+ARE the Barrow sounding that ERA5 ingests. The useful
 consequence for a surface-energy-budget study is the good one: **the ARM Barrow
 radiation record is independent of ERA5**, so comparing ERA5 fluxes against it
 is not circular. (High confidence.)
@@ -39,6 +40,107 @@ from them were.
 
 ---
 
+## Evidence, and its limits
+
+The claims above are argued from ECMWF's own enumeration of the ERA5 observing
+system, not from proof. Recording the basis here so it can be checked.
+
+**Hersbach et al. (2020), *QJRMS* 146:1999-2049, section 5.1** lists what ERA5
+assimilates:
+
+- in-situ: 10 m wind over sea; 2 m humidity over land; pressure over land and
+  sea; upper-air wind/temperature/humidity from radiosonde, PILOT, dropsonde
+  and aircraft
+- satellite: AMVs; temperature/humidity/ozone sounders; microwave imagers
+  (SSMI, SSMIS, TMI, AMSR-E, AMSR-2, GMI) in all-sky; hyperspectral infrared
+  (IASI, AIRS, CrIS); GNSS-RO bending angles; scatterometer wind and soil
+  moisture; altimeter wave height; level-2 ozone
+- ground-based radar-gauge composite rain rate, from 2009
+- LDAS: SYNOP screen-level T/RH feeding the soil-moisture analysis, separate
+  from 4D-Var
+
+Absent from that list: ground-based cloud radar, ground-based microwave
+radiometer LWP, surface radiation, ceilometer cloud base, ground-based GNSS
+zenith total delay.
+
+**What that supports (high confidence).** No LWP retrieval, cloud-fraction
+product, surface irradiance measurement or cloud-radar reflectivity is
+assimilated anywhere in ERA5. LWP is not an assimilated quantity; cloud liquid
+is touched only indirectly, via all-sky microwave radiances.
+
+**Moderate confidence, and it matters at this site.** Those all-sky microwave
+radiances are largely an ocean-surface product -- Hersbach describes extending
+their use over land and sea ice as an advance, implying a more restricted
+baseline. Over Utqiagvik, land and sea ice, ERA5 cloud liquid is close to pure
+model output.
+
+**RESOLVED, AND IT REVERSES AN EARLIER CLAIM IN THIS README: ARM sondes at
+Utqiagvik ARE on the GTS, under WMO 70026, and are very probably assimilated.**
+
+The documented chain:
+
+1. NWS Service Change Notice 18-89 (issued 2019-03-22): effective
+   **12 February 2019**, the Barrow radiosonde program, "World Meteorological
+   Organization (WMO) # 70026, Station ID PABR", moved from manual launches to
+   an automated launcher "4.6 miles northeast of the legacy release point".
+   The notice gives the new release point as **71.32267 N, 156.61784 W,
+   8.4 m**.
+2. Those coordinates are the DOE ARM North Slope of Alaska C1 site (ARM lists
+   NSA C1 at 71.3 N, 156.6 W, 8 m).
+3. ARM operates the autosonde there -- a Vaisala AS15, replaced by an AS41 in
+   September 2022 (ARM ASR STM presentation, 2025-04-04, slide 10).
+4. The same presentation, slide 11, lists ARM's current GTS products as
+   including **"NSA C1 (WMO 70026)"**.
+5. ERA5 assimilates radiosondes (Hersbach et al. 2020, section 5.1).
+
+So from February 2019 onward, the Barrow 70026 sounding that ERA5 ingests is
+launched and processed by ARM. Any statement that ARM data never entered ERA5
+is wrong for the post-2019 sonde record.
+
+**Unchanged by this.** The reversal covers soundings only. ARM's radiation,
+cloud radar and MWR instrumentation remains outside ERA5's observing system,
+so the surface-energy-budget comparison this package was written to support is
+still non-circular.
+
+**Consequence for any query on 70026.** The identifier spans two physically
+different launch points across 2019-02-12. ``position_history()`` in
+``read_era5_obs_feedback.py`` detects the move and warns; split statistics on
+that date rather than averaging through it.
+
+**Still not established.** ERA5 assimilates ground-based radar-gauge rain-rate
+composites from 2009, so "no ground-based remote sensing" is false as a
+category statement. It has no North Slope coverage and concerns precipitation
+rather than cloud, so it does not affect the conclusion here -- but the
+category is not empty.
+
+**The limit.** This is an argument from documented absence: strong, but it
+cannot exclude a stream that entered under a category label not recognised
+here. The empirical test is the station census this package produces -- it
+lists every statid reporting near 71.3 N, so an ARM identifier would show up
+under some variable if one exists. That is the strongest reason to pursue MARS
+access.
+
+Corroboration worth noting: Yuan et al. (2025), *GRL*, report ERA5 zenith total
+delay discontinuities at 09:00 and 21:00 UTC attributed to the assimilation
+window transition -- independent support for the 12-hour window boundaries
+behind the ``--mars-time 0900/2100`` default, though not for the MARS key
+encoding itself.
+
+References
+- Hersbach, H. et al. (2020), The ERA5 global reanalysis, QJRMS 146:1999-2049.
+  https://rmets.onlinelibrary.wiley.com/doi/full/10.1002/qj.3803
+- Yuan, P. et al. (2025), A Global Assessment of Diurnal Discontinuities in ERA5
+  Tropospheric Zenith Total Delays Using 10 Years of GNSS Data, GRL.
+  https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2024GL113140
+- NWS Service Change Notice 18-89 (updated 2019-03-22), Transition of Manual
+  Radiosonde Observations to Automated Radiosonde Observations at Barrow, AK.
+  https://www.weather.gov/media/notification/pdfs/scn18-89upper_air_barrow_aaa.pdf
+- ARM, Advancements in ARM's Instrumentation and Measurement Strategies,
+  ASR STM, 2025-04-04, slides 10-11.
+  https://www.asr.arm.gov/meetings/stm/presentations/2025/1853.pdf
+
+---
+
 ## What you need
 
 Full MARS access, which a CDS account does **not** provide. Either:
@@ -52,8 +154,25 @@ A permissions error (as opposed to an empty result) means an entitlement
 problem, not a query problem — that goes to ECMWF user support.
 
 ```bash
+python check_setup.py
+```
+
+`check_setup.py` tests every prerequisite for both routes and prints the
+specific next action for each failure. Run it first; it distinguishes the four
+different missing pieces that otherwise all present as the same error.
+
+```bash
 pip install -r requirements-odb.txt
 ```
+
+**Access is the hard gate, not the code.** Full MARS is provisioned through
+ECMWF Member and Co-operating States. The United States is neither, so a
+CU Boulder affiliation does not itself grant access, and self-registration at
+ecmwf.int gives an account without the MARS entitlement. I do not know the
+current route for a US-based academic to obtain ERA5 feedback access — ask
+ECMWF user support (https://support.ecmwf.int) directly, naming the ERA5
+observation feedback (ODB) archive specifically. A collaborator with an Atos
+login is usually the faster path.
 
 ---
 
@@ -162,6 +281,7 @@ offsets against your own file: `odb header file.odb`.
 
 | file | role |
 |---|---|
+| `check_setup.py` | verifies prerequisites, reports which route is closest |
 | `era5_odb_config.py` | station geometry, ODB code tables, box definition |
 | `fetch_era5_obs_feedback.py` | builds and submits/emits the MARS requests |
 | `read_era5_obs_feedback.py` | reads ODB, decodes flags, writes the summary |

@@ -283,6 +283,33 @@ from plot_surface_class_timeseries import (
 # count and no conversion appears anywhere below.
 HOURS_PER_STEP = 1.0
 
+# ----------------------------------------------------------------------------
+# LEAP YEARS: the season window is not one length
+# ----------------------------------------------------------------------------
+# season_calendar() builds its day-slot list on a LEAP reference year so that
+# 29 February always has a column. That is the right choice for indexing -- one
+# slot axis shared by every season -- but it is the wrong denominator, and using
+# it as one produced two errors that both looked like missing data:
+#
+#   * COVERAGE. A complete Oct-Mar season of a common year has 182 of the 183
+#     slots filled, so it reported 99.5% and looked slightly gappy. Only seasons
+#     ending in a leap year (2015/16, 2019/20, 2023/24 here) reached 100%.
+#
+#   * SCALING. to_hours_per_season scales each season up to the nominal window,
+#     so a complete common year was multiplied by 183/182 -- credited with 24
+#     hours it never had. The monthly form was worse: February took 29 days for
+#     every season, inflating every common-year February by 1/28 = 3.6%.
+#
+# Both denominators are now per season, from layout["days_per_season"] and
+# layout["month_days_per_season"]. The property to preserve when touching this:
+# A COMPLETE SEASON MUST SCALE BY EXACTLY 1.0, whether or not it holds 29
+# February. Scaling is for genuinely missing files -- 2017/18 at 93.4% -- and
+# must be a no-op for a season that is simply shorter.
+#
+# Consequence for callers: season_phase_hours returns season_h as an ARRAY over
+# seasons, not a float. Use _sh(season_h, i) for one season and window_label()
+# to render it.
+
 REQUIRED_VARS = ("tcc", "tclw", "tciw", "siconc")
 
 # ----------------------------------------------------------------------------
@@ -570,13 +597,48 @@ def sweep_lwp_values(lo_g: float, hi_g: float, n: int,
     return np.linspace(float(lo_g), float(hi_g), int(n))
 
 
+def season_window_hours(layout: dict, keep_idx) -> np.ndarray:
+    """Hours in each SELECTED season's own window, leap years included.
+
+    A common-year Oct-Mar season is 182 days, a leap-year one 183. Scaling
+    every season to the longer of the two would credit a common year with 24
+    hours it never had -- and, worse, would stop a complete common year from
+    passing through the normalisation unchanged.
+    """
+    days = np.asarray(layout["days_per_season"], dtype=float)[list(keep_idx)]
+    return days * 24.0 * HOURS_PER_STEP
+
+
+def season_month_window_hours(layout: dict, keep_idx) -> np.ndarray:
+    """Hours of each calendar month present, per selected season.
+
+    Shaped ``(n_season, n_month)``. February is the reason this cannot be one
+    row shared by every season: 28 days in a common year and 29 in a leap year
+    is a 3.6% difference in that month's denominator, which is an order of
+    magnitude larger than the whole-season effect.
+    """
+    md = np.asarray(layout["month_days_per_season"], dtype=float)[list(keep_idx)]
+    return md * 24.0 * HOURS_PER_STEP
+
+
+def window_label(season_h) -> str:
+    """Render a season-window length that may vary between seasons."""
+    a = np.asarray(season_h, dtype=float)
+    lo, hi = float(np.nanmin(a)), float(np.nanmax(a))
+    return f"{lo:,.0f} h" if lo == hi else f"{lo:,.0f}-{hi:,.0f} h"
+
+
 def month_window_hours(slots: list[tuple[int, int]]) -> np.ndarray:
     """Hours the season window contains in each of its calendar months.
 
     Counted from the day-slots actually in the window, not from the calendar, so
     a window that starts mid-month gives that month its true partial length
-    rather than a full one. This is the denominator that turns a monthly
-    occupancy fraction into hours per month.
+    rather than a full one.
+
+    NOTE this is the SHARED leap-year calendar, so February gets 29 days here
+    for every season. Use :func:`season_month_window_hours` for the per-season
+    denominator; this form is kept for the x-axis furniture, where one nominal
+    month length is what is wanted.
     """
     months, mi_of_slot = season_month_axis(slots)
     out = np.zeros(len(months))
@@ -1237,7 +1299,8 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
     }
 
 
-def to_hours_per_season(sec: dict, keep_idx: list[int], edge_sets: dict) -> dict:
+def to_hours_per_season(sec: dict, keep_idx: list[int], edge_sets: dict,
+                        layout: dict | None = None) -> dict:
     """Convert accumulated weights to hours per season and average the seasons.
 
     See the module docstring for the normalisation. In one line: divide by the
@@ -1246,7 +1309,14 @@ def to_hours_per_season(sec: dict, keep_idx: list[int], edge_sets: dict) -> dict
     sampled season is scaled up rather than counted short.
     """
     n_slot = len(sec["slots"])
-    season_hours = n_slot * 24.0 * HOURS_PER_STEP
+    # Per season, not one number for all of them: a common-year Oct-Mar window
+    # is 182 days and a leap-year one 183. With the season's own length here, a
+    # COMPLETE season has counts/valid == 1 and passes through unscaled, which
+    # is the property that makes the scaling correct rather than merely small.
+    if layout is not None and "days_per_season" in layout:
+        season_hours = season_window_hours(layout, keep_idx)      # (season,)
+    else:
+        season_hours = np.full(len(keep_idx), n_slot * 24.0 * HOURS_PER_STEP)
 
     w_class = sec["w_class"][keep_idx]                     # (season, class)
     denom = np.where(w_class > 0, w_class, np.nan)
@@ -1255,14 +1325,16 @@ def to_hours_per_season(sec: dict, keep_idx: list[int], edge_sets: dict) -> dict
     for scale in edge_sets:
         h = sec["hist"][scale][keep_idx]                   # (s, class, phase, bar)
         with np.errstate(invalid="ignore", divide="ignore"):
-            per_season = h / denom[:, :, None, None] * season_hours
+            per_season = (h / denom[:, :, None, None]
+                          * season_hours[:, None, None, None])
         hours[scale] = {
             "per_season": per_season,                      # kept for the spread
             "mean": nanmean_quiet(per_season, axis=0),     # (class, phase, bar)
         }
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        cloudy_hours = sec["w_cloudy"][keep_idx] / denom * season_hours
+        cloudy_hours = (sec["w_cloudy"][keep_idx] / denom
+                        * season_hours[:, None])
         area_pct = 100.0 * w_class / np.where(
             sec["w_domain"][keep_idx][:, None] > 0,
             sec["w_domain"][keep_idx][:, None], np.nan)
@@ -1352,7 +1424,11 @@ def to_hours_per_season(sec: dict, keep_idx: list[int], edge_sets: dict) -> dict
         "sweep": sweep,
         "hours": hours,
         "n_seasons": len(keep_idx),
-        "season_hours": season_hours,
+        "season_hours": season_hours,                      # (season,) hours
+        "month_hours": (season_month_window_hours(layout, keep_idx)
+                        if layout is not None
+                        and "month_days_per_season" in layout
+                        else None),                        # (season, month)
         "month_fraction": month_fraction,
         "months": sec["months"],
         "all_code": sec["all_code"],
@@ -1408,7 +1484,7 @@ def phase_note_lines(pk: dict, args, col: dict) -> list[str]:
     lines = [
         f"Season {args.season_start[0]:02d}-{args.season_start[1]:02d} to "
         f"{args.season_end[0]:02d}-{args.season_end[1]:02d}",
-        f"  ({col['season_hours']:,.0f} h per season)",
+        f"  ({window_label(col['season_hours'])} per season)",
         "",
         f"Cloudy: tcc $\\geq$ {args.min_cloud_fraction:g}",
         "",
@@ -1578,7 +1654,7 @@ def make_figure(col: dict, scale: str, edges_g: np.ndarray, region: str,
 
         share = col["area_pct"][code]
         total_h = sum(totals.values())
-        pct_season = 100.0 * total_h / col["season_hours"]
+        pct_season = 100.0 * total_h / float(np.mean(col["season_hours"]))
         # No area share in the title. Three of the five classes are defined by
         # sea ice concentration and migrate through the season, so any single
         # number is a time average of a moving quantity -- which invites being
@@ -1956,7 +2032,7 @@ def fig_sweep_season(A: Analysis, out_dir=None, dpi: int | None = None,
     slot, series_label = sweep_class_slot(surface_class)
     lwp = sweep["lwp"]
     frac = sweep["season_fraction"]                   # (thr, cls, ph)
-    season_h = col["season_hours"]
+    season_h = float(np.mean(col["season_hours"]))
     drawn = sweep_drawn_phases(args)
 
     fig, axes, ax_note = panel_grid_with_notes(1, 1, 7.6, 5.0)
@@ -2017,7 +2093,7 @@ def sweep_note_lines(col: dict, args, denom: str) -> list[str]:
     return [
         f"Season {args.season_start[0]:02d}-{args.season_start[1]:02d} to "
         f"{args.season_end[0]:02d}-{args.season_end[1]:02d}",
-        f"  ({col['season_hours']:,.0f} h per season)",
+        f"  ({window_label(col['season_hours'])} per season)",
         "",
         f"Cloudy: tcc $\\geq$ {args.min_cloud_fraction:g}",
         "",
@@ -2271,6 +2347,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help=f"mm hr-1 of tp at or above which a scene counts "
                              f"as precipitating (default "
                              f"{DEFAULT_PRECIP_RATE_MAX_MM_HR:g}).")
+    parser.add_argument("--residual-mode", choices=RESIDUAL_MODES,
+                        default=DEFAULT_RESIDUAL_MODE,
+                        help="Units of the lower panel on the three "
+                             "ERA5-vs-observations figures (default "
+                             f"{DEFAULT_RESIDUAL_MODE}). 'percent_diff' is "
+                             "100*(ERA5-obs)/obs, normalised by the OBSERVED "
+                             "value; 'hours' is the raw difference. Each figure "
+                             "also takes residual_mode= to override this for "
+                             "one call.")
+    parser.add_argument("--show-digitization-uncert", action="store_true",
+                        help="Draw the grey band showing how much uncertainty "
+                             "reading Genie's published figures by eye "
+                             "introduces, on the three ERA5-vs-observations "
+                             "residual panels. OFF by default: it is a "
+                             "statement about the digitisation, not about the "
+                             "data, and it fills the panel. Each figure also "
+                             "takes show_digitization_uncert= to override this "
+                             "for one call.")
     parser.add_argument("--min-class-area", type=float,
                         default=DEFAULT_MIN_CLASS_AREA_PCT, metavar="PCT",
                         help="Stamp a warning on a panel whose class holds less "
@@ -2388,7 +2482,7 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
     if sec["n_unclassified"]:
         print(f"  !! {sec['n_unclassified']:,} unclassified cell-times; run "
               f"surface_classification.py for the breakdown.", file=sys.stderr)
-    col = to_hours_per_season(sec, keep_idx, edge_sets)
+    col = to_hours_per_season(sec, keep_idx, edge_sets, layout)
     col["phase_kw"] = phase_kw
 
     tag = f"season{used[0]}" if len(used) == 1 else f"mean{used[0]}-{used[-1]}"
@@ -2409,7 +2503,8 @@ def print_report(A: Analysis) -> None:
     phase_i = {p: PHASE_ORDER_ACC.index(p) for p in PHASE_ORDER_ACC}
     season_h = col["season_hours"]
 
-    print(f"\n  Hours per season per grid cell ({season_h:,.0f} h in the window),"
+    print(f"\n  Hours per season per grid cell ({window_label(season_h)} in the "
+          f"window),"
           f" mean over {len(A.used)} season(s):")
     print(f"    {'class':<22}{'mean area %':>12}{'cloudy':>9}{'liquid':>9}"
           f"{'mixed':>9}{'ice':>9}{'neither':>9}{'liq+mix %':>11}"
@@ -2480,7 +2575,8 @@ def print_report(A: Analysis) -> None:
     sampled = sec["w_steps"][A.keep_idx]
     if sampled.size:
         print(f"\n  Hours present in the archive per season: "
-              f"{sampled.min():,.0f} to {sampled.max():,.0f} of {season_h:,.0f}."
+              f"{sampled.min():,.0f} to {sampled.max():,.0f} of "
+              f"{np.mean(season_h):,.0f}."
               f"  Bar heights are rates scaled to the full window.")
 
     if len(A.used) > 1:
@@ -2557,6 +2653,10 @@ def season_phase_hours(A: Analysis):
     Returns ``(season_labels, hours, cloudy, season_h)`` with ``hours`` shaped
     ``(n_season, n_class, n_phase)`` in ``SEASON_STACK_ORDER``.
 
+    ``season_h`` is an ARRAY over seasons, not
+    a scalar: a common-year Oct-Mar window is 182 days and a leap-year one 183,
+    so "the season window" is not one number.
+
     Built by summing the already-accumulated LWP histogram over its bar axis,
     which means it inherits the module's normalisation exactly:
 
@@ -2581,7 +2681,7 @@ def season_phase_hours(A: Analysis):
     hours = np.nansum(per_season, axis=-1)[..., idx]    # (s, class, phase)
     cloudy = hours.sum(axis=-1)
     labels = [f"{y}/{(y + 1) % 100:02d}" for y in A.used]
-    return labels, hours, cloudy, float(col["season_hours"])
+    return labels, hours, cloudy, np.asarray(col["season_hours"], dtype=float)
 
 
 def _stack_one_axis(ax, season_labels, hours, cloudy, season_h, label,
@@ -2607,11 +2707,12 @@ def _stack_one_axis(ax, season_labels, hours, cloudy, season_h, label,
     # what the annotations then collide with.
     top = ylim if ylim is not None else max(bottom.max(), 1.0) * 1.28
     if annotate:
-        for xi, tot in zip(x, bottom):
+        for si_i, (xi, tot) in enumerate(zip(x, bottom)):
             if not np.isfinite(tot) or tot <= 0:
                 continue
             ax.text(xi, tot + 0.015 * top,
-                    f"{tot:,.0f} h\n({100.0 * tot / season_h:.1f}%)",
+                    f"{tot:,.0f} h\n"
+                    f"({100.0 * tot / _sh(season_h, si_i):.1f}%)",
                     ha="center", va="bottom", fontsize=fontsize, linespacing=1.1)
     ax.set_ylim(0, top)
 
@@ -2625,10 +2726,16 @@ def _stack_one_axis(ax, season_labels, hours, cloudy, season_h, label,
     return drawn
 
 
+def _sh(season_h, i):
+    """One season's window length, whether given an array or a scalar."""
+    a = np.asarray(season_h, dtype=float)
+    return float(a if a.ndim == 0 else a[i])
+
+
 def _stack_subtitle(A, season_h):
     pk = A.col["phase_kw"]
     return (f"cell-hours for a typical cell of each class   |   "
-            f"season window {season_h:,.0f} h   |   "
+            f"season window {window_label(season_h)}   |   "
             f"{phase_definition_label(pk)}")
 
 
@@ -2701,7 +2808,8 @@ def fig_season_phase_stack_site(A: Analysis, out_dir=None, dpi: int | None = Non
     ax.set_ylabel("Cell-hours in season", fontsize=11)
     ax.legend(fontsize=9.5, framealpha=0.9)
     ax.set_title(f"Cloud phase hours by season \u2014 {SITE_LABEL}\n"
-                 f"{args.region}   |   season window {season_h:,.0f} h   |   "
+                 f"{args.region}   |   season window "
+                 f"{window_label(season_h)}   |   "
                  f"{phase_definition_label(A.col['phase_kw'])}",
                  fontsize=12, pad=10)
     return _save_stack(fig, A, out_dir, "season_phase_stack_site", dpi)
@@ -2736,7 +2844,8 @@ def season_phase_binary(A: Analysis):
     i = {p: SEASON_STACK_ORDER.index(p) for p in SEASON_STACK_ORDER}
     liquid = hours[..., i["liquid"]] + hours[..., i["mixed"]]
     ice = hours[..., i["ice"]] + hours[..., i["none"]]
-    clear = np.clip(season_h - (liquid + ice), 0.0, None)
+    clear = np.clip(np.asarray(season_h, dtype=float)[:, None]
+                    - (liquid + ice), 0.0, None)
     return labels, liquid, ice, clear, season_h
 
 
@@ -2788,11 +2897,12 @@ def fig_season_phase_binary(A: Analysis, out_dir=None, dpi: int | None = None,
         top = tot_cloud + clr
 
     headroom = float(np.nanmax(top)) * 1.20
-    for xi, cloud_h, bar_h in zip(x, tot_cloud, top):
+    for si_i, (xi, cloud_h, bar_h) in enumerate(zip(x, tot_cloud, top)):
         if not np.isfinite(cloud_h) or cloud_h <= 0:
             continue
         ax.text(xi, bar_h + 0.012 * headroom,
-                f"{cloud_h:,.0f} h\n({100.0 * cloud_h / season_h:.1f}%)",
+                f"{cloud_h:,.0f} h\n"
+                f"({100.0 * cloud_h / _sh(season_h, si_i):.1f}%)",
                 ha="center", va="bottom", fontsize=9, linespacing=1.1)
     ax.set_ylim(0, headroom)
     ax.set_xticks(x)
@@ -2807,7 +2917,7 @@ def fig_season_phase_binary(A: Analysis, out_dir=None, dpi: int | None = None,
             if include_clear else "bar = overcast hours")
     ax.set_title(f"Liquid-containing vs ice-only cloud hours \u2014 "
                  f"{series_label}\n{args.region}   |   season window "
-                 f"{season_h:,.0f} h   |   {note}   |   "
+                 f"{window_label(season_h)}   |   {note}   |   "
                  f"{phase_definition_label(A.col['phase_kw'])}",
                  fontsize=11.5, pad=10)
     tag = "site" if surface_class == "arm_site" else str(surface_class)
@@ -2823,7 +2933,25 @@ OBS_COLUMNS = ("with_liquid", "ice_only", "liq_precip", "ice_precip",
 OBS_LEGEND_MEANS = {"with_liquid": 1474, "ice_only": 1071, "liq_precip": 282,
                     "ice_precip": 255, "clear_sky": 898, "others": 36,
                     "missing": 339}
+
+# How far the observation files can be wrong, in hours, as a property of WHERE
+# THEY CAME FROM rather than of the figure drawing them.
+#
+# The seasonal file now holds Genie's exact numbers, verified cell by cell
+# against her spreadsheet, so its band is ZERO -- turning the band on draws
+# nothing for those figures, which is the correct behaviour rather than a bug.
+# The monthly file is still read off a rendered chart and keeps its band.
+#
+# Set the seasonal value back above zero only if that file goes back to holding
+# digitised values.
+OBS_SEASONAL_UNCERTAINTY_H = 0.0
+OBS_MONTHLY_UNCERTAINTY_H = 30.0
 OBS_BAR_COLOR = "#d1495b"
+# Genie's shades for the precipitating categories, so an all-sky comparison can
+# show them as their own segments rather than folding them in invisibly.
+GENIE_LIQUID_PRECIP_COLOR = "pink"
+GENIE_ICE_PRECIP_COLOR = "lightblue"
+
 ERA5_HATCH = "...."  # stippling that marks ERA5 bars apart from the solid obs bars
 
 # Text sizes for fig_era5_vs_obs, exposed as function arguments so a notebook
@@ -2838,9 +2966,12 @@ def load_observations(path=DEFAULT_OBS_FILE, check: bool = True) -> dict:
 
     Returns ``{"seasons": [...], <column>: array, ...}``. With ``check``, the
     per-season columns are averaged and compared against the record means the
-    source figure's legend states; a departure of more than 100 h is reported,
-    since the file may hold values digitised from a figure rather than the
-    observations themselves.
+    source figure's legend states; a departure of more than 100 h is reported.
+
+    The file now holds Genie's exact numbers, so the check is a regression
+    guard rather than a digitisation sanity test -- every column should agree
+    with its legend value to within rounding, and anything else means the file
+    has been edited or the wrong one is being read.
     """
     seasons, rows = [], []
     for line in Path(path).read_text().splitlines():
@@ -2884,17 +3015,209 @@ def obs_binary(obs: dict, exclude_precip: bool):
             obs["ice_only"] + obs["ice_precip"])
 
 
+# ----------------------------------------------------------------------------
+# Shared furniture for the three ERA5-vs-observations comparison figures
+# ----------------------------------------------------------------------------
+# What the lower panel shows. 'hours' is the raw difference in hours; the
+# default 'percent_diff' expresses it as a share of the OBSERVED value, which is
+# what makes a 100 h miss on October's 500 h readable against the same 100 h on
+# February's 200 h.
+RESIDUAL_MODES: tuple[str, ...] = ("percent_diff", "hours")
+DEFAULT_RESIDUAL_MODE = "percent_diff"
+
+RESIDUAL_YLABEL: dict[str, str] = {
+    "hours": "ERA5 $-$ observations [h]",
+    "percent_diff": "100 $\\times$ (ERA5 $-$ obs) / obs   [%]",
+}
+
+
+def resolve_residual_mode(mode, args=None) -> str:
+    """Pick the residual mode, falling back to the run's ``--residual-mode``.
+
+    Passing ``None`` at the call site means "whatever the run was configured
+    with", so a notebook can set it once in ``prepare()`` and have all three
+    figures follow, while still being able to override one of them by hand.
+    """
+    if mode is None:
+        mode = getattr(args, "residual_mode", DEFAULT_RESIDUAL_MODE)
+    if mode not in RESIDUAL_MODES:
+        raise ValueError(f"unknown residual mode {mode!r}; "
+                         f"choose from {list(RESIDUAL_MODES)}")
+    return mode
+
+
+DEFAULT_SHOW_DIGITIZATION_UNCERT = False
+
+
+def resolve_show_band(show, args=None) -> bool:
+    """Whether to draw the digitisation band, falling back to the run's flag."""
+    if show is None:
+        show = getattr(args, "show_digitization_uncert",
+                       DEFAULT_SHOW_DIGITIZATION_UNCERT)
+    return bool(show)
+
+
+def residual_values(era_h, obs_h, mode: str) -> np.ndarray:
+    """ERA5 against the observations, in hours or as a percentage of the obs.
+
+    The percentage is normalised by the OBSERVED value, so it reads as "ERA5 is
+    N% high/low relative to what was measured". Bars with no observed hours
+    return NaN rather than infinity, and matplotlib simply omits them.
+    """
+    era_h = np.asarray(era_h, dtype=float)
+    obs_h = np.asarray(obs_h, dtype=float)
+    if mode == "hours":
+        return era_h - obs_h
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(obs_h > 0,
+                        100.0 * (era_h - obs_h) / np.where(obs_h > 0, obs_h, 1.0),
+                        np.nan)
+
+
+def draw_residual_band(ax_r, mode: str, band_h: float, bars=(),
+                       width: float = 0.0, show: bool = False):
+    """The digitisation-uncertainty band, in whichever units the panel uses.
+
+    ``show`` is OFF by default: the band is a statement about how well a
+    published figure could be read by eye, not about the data, and it dominates
+    the panel visually. Turn it on with ``--show-digitization-uncert`` when
+    judging whether a residual is meaningful at all.
+
+    In hours it is a constant strip, because the digitisation error is a fixed
+    number of hours. As a percentage it is NOT constant: the same +/-band_h is a
+    larger relative error on a small observed value, so it is drawn per bar from
+    that bar's own denominator. ``bars`` is a sequence of
+    ``(x positions, observed hours)`` pairs, one per drawn category.
+
+    Returns the caption for the band, or an empty string when it is off. The
+    caption is NOT drawn here: a residual bar can reach anywhere inside the
+    panel, so the captions belong in a reserved strip under the axes, laid out
+    by the caller alongside any other footnotes.
+    """
+    if not show or band_h <= 0:
+        # band_h == 0 means the observations are exact, so there is nothing to
+        # shade and nothing to caption. Silently drawing a zero-height bar and
+        # a caption promising uncertainty would be worse than drawing nothing.
+        return ""
+    if mode == "hours":
+        ax_r.axhspan(-band_h, band_h, color="0.85", zorder=0)
+        note = (f"grey band: +/-{band_h:g} h, the digitisation uncertainty of "
+                f"the observation file")
+    else:
+        for xs, obs_h in bars:
+            obs_h = np.asarray(obs_h, dtype=float)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                half = np.where(obs_h > 0,
+                                100.0 * band_h / np.where(obs_h > 0, obs_h, 1.0),
+                                np.nan)
+            ax_r.bar(xs, 2.0 * half, width=width, bottom=-half, color="0.85",
+                     edgecolor="none", zorder=0)
+        note = (f"grey band: the same +/-{band_h:g} h of digitisation "
+                f"uncertainty, as a percentage of each observed value")
+    return note
+
+
+def draw_figure_footnotes(fig, notes, fontsize: float = 7.5) -> None:
+    """Stack short captions in the strip below the axes, one per line.
+
+    Figure coordinates rather than axes coordinates, so nothing plotted can
+    land on top of them and two captions can never overlap each other.
+    """
+    notes = [n for n in notes if n]
+    for k, note in enumerate(reversed(notes)):
+        fig.text(0.01, 0.008 + 0.017 * k, note, ha="left", va="bottom",
+                 fontsize=fontsize, color="0.35")
+
+
+def threshold_box_lines(A: Analysis) -> list[str]:
+    """The two threshold statements the comparison figures carry.
+
+    Line 1 is the overcast gate: a scene counts as cloudy only where tcc is at
+    or above ``--min-cloud-fraction``.
+
+    Line 2 is the liquid-containing boundary, and in fraction mode it is set by
+    ``--ice-fraction-min``, NOT by ``--liquid-fraction-min``. "Liquid
+    containing" on these figures is liquid-only PLUS mixed-phase -- every
+    water-bearing scene that is not ice-only -- and ice-only is
+    ``IWP/CWP >= ice_fraction_min``. So the cut sits at
+
+        LWP/(LWP + IWP) > 1 - ice_fraction_min
+
+    i.e. GREATER than the complement, not less. ``--liquid-fraction-min`` only
+    moves the liquid-only/mixed boundary, which this merge is blind to.
+    """
+    args = A.args
+    pk = A.phase_kw
+    lines = [f"min cloud fraction = {100.0 * args.min_cloud_fraction:g}%"]
+    if pk["mode"] == "fraction":
+        cut = 100.0 * (1.0 - pk["ice_fraction_min"])
+        lines.append(f"liquid containing: LWP/(LWP+IWP) > {cut:g}%")
+    else:
+        floor = min(pk["liquid_lwp_min_g"], pk["mixed_lwp_min_g"])
+        lines.append(f"liquid containing: LWP > {floor:g} g m$^{{-2}}$")
+    return lines
+
+
+def draw_threshold_box(ax, A: Analysis, loc: str = "upper right",
+                       fontsize: float = 9.0):
+    """Stamp the two defining thresholds onto a comparison panel.
+
+    Both figures and their saved PNGs otherwise carry no record of which
+    thresholds produced them, which is exactly the ambiguity that makes a stale
+    re-run hard to spot.
+    """
+    place = {"upper right": (0.995, 0.995, "right", "top"),
+             "upper left": (0.005, 0.995, "left", "top")}
+    if loc not in place:
+        raise ValueError(f"unknown loc {loc!r}; choose from {list(place)}")
+    x, y, ha, va = place[loc]
+    ax.text(x, y, "\n".join(threshold_box_lines(A)), transform=ax.transAxes,
+            ha=ha, va=va, fontsize=fontsize, linespacing=1.4, zorder=6,
+            bbox=dict(boxstyle="round,pad=0.45", facecolor="white",
+                      edgecolor="0.55", linewidth=0.8, alpha=0.94))
+
+
+def _residual_stem(stem: str, mode: str) -> str:
+    """Keep the two residual modes in separate files rather than overwriting."""
+    return stem if mode == "hours" else f"{stem}_pct"
+
+
+def _bar_total_label(ax, xi, total_h, liquid_h, season_h, top, starred=False,
+                     fontsize=8.0):
+    """Two-line label above a bar: total hours, then the liquid-containing share.
+
+    The share is of the SEASON WINDOW, not of the bar, so ERA5 and the
+    observations are divided by the same number and the two labels can be read
+    against each other directly. For an observation bar with missing hours that
+    denominator is too generous -- the site was not watched for the whole window
+    -- which is what the asterisk marks.
+    """
+    if not np.isfinite(total_h) or total_h <= 0:
+        return
+    star = "*" if starred else ""
+    ax.text(xi, total_h + 0.015 * top,
+            f"{total_h:,.0f} h{star}\n{100.0 * liquid_h / season_h:.1f}%",
+            ha="center", va="bottom", fontsize=fontsize, linespacing=1.15)
+
+
 def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
                     dpi: int | None = None, surface_class: str = "arm_site",
                     label_fontsize: float = DEFAULT_COMPARISON_LABEL_FONTSIZE,
                     tick_fontsize: float = DEFAULT_COMPARISON_TICK_FONTSIZE,
-                    legend_fontsize: float = DEFAULT_COMPARISON_LEGEND_FONTSIZE):
+                    legend_fontsize: float = DEFAULT_COMPARISON_LEGEND_FONTSIZE,
+                    residual_mode: str | None = None,
+                    show_digitization_uncert: bool | None = None):
     """ERA5 beside the ARM observations, with the residual underneath.
 
     Upper panel: two stacked bars per season -- ERA5 on the left, observations
-    on the right -- each split into liquid-containing and ice-only.
+    on the right -- each split into liquid-containing and ice-only. A box in the
+    corner states the two thresholds that define the categories, so a saved
+    figure records the run that produced it.
 
-    Lower panel: ERA5 minus observations, one bar per category per season.
+    Lower panel: ERA5 against the observations, one bar per category per
+    season. ``residual_mode`` chooses the units: ``'percent_diff'`` (the
+    default) shows it as a share of the observed value, ``'hours'`` as the raw
+    difference. ``None`` follows the run's ``--residual-mode``.
 
     The precipitation filter decides which observation categories are used, so
     that the two sides mean the same thing. With ``--no-precip`` set, ERA5's
@@ -2911,9 +3234,10 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
     respectively -- tune per call rather than editing the source.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
 
     args = A.args
+    residual_mode = resolve_residual_mode(residual_mode, args)
+    show_band = resolve_show_band(show_digitization_uncert, args)
     obs = load_observations(obs_path)
     labels, liquid, ice, _clear, season_h = season_phase_binary(A)
     code, series_label = resolve_series_code(A.col, surface_class)
@@ -2933,6 +3257,8 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
     o_liq = np.array([obs_liq_all[obs_idx[y]] for y in shared])
     o_ice = np.array([obs_ice_all[obs_idx[y]] for y in shared])
     miss = np.array([obs["missing"][obs_idx[y]] for y in shared])
+    # Window length season by season -- leap years are 24 h longer.
+    s_h = np.array([_sh(season_h, ei[y]) for y in shared])
 
     x = np.arange(len(shared))
     w = 0.38
@@ -2956,14 +3282,19 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
                edgecolor=GENIE_ICE_COLOR if stippled else "none",
                linewidth=0.7, hatch=hatch)
 
-    # Mark seasons where the observations are substantially incomplete: their
-    # totals are not comparable however good the ERA5 side is.
-    top = float(max((e_liq + e_ice).max(), (o_liq + o_ice).max())) * 1.20
-    for xi, m in zip(x, miss):
-        if m > 0.05 * season_h:
-            ax.text(xi + w / 2, (o_liq + o_ice)[list(x).index(xi)] + 0.02 * top,
-                    f"{m:,.0f} h\nmissing", ha="center", va="bottom",
-                    fontsize=7.5, color=OBS_BAR_COLOR, linespacing=1.1)
+    # Totals above every bar: hours on top, liquid-containing share of the
+    # season window underneath. Seasons whose observations are substantially
+    # incomplete get an asterisk instead of a separate annotation -- the
+    # "how many hours missing" note now lives in the lower panel, where it does
+    # not compete with the totals for space.
+    missing_mask = miss > 0.05 * s_h
+    top = float(max((e_liq + e_ice).max(), (o_liq + o_ice).max())) * 1.40
+    for xi in x:
+        _bar_total_label(ax, xi - w / 2, e_liq[xi] + e_ice[xi], e_liq[xi],
+                         s_h[xi], top, fontsize=label_fontsize - 5.0)
+        _bar_total_label(ax, xi + w / 2, o_liq[xi] + o_ice[xi], o_liq[xi],
+                         s_h[xi], top, starred=bool(missing_mask[xi]),
+                         fontsize=label_fontsize - 5.0)
     ax.set_ylim(0, top)
     ax.set_ylabel("Hours per season", fontsize=label_fontsize)
     ax.tick_params(axis="both", labelsize=tick_fontsize)
@@ -2982,44 +3313,45 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
     ax.legend(handles, ["liquid containing", "ice only",
                         "ERA5 (left, stippled)", "ARM obs (right, solid)"],
               fontsize=legend_fontsize, ncol=2, framealpha=0.9, loc="upper left")
+    draw_threshold_box(ax, A, loc="upper right",
+                       fontsize=legend_fontsize - 2.0)
 
     # ---- residual panel ----------------------------------------------------
-    d_liq, d_ice = e_liq - o_liq, e_ice - o_ice
+    d_liq = residual_values(e_liq, o_liq, residual_mode)
+    d_ice = residual_values(e_ice, o_ice, residual_mode)
+    # Band first, so the residual bars sit on top of it.
+    band_note = draw_residual_band(
+        ax_r, residual_mode, OBS_SEASONAL_UNCERTAINTY_H,
+        bars=((x - w / 2, o_liq), (x + w / 2, o_ice)), width=w, show=show_band)
     ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
              edgecolor="white", linewidth=0.5, label="liquid containing")
     ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
              edgecolor="white", linewidth=0.5, label="ice only")
     ax_r.axhline(0.0, color="0.3", lw=1.0)
-    # Digitisation uncertainty band, when the file still holds read-off values.
-    ax_r.axhspan(-150, 150, color="0.85", zorder=0)
-    ax_r.text(0.995, 0.04, "grey band: +/-150 h, the digitisation uncertainty "
-              "of the observation file", transform=ax_r.transAxes, ha="right",
-              va="bottom", fontsize=7.5, color="0.35")
 
     # Star the same seasons flagged "missing" in the upper panel, so the
-    # residual there is not read as if it were on equal footing with the rest.
-    missing_mask = miss > 0.05 * season_h
+    # residual there is not read as if it were on equal footing with the rest,
+    # and say how many hours are missing here rather than in the upper panel.
     if missing_mask.any():
-        resid_span = float(max(np.abs(d_liq).max(), np.abs(d_ice).max(), 150.0))
+        floor = (max(OBS_SEASONAL_UNCERTAINTY_H, 50.0)
+                 if residual_mode == "hours" else 10.0)
+        resid_span = float(max(np.nanmax(np.abs(d_liq)),
+                               np.nanmax(np.abs(d_ice)), floor))
         star_margin = 0.05 * resid_span
         for xi in x[missing_mask]:
-            y_top = max(d_liq[xi], d_ice[xi], 0.0) + star_margin
-            ax_r.text(xi, y_top, "*", ha="center", va="bottom",
-                      fontsize=13, fontweight="bold", color="0.25")
+            y_top = np.nanmax([d_liq[xi], d_ice[xi], 0.0]) + star_margin
+            ax_r.text(xi, y_top, f"*\n{miss[xi]:,.0f} h\nmissing",
+                      ha="center", va="bottom", fontsize=7.5,
+                      color="0.25", linespacing=1.15)
 
-    ax_r.set_ylabel("ERA5 - observations [h]", fontsize=label_fontsize)
+    ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
     ax_r.tick_params(axis="both", labelsize=tick_fontsize)
     ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
     ax_r.set_axisbelow(True)
     for sp in ("top", "right"):
         ax_r.spines[sp].set_visible(False)
-    r_handles, r_labels = ax_r.get_legend_handles_labels()
-    if missing_mask.any():
-        r_handles.append(Line2D([0], [0], marker="*", linestyle="None",
-                                 markersize=11, color="0.25"))
-        r_labels.append("season has ≥5% missing obs hours (top panel)")
-    ax_r.legend(r_handles, r_labels, fontsize=legend_fontsize, ncol=1,
-                framealpha=0.9, loc="upper right")
+    # No legend here: the colours repeat the upper panel's, and the asterisk
+    # annotation now names itself.
     ax_r.set_xticks(x)
     ax_r.set_xticklabels([f"{y}/{(y + 1) % 100:02d}" for y in shared],
                          rotation=45, ha="right", fontsize=tick_fontsize)
@@ -3030,9 +3362,492 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
     fig.suptitle(f"ERA5 against ARM observations \u2014 {series_label}\n"
                  f"{args.region}   |   {pair}   |   {precip_label(args)}{note}",
                  fontsize=12.5, y=0.965)
-    fig.subplots_adjust(top=0.90, bottom=0.10, left=0.09, right=0.985)
+    fig.subplots_adjust(top=0.90, bottom=0.135, left=0.09, right=0.985)
+    draw_figure_footnotes(fig, [band_note])
     tag = "noprecip" if args.no_precip else "allsky"
-    return _save_stack(fig, A, out_dir, f"era5_vs_obs_{tag}", dpi)
+    return _save_stack(fig, A, out_dir,
+                       _residual_stem(f"era5_vs_obs_{tag}", residual_mode), dpi)
+
+
+def fig_era5_vs_obs_allsky(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
+                           dpi: int | None = None, surface_class="arm_site",
+                           label_fontsize=DEFAULT_COMPARISON_LABEL_FONTSIZE,
+                           tick_fontsize=DEFAULT_COMPARISON_TICK_FONTSIZE,
+                           legend_fontsize=DEFAULT_COMPARISON_LEGEND_FONTSIZE,
+                           residual_mode: str | None = None,
+                           show_digitization_uncert: bool | None = None):
+    """All-sky comparison: nothing filtered, and the obs precip split shown.
+
+    The companion to :func:`fig_era5_vs_obs`. There, precipitating scenes are
+    removed from ERA5 and the observations are compared on their
+    non-precipitating categories alone. Here nothing is removed from either
+    side, and the observation bar shows its precipitating categories as their
+    own segments in Genie's shades, so the part of the comparison the filter
+    would have cut is visible rather than folded in.
+
+    ERA5 has no counterpart to that split -- the run it is given includes
+    precipitation but does not separate it -- so its bar stays two segments.
+    That asymmetry is the point of the figure: it shows how much of the
+    observations' cloud time is precipitating, which is what the filtered
+    version removes.
+
+    Clear sky is not drawn, as asked; bars are cloud hours only.
+
+    Requires an UNFILTERED ``A`` -- if the run had ``no_precip`` set, its cloud
+    hours already exclude precipitation and the two sides would not correspond.
+
+    ``residual_mode`` sets the lower panel's units; see :func:`fig_era5_vs_obs`.
+    """
+    import matplotlib.pyplot as plt
+
+    args = A.args
+    residual_mode = resolve_residual_mode(residual_mode, args)
+    show_band = resolve_show_band(show_digitization_uncert, args)
+    if args.no_precip:
+        raise ValueError(
+            "fig_era5_vs_obs_allsky needs a run with no_precip=False; this "
+            "Analysis already has precipitating scenes removed, so its bars "
+            "cannot be set against the observations' all-sky categories.")
+
+    obs = load_observations(obs_path)
+    labels, liquid, ice, _clear, season_h = season_phase_binary(A)
+    code, series_label = resolve_series_code(A.col, surface_class)
+
+    era_years = [int(l.split("/")[0]) for l in labels]
+    obs_idx = {y: i for i, y in enumerate(obs["seasons"])}
+    shared = [y for y in era_years if y in obs_idx]
+    dropped = len(era_years) - len(shared)
+    if not shared:
+        raise ValueError(f"no season appears in both the run and {obs_path}")
+    ei = {y: i for i, y in enumerate(era_years)}
+    e_liq = np.array([liquid[ei[y], code] for y in shared])
+    e_ice = np.array([ice[ei[y], code] for y in shared])
+    o_liq = np.array([obs["with_liquid"][obs_idx[y]] for y in shared])
+    o_liq_p = np.array([obs["liq_precip"][obs_idx[y]] for y in shared])
+    o_ice = np.array([obs["ice_only"][obs_idx[y]] for y in shared])
+    o_ice_p = np.array([obs["ice_precip"][obs_idx[y]] for y in shared])
+    miss = np.array([obs["missing"][obs_idx[y]] for y in shared])
+    s_h = np.array([_sh(season_h, ei[y]) for y in shared])
+
+    x = np.arange(len(shared))
+    w = 0.38
+    fig, (ax, ax_r) = plt.subplots(
+        2, 1, figsize=(2.0 + 1.35 * len(shared), 9.0), sharex=True,
+        gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+
+    ax.bar(x - w / 2, e_liq, width=w, color="white",
+           edgecolor=GENIE_LIQUID_COLOR, linewidth=0.7, hatch=ERA5_HATCH)
+    ax.bar(x - w / 2, e_ice, width=w, bottom=e_liq, color="white",
+           edgecolor=GENIE_ICE_COLOR, linewidth=0.7, hatch=ERA5_HATCH)
+
+    # Observation stack, grouped BY PHASE rather than in Genie's original
+    # order, so the liquid block and the ice block are each contiguous and can
+    # be read against the two-segment ERA5 bar beside them.
+    bottom = np.zeros(len(shared))
+    for seg, colr in ((o_liq, GENIE_LIQUID_COLOR),
+                      (o_liq_p, GENIE_LIQUID_PRECIP_COLOR),
+                      (o_ice, GENIE_ICE_COLOR),
+                      (o_ice_p, GENIE_ICE_PRECIP_COLOR)):
+        ax.bar(x + w / 2, seg, width=w, bottom=bottom, color=colr,
+               edgecolor="none")
+        bottom += seg
+
+    e_tot, o_tot = e_liq + e_ice, bottom
+    missing_mask = miss > 0.05 * s_h
+    # More headroom than the two-segment figure: these bars are taller and the
+    # legend shares the upper-left corner with the labels above them.
+    top = float(max(e_tot.max(), o_tot.max())) * 1.52
+    for xi in x:
+        _bar_total_label(ax, xi - w / 2, e_tot[xi], e_liq[xi], s_h[xi], top,
+                         fontsize=label_fontsize - 5.0)
+        _bar_total_label(ax, xi + w / 2, o_tot[xi], o_liq[xi] + o_liq_p[xi],
+                         s_h[xi], top, starred=bool(missing_mask[xi]),
+                         fontsize=label_fontsize - 5.0)
+    ax.set_ylim(0, top)
+    ax.set_ylabel("Hours per season", fontsize=label_fontsize)
+    ax.tick_params(axis="both", labelsize=tick_fontsize)
+    ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+
+    handles = [plt.Rectangle((0, 0), 1, 1, fc=c, ec="none") for c in
+               (GENIE_LIQUID_COLOR, GENIE_LIQUID_PRECIP_COLOR,
+                GENIE_ICE_COLOR, GENIE_ICE_PRECIP_COLOR)]
+    handles.append(plt.Rectangle((0, 0), 1, 1, fc="white", ec="0.35", lw=0.8,
+                                 hatch=ERA5_HATCH))
+    ax.legend(handles,
+              ["liquid containing", "liquid containing (precip)",
+               "ice only", "ice only (precip)", "ERA5 (left, stippled)"],
+              fontsize=legend_fontsize, ncol=2, framealpha=0.9, loc="upper left")
+    draw_threshold_box(ax, A, loc="upper right",
+                       fontsize=legend_fontsize - 2.0)
+
+    # ---- residual panel, against the obs totals INCLUDING precipitation -----
+    o_liq_tot, o_ice_tot = o_liq + o_liq_p, o_ice + o_ice_p
+    d_liq = residual_values(e_liq, o_liq_tot, residual_mode)
+    d_ice = residual_values(e_ice, o_ice_tot, residual_mode)
+    band_note = draw_residual_band(
+        ax_r, residual_mode, OBS_SEASONAL_UNCERTAINTY_H,
+        bars=((x - w / 2, o_liq_tot), (x + w / 2, o_ice_tot)), width=w,
+        show=show_band)
+    ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
+             edgecolor="white", linewidth=0.5)
+    ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
+             edgecolor="white", linewidth=0.5)
+    ax_r.axhline(0.0, color="0.3", lw=1.0)
+    if missing_mask.any():
+        floor = (max(OBS_SEASONAL_UNCERTAINTY_H, 50.0)
+                 if residual_mode == "hours" else 10.0)
+        span = float(max(np.nanmax(np.abs(d_liq)), np.nanmax(np.abs(d_ice)),
+                         floor))
+        for xi in x[missing_mask]:
+            ax_r.text(xi, np.nanmax([d_liq[xi], d_ice[xi], 0.0]) + 0.05 * span,
+                      f"*\n{miss[xi]:,.0f} h\nmissing", ha="center",
+                      va="bottom", fontsize=7.5, color="0.25", linespacing=1.15)
+    ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
+    ax_r.tick_params(axis="both", labelsize=tick_fontsize)
+    ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax_r.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax_r.spines[sp].set_visible(False)
+    ax_r.set_xticks(x)
+    ax_r.set_xticklabels([f"{y}/{(y + 1) % 100:02d}" for y in shared],
+                         rotation=45, ha="right", fontsize=tick_fontsize)
+
+    note = f"   |   {dropped} ERA5 season(s) not in the obs file" if dropped else ""
+    fig.suptitle(f"ERA5 against ARM observations, ALL SKY \u2014 {series_label}"
+                 f"\n{args.region}   |   nothing filtered; the observations' "
+                 f"precipitating categories are shown separately{note}",
+                 fontsize=12.5, y=0.965)
+    fig.subplots_adjust(top=0.90, bottom=0.135, left=0.09, right=0.985)
+    draw_figure_footnotes(fig, [band_note])
+    return _save_stack(fig, A, out_dir,
+                       _residual_stem("era5_vs_obs_allsky_split", residual_mode),
+                       dpi)
+
+
+# ----------------------------------------------------------------------------
+# Months Genie drops from the observational record, and why ERA5 must drop them
+# ----------------------------------------------------------------------------
+# These calendar months are EXCLUDED FROM HER MONTHLY FIGURE because the ARM
+# instruments were degraded and the retrieved cloud hours are anomalously low --
+# an instrumentation artefact, not Arctic weather. They are therefore not in the
+# means stored in genie_arm_monthly_hours.txt.
+#
+# ERA5 has no such gaps, so leaving these months in on the ERA5 side means the
+# two monthly means are averages over DIFFERENT SAMPLES OF SEASONS, and the
+# residual would carry that sampling difference on top of any real model bias.
+# October is the clearest case: dropping Oct 2020 and Oct 2023 removes two of
+# eleven seasons from the observed mean but none from ERA5's unless this list is
+# applied.
+#
+# Stated as CALENDAR (year, month), which is how they were reported. The season
+# each belongs to is derived from the run's own season window, so Jan 2020 lands
+# in the 2019/20 season and Oct 2020 in 2020/21 without either being written
+# down twice.
+#
+# SCOPE: the MONTHLY comparison only (section 7). The seasonal figures are not
+# affected -- her seasonal figure keeps these months and reports the shortfall
+# through its own "missing hours" category instead, which those figures already
+# mark with an asterisk.
+#
+# If Genie supplies the real CSVs, or revises which months she rejects, this
+# tuple is the single place to change.
+GENIE_EXCLUDED_MONTHS: tuple[tuple[int, int], ...] = (
+    (2020, 1),      # Jan 2020
+    (2020, 10),     # Oct 2020
+    (2020, 11),     # Nov 2020
+    (2020, 12),     # Dec 2020
+    (2021, 11),     # Nov 2021
+    (2023, 2),      # Feb 2023
+    (2023, 10),     # Oct 2023
+)
+
+
+def season_year_of(calendar_year: int, month: int, season_start_month: int,
+                   wraps: bool) -> int:
+    """Season START year holding a given calendar month.
+
+    For a window that wraps the new year (Oct-Mar), a month at or after the
+    start month belongs to the season beginning that calendar year, and a month
+    before it belongs to the season that began the PREVIOUS year -- so Jan 2020
+    is the 2019/20 season. For a window inside one year the two coincide.
+    """
+    if wraps and month < season_start_month:
+        return calendar_year - 1
+    return calendar_year
+
+
+def excluded_month_mask(seasons, months, args,
+                        exclude_months=GENIE_EXCLUDED_MONTHS):
+    """Boolean ``(n_season, n_month)``: True where the month is excluded.
+
+    Also returns the ``(calendar_year, month)`` pairs that actually landed
+    inside the run, so a caller can say how many were dropped rather than
+    silently averaging over fewer seasons. A pair outside the run's years or
+    outside its season window is not an error -- it simply matches nothing.
+    """
+    seasons = list(seasons)
+    months = list(months)
+    s_of = {y: i for i, y in enumerate(seasons)}
+    m_of = {m: j for j, m in enumerate(months)}
+    start_month = args.season_start[0]
+    wraps = tuple(args.season_end) < tuple(args.season_start)
+
+    mask = np.zeros((len(seasons), len(months)), dtype=bool)
+    hit = []
+    for cal_year, month in exclude_months:
+        s_year = season_year_of(cal_year, month, start_month, wraps)
+        if s_year in s_of and month in m_of:
+            mask[s_of[s_year], m_of[month]] = True
+            hit.append((cal_year, month))
+    return mask, hit
+
+
+def monthly_phase_binary(A: Analysis, surface_class: str = "arm_site",
+                         exclude_months=GENIE_EXCLUDED_MONTHS):
+    """Monthly liquid-containing and ice-only hours, per season.
+
+    Returns ``(months, liq, ice, month_h)`` with ``liq``/``ice`` shaped
+    ``(n_season, n_month)`` in hours.
+
+    ONLY VALID FOR A SINGLE, TIME-INVARIANT SERIES, which is why it defaults to
+    the ARM cell and rejects anything else. The monthly fractions are
+    normalised by the cell-hours the cell spent IN its class, so multiplying by
+    the month's calendar hours is only the same thing when that membership does
+    not move. It does not for one fixed cell; it does for open ocean and sea
+    ice, which swap through the season, and the seasonal figures use a
+    different route for exactly that reason.
+
+    ``exclude_months`` blanks individual season-months to NaN so they drop out
+    of any nanmean over seasons. It defaults to :data:`GENIE_EXCLUDED_MONTHS`,
+    the months her instruments could not measure properly -- see the note on
+    that constant for why matching them matters. Pass ``()`` for the unmasked
+    numbers.
+    """
+    if surface_class not in ("arm_site", "all"):
+        raise ValueError(
+            "monthly_phase_binary is only valid for a series whose membership "
+            "does not move through the season -- pass 'arm_site' (one cell) or "
+            "'all' (the whole domain). Class membership migrates with the ice "
+            "edge, so a monthly fraction times calendar hours would credit a "
+            "class with hours it did not exist for.")
+    col = A.col
+    code, _ = resolve_series_code(col, surface_class)
+    frac = col["month_fraction"]["per_season"]      # (s, month, class, phase)
+    # Per SEASON as well as per month: February is 28 days in a common year and
+    # 29 in a leap year, so one shared row of month lengths would scale every
+    # common-year February up by 1/28. The shared-calendar form is kept only as
+    # the fallback and for the axis furniture.
+    month_h2 = col.get("month_hours")               # (season, month) or None
+    month_h = month_window_hours(A.sec["slots"])    # (month,) nominal
+    scale = month_h[None, :] if month_h2 is None else month_h2
+    i = {p: PHASE_ORDER_ACC.index(p) for p in PHASE_ORDER_ACC}
+    liq = (frac[:, :, code, i["liquid"]] + frac[:, :, code, i["mixed"]]) * scale
+    ice = (frac[:, :, code, i["ice"]] + frac[:, :, code, i["none"]]) * scale
+    if exclude_months:
+        drop, _hit = excluded_month_mask(A.used, col["months"], A.args,
+                                         exclude_months)
+        liq = np.where(drop, np.nan, liq)
+        ice = np.where(drop, np.nan, ice)
+    if month_h2 is not None:
+        month_h = np.asarray(month_h2, dtype=float).mean(axis=0)
+    return col["months"], liq, ice, month_h
+
+
+DEFAULT_MONTHLY_OBS_FILE = "genie_arm_monthly_hours.txt"
+
+
+def load_monthly_observations(path=DEFAULT_MONTHLY_OBS_FILE) -> dict:
+    """Read the ARM monthly-mean table: month -> (with_liquid, ice_only) hours.
+
+    Both categories INCLUDE precipitating cases, so the matching ERA5 run is an
+    unfiltered one. Returns ``{"months": [...], "with_liquid": arr,
+    "ice_only": arr}``.
+    """
+    months, liq, ice = [], [], []
+    for line in Path(path).read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 3:
+            raise ValueError(f"{path}: expected 3 fields, got {len(parts)} "
+                             f"in {line!r}")
+        months.append(int(parts[0]))
+        liq.append(float(parts[1]))
+        ice.append(float(parts[2]))
+    if not months:
+        raise ValueError(f"{path} holds no data rows")
+    return {"months": months, "with_liquid": np.asarray(liq),
+            "ice_only": np.asarray(ice)}
+
+
+def fig_monthly_era5_vs_obs(A: Analysis, obs_path=DEFAULT_MONTHLY_OBS_FILE,
+                            out_dir=None, dpi: int | None = None,
+                            surface_class: str = "arm_site",
+                            label_fontsize=DEFAULT_COMPARISON_LABEL_FONTSIZE,
+                            tick_fontsize=DEFAULT_COMPARISON_TICK_FONTSIZE,
+                            legend_fontsize=DEFAULT_COMPARISON_LEGEND_FONTSIZE,
+                            residual_mode: str | None = None,
+                            exclude_months=GENIE_EXCLUDED_MONTHS,
+                            show_digitization_uncert: bool | None = None):
+    """Monthly mean cloud hours, ERA5 beside the observations.
+
+    Upper panel: two stacked bars per month -- ERA5 stippled on the left,
+    observations solid on the right -- each split into liquid-containing and
+    ice-only, averaged over seasons. The whisker on ERA5's liquid segment is
+    +/- one standard deviation ACROSS SEASONS, so it is interannual variability,
+    not uncertainty in the mean. There is no counterpart for the observations:
+    the file holds means only.
+
+    Lower panel: ERA5 against the observations, per category.
+    ``residual_mode`` sets its units; see :func:`fig_era5_vs_obs`.
+
+    The observation file's categories INCLUDE precipitation, so an unfiltered
+    ERA5 run is the matching one; passing a filtered ``A`` raises rather than
+    quietly comparing different populations.
+
+    ``exclude_months`` drops the season-months her instruments could not
+    measure, so both sides average over the same seasons; it defaults to
+    :data:`GENIE_EXCLUDED_MONTHS` and the count is stated on the figure. Pass
+    ``()`` to compare without it.
+
+    Every number here is gated on ``--min-cloud-fraction`` the same way the
+    seasonal figures are: ``monthly_phase_binary`` reads ``month_fraction``,
+    which is accumulated from ``w_phase_month``, which is masked by ``cloudy``.
+    Lowering the gate raises these bars. The threshold box in the corner is
+    there so a figure that did NOT move can be told apart from a stale one.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    args = A.args
+    residual_mode = resolve_residual_mode(residual_mode, args)
+    show_band = resolve_show_band(show_digitization_uncert, args)
+    if args.no_precip:
+        raise ValueError(
+            "the monthly observation file includes precipitating cases, so "
+            "this figure needs a run with no_precip=False; the Analysis given "
+            "has precipitating scenes removed and the two would not correspond.")
+
+    obs = load_monthly_observations(obs_path)
+    months, liq, ice, month_h = monthly_phase_binary(A, surface_class,
+                                                    exclude_months)
+    _code, series_label = resolve_series_code(A.col, surface_class)
+    _drop, dropped_months = excluded_month_mask(A.used, months, args,
+                                                exclude_months or ())
+
+    o_idx = {m: i for i, m in enumerate(obs["months"])}
+    shared = [m for m in months if m in o_idx]
+    if not shared:
+        raise ValueError(f"no month appears in both the run and {obs_path}")
+    mi = {m: i for i, m in enumerate(months)}
+    e_liq = np.array([nanmean_quiet(liq[:, mi[m]]) for m in shared])
+    e_ice = np.array([nanmean_quiet(ice[:, mi[m]]) for m in shared])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        e_liq_sd = np.array([np.nanstd(liq[:, mi[m]]) for m in shared])
+    o_liq = np.array([obs["with_liquid"][o_idx[m]] for m in shared])
+    o_ice = np.array([obs["ice_only"][o_idx[m]] for m in shared])
+    m_hours = np.array([month_h[mi[m]] for m in shared], dtype=float)
+    # Excluded months leave different bars averaged over different numbers of
+    # seasons, so the legend states the range instead of one count.
+    n_per_month = np.array([int(np.isfinite(liq[:, mi[m]]).sum())
+                            for m in shared])
+    n_lo, n_hi = int(n_per_month.min()), int(n_per_month.max())
+    n_txt = f"{n_hi}" if n_lo == n_hi else f"{n_lo}\u2013{n_hi}"
+
+    x = np.arange(len(shared))
+    w = 0.38
+    fig, (ax, ax_r) = plt.subplots(
+        2, 1, figsize=(2.0 + 1.6 * len(shared), 9.0), sharex=True,
+        gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+
+    ax.bar(x - w / 2, e_liq, width=w, color="white",
+           edgecolor=GENIE_LIQUID_COLOR, linewidth=0.7, hatch=ERA5_HATCH)
+    ax.bar(x - w / 2, e_ice, width=w, bottom=e_liq, color="white",
+           edgecolor=GENIE_ICE_COLOR, linewidth=0.7, hatch=ERA5_HATCH)
+    ax.bar(x + w / 2, o_liq, width=w, color=GENIE_LIQUID_COLOR, edgecolor="none")
+    ax.bar(x + w / 2, o_ice, width=w, bottom=o_liq, color=GENIE_ICE_COLOR,
+           edgecolor="none")
+    # Whisker where ERA5's liquid segment ends, so it reads as that segment's
+    # spread rather than the whole stack's.
+    ax.errorbar(x - w / 2, e_liq, yerr=e_liq_sd, fmt="none", ecolor="0.15",
+                elinewidth=1.5, capsize=5, capthick=1.5, zorder=5)
+
+    e_tot, o_tot = e_liq + e_ice, o_liq + o_ice
+    top = float(max((e_tot + e_liq_sd).max(), o_tot.max())) * 1.45
+    for xi in x:
+        _bar_total_label(ax, xi - w / 2, e_tot[xi], e_liq[xi], m_hours[xi], top,
+                         fontsize=label_fontsize - 4.5)
+        _bar_total_label(ax, xi + w / 2, o_tot[xi], o_liq[xi], m_hours[xi], top,
+                         fontsize=label_fontsize - 4.5)
+    ax.set_ylim(0, top)
+    ax.set_ylabel("Mean hours per month", fontsize=label_fontsize)
+    ax.tick_params(axis="both", labelsize=tick_fontsize)
+    ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, fc=GENIE_LIQUID_COLOR, ec="none"),
+        plt.Rectangle((0, 0), 1, 1, fc=GENIE_ICE_COLOR, ec="none"),
+        plt.Rectangle((0, 0), 1, 1, fc="white", ec="0.35", lw=0.8,
+                      hatch=ERA5_HATCH),
+        plt.Rectangle((0, 0), 1, 1, fc="0.55", ec="none"),
+        Line2D([0], [0], color="0.15", lw=1.5),
+    ]
+    ax.legend(handles, ["liquid containing", "ice only",
+                        "ERA5 (left, stippled)", "ARM obs (right, solid)",
+                        f"$\\pm$1 s.d. across {n_txt} ERA5 seasons"],
+              fontsize=legend_fontsize, ncol=2, framealpha=0.9, loc="upper right")
+    draw_threshold_box(ax, A, loc="upper left",
+                       fontsize=legend_fontsize - 2.0)
+
+    # ---- residual panel ----------------------------------------------------
+    d_liq = residual_values(e_liq, o_liq, residual_mode)
+    d_ice = residual_values(e_ice, o_ice, residual_mode)
+    # The monthly file is still digitised, so unlike the seasonal figures this
+    # one does still have a band to draw.
+    band_note = draw_residual_band(
+        ax_r, residual_mode, OBS_MONTHLY_UNCERTAINTY_H,
+        bars=((x - w / 2, o_liq), (x + w / 2, o_ice)), width=w, show=show_band)
+    ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
+             edgecolor="white", linewidth=0.5)
+    ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
+             edgecolor="white", linewidth=0.5)
+    ax_r.axhline(0.0, color="0.3", lw=1.0)
+    ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
+    ax_r.tick_params(axis="both", labelsize=tick_fontsize)
+    ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+    ax_r.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax_r.spines[sp].set_visible(False)
+    ax_r.set_xticks(x)
+    ax_r.set_xticklabels(
+        [calendar.month_abbr[m] + ("\u2020" if n_per_month[k] < n_hi else "")
+         for k, m in enumerate(shared)], fontsize=tick_fontsize)
+
+    drop_note = ""
+    if dropped_months:
+        drop_txt = ", ".join(f"{calendar.month_abbr[m]} {y}"
+                             for y, m in sorted(dropped_months))
+        drop_note = (f"\u2020 season-months excluded from BOTH sides (ARM "
+                     f"instrument problems): {drop_txt}")
+    n_note = (f"mean over {n_hi} ERA5 seasons" if n_lo == n_hi
+              else f"mean over {n_lo}\u2013{n_hi} ERA5 seasons per month")
+    fig.suptitle(f"Monthly mean cloud hours, ERA5 against ARM observations "
+                 f"\u2014 {series_label}\n{args.region}   |   {n_note}   |   "
+                 f"all sky, precipitation included on both "
+                 f"sides   |   percentage is the liquid-containing share of the "
+                 f"month", fontsize=12, y=0.965)
+    fig.subplots_adjust(top=0.90, bottom=0.115, left=0.09, right=0.985)
+    draw_figure_footnotes(fig, [drop_note, band_note])
+    return _save_stack(fig, A, out_dir,
+                       _residual_stem("monthly_era5_vs_obs", residual_mode), dpi)
 
 
 def fig_linear(A: Analysis, out_dir=None, dpi: int | None = None):

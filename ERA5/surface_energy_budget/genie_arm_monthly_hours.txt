@@ -1,0 +1,45 @@
+# DOE ARM Utqiagvik MONTHLY mean cloud hours -- DIGITISED FROM A FIGURE
+# ============================================================================
+#
+# ***  READ-OFF ESTIMATES, NOT GENIE'S ACTUAL NUMBERS.  ***
+#
+# Measured by eye from her grouped bar chart of monthly means over the seasons
+# 2014/15 - 2024/25. Grouped bars sit on a common baseline, so these are more
+# reliable than the seasonal file's stacked segments -- expect roughly +/- 15 h
+# rather than +/- 75. Replace with the real numbers when you have them; keep the
+# column order and nothing else has to change.
+#
+# Both categories INCLUDE precipitating cases, as stated on the source figure.
+# Compare against an ERA5 run with no_precip=False.
+#
+# ---------------------------------------------------------------------------
+# A CROSS-CHECK THAT ALSO EXPLAINS A DISCREPANCY
+#
+# Summed over the six months these give
+#     with liquid  1894 h        ice only  1403 h
+#
+# Her SEASONAL figure's legend states exact record means of
+#     with liquid  1474 + 282 (precip) = 1756 h
+#     ice only     1071 + 255 (precip) = 1326 h
+#
+# The monthly totals are 7.9% and 5.8% higher. That is very close to the ratio
+# between the nominal season window and the observed part of it: the seasonal
+# figure reports 339 h per season as "missing / no data", and
+#     4380 / (4380 - 339) = 1.084
+#     1756 x 1.084 = 1903   (vs 1894 read here)
+#     1326 x 1.084 = 1437   (vs 1403 read here)
+#
+# So the monthly figure appears to be normalised to a COMPLETE season while the
+# seasonal figure reports raw hours with the gaps left in. If that reading is
+# right it makes this file the better one to compare against, because ERA5 has
+# no missing data and its partial seasons are scaled up to the nominal window
+# the same way. This is an INFERENCE from two numbers, not something Genie
+# confirmed -- worth asking her before leaning on it.
+# ---------------------------------------------------------------------------
+# month  with_liquid  ice_only
+10             500       158
+11             425       190
+12             283       250
+1              260       249
+2              201       246
+3              225       310
