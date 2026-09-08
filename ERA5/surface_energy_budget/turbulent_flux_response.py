@@ -150,10 +150,12 @@ import numpy as np
 
 from seb_analysis_common import (
     add_data_source_args,
+    available_regions,
     load_seb_data,
     resolve_data_root,
     resolve_region_dir,
 )
+from convert_specific_to_absolute import G_M_S2, layer_thickness_pa
 from surface_classification import (
     CLASS_CODES,
     CLASS_COLORS,
@@ -166,6 +168,7 @@ from surface_classification import (
     classify_cells,
     iter_time_blocks,
     load_land_sea_mask,
+    strip_frequency_suffix,
 )
 from plot_surface_class_timeseries import (
     SITE_COLOR,
@@ -187,6 +190,7 @@ from plot_lwp_histogram_by_surface_class import (
     PHASE_STACK,
     add_fraction_phase_args,
     add_phase_args,
+    lowest_drawn_lwp,
     phase_definition_label,
     phase_masks,
     precip_label,
@@ -242,7 +246,66 @@ TRACKED: tuple[Tracked, ...] = (
     Tracked("lwp_g_m2", "Liquid water path", "g m$^{-2}$", 0.0),
     Tracked("iwp_g_m2", "Ice water path", "g m$^{-2}$", 0.0),
     Tracked("wspd_m_s", "10 m wind speed", "m s$^{-1}$", 5.0),
+    # --- the latent-heat side, and the multiplicative bulk predictors ------
+    Tracked("q2m_g_kg", "2 m specific humidity", "g kg$^{-1}$", 1.0),
+    Tracked("dq_g_kg", r"$q_{sat}(T_{skin}) - q_{2m}$", "g kg$^{-1}$", 0.0),
+    # The bulk formulae are MULTIPLICATIVE in wind speed: a 5 K skin-to-air
+    # difference moves twice the heat at 10 m/s that it does at 5 m/s. Adding
+    # wind as an extra ADDITIVE term in a multiple regression only
+    # approximates that. Carrying the products lets the regression be run on
+    # the predictor the physics actually names, whose slope is rho*c_p*C_H
+    # directly -- no wind speed left in the units.
+    Tracked("u_dskt_K_m_s", r"$U\,(T_{skin}-T_{2m})$", "K m s$^{-1}$", 0.0),
+    Tracked("u_dq_g_kg_m_s", r"$U\,\Delta q$", "g kg$^{-1}$ m s$^{-1}$", 0.0),
+    # Surface pressure as a circulation proxy, following the way Bertrand et
+    # al. (2025) stratify on daily surface pressure anomaly to test whether
+    # synoptic variability explains their result.
+    Tracked("sp_hPa", "Surface pressure", "hPa", 1010.0),
 )
+
+# ---------------------------------------------------------------------------
+# Humidity, for the latent-heat side of the budget
+# ---------------------------------------------------------------------------
+# The latent flux is a bulk flux too,
+#
+#     LH_up ~ rho * L_v * C_E * U * (q_sat(T_skin) - q_2m)
+#
+# so its driver is a HUMIDITY difference in the same way the sensible flux's
+# driver is a temperature difference. ERA5 stores neither q_2m nor the surface
+# saturation value, so both are derived here from the 2 m dewpoint and the skin
+# temperature with Alduchov & Eskridge (1996) saturation vapour pressures.
+#
+# APPROXIMATE, AND KNOWN TO BE. ERA5's own turbulence scheme computes the
+# surface humidity with a resistance formulation over land and snow, so this is
+# not a reconstruction of what the model did -- it is an independent estimate of
+# the same physical quantity, good enough to serve as a predictor and as a
+# control, and not good enough to close the model's latent flux exactly. The
+# saturation is taken over ICE when the skin is below freezing, which is what a
+# frozen surface actually presents to the air; using the water value there
+# overstates q_sat by about 10% at -20 C.
+EPSILON_RD_RV = 0.621981          # R_dry / R_vapour
+
+
+def sat_vapour_pressure_hpa(t_k: np.ndarray, over_ice: np.ndarray | None = None):
+    """Saturation vapour pressure in hPa (Alduchov & Eskridge 1996).
+
+    ``over_ice`` selects the ice formulation element-wise; None means water
+    everywhere, which is the right choice for a dewpoint temperature since
+    dewpoint is defined with respect to water.
+    """
+    tc = t_k - 273.15
+    e_w = 6.1094 * np.exp(17.625 * tc / (tc + 243.04))
+    if over_ice is None:
+        return e_w
+    e_i = 6.1121 * np.exp(22.587 * tc / (tc + 273.86))
+    return np.where(over_ice, e_i, e_w)
+
+
+def specific_humidity(e_hpa: np.ndarray, p_hpa: np.ndarray) -> np.ndarray:
+    """Specific humidity [kg kg-1] from vapour pressure and total pressure."""
+    denom = p_hpa - (1.0 - EPSILON_RD_RV) * e_hpa
+    return EPSILON_RD_RV * e_hpa / np.where(denom > 0, denom, np.nan)
+
 
 VAR_INDEX: dict[str, int] = {t.key: i for i, t in enumerate(TRACKED)}
 N_VAR = len(TRACKED)
@@ -255,8 +318,233 @@ CENTERS = np.array([t.center for t in TRACKED])
 READ_VARS: tuple[str, ...] = (
     "tcc", "tclw", "tciw", "siconc",
     "msshf", "mslhf", "msdwlwrf", "msnlwrf", "msnswrf",
-    "skt", "t2m", "u10", "v10",
+    "skt", "t2m", "u10", "v10", "d2m", "sp",
 )
+
+# Read only when with_cloud_temperature is on: sp clips the lowest pressure
+# levels at the ground so a level below terrain contributes no liquid.
+CLOUD_T_EXTRA_VARS: tuple[str, ...] = ("sp",)
+
+
+# ---------------------------------------------------------------------------
+# Mean cloud temperature, from the pressure-level archive
+# ---------------------------------------------------------------------------
+# Rachel's Barrow figure colours its LWP-against-DLR scatter by MEAN CLOUD
+# TEMPERATURE, and that colour is most of the physics in the plot: at fixed LWP
+# the downwelling longwave is set by how warm the emitting layer is, so the
+# LWP-DLR slope is partly a temperature covariance rather than an opacity
+# effect. Reproducing the comparison without it would only match the axes.
+#
+# ERA5's single-level archive carries no cloud temperature, so this comes from
+# the pressure-level archive as the LIQUID-WEIGHTED mean:
+#
+#     T_cloud = sum_l (clwc_l * dp_l * T_l) / sum_l (clwc_l * dp_l)
+#
+# i.e. each level weighted by the liquid water path it contributes. Liquid
+# rather than total condensate, because the quantity on the x axis is the
+# LIQUID water path and the population is liquid-bearing cloud; weighting by
+# total condensate would let a deep ice layer aloft drag the mean toward a
+# temperature no liquid ever had. Columns with no liquid above the floor get
+# NaN and are simply absent from the coloured figure -- they are not dropped
+# from anything else, which is why this is NOT a tracked variable: requiring it
+# finite would silently delete every ice-only column from every other figure.
+#
+# This costs a second pass over a second archive, so it is opt-in:
+# prepare(with_cloud_temperature=True).
+CLOUD_T_MIN_LWP_G = 1e-3    # g m-2 of column liquid needed to define a mean
+
+EXTRA_FIELDS: dict[str, tuple[str, str]] = {
+    "tcld_C": ("Mean cloud temperature", r"$^{\circ}$C"),
+}
+
+
+# ---------------------------------------------------------------------------
+# UNCERTAINTY: why the textbook standard error is unusable, and what replaces it
+# ---------------------------------------------------------------------------
+# THE PROBLEM. The ordinary least-squares standard error,
+#
+#     SE(b) = (sd_y / sd_x) * sqrt((1 - r^2) / (n - 2)),
+#
+# is derived under the assumption that the n residuals are INDEPENDENT draws.
+# ERA5 cell-hours are not remotely independent, in either dimension:
+#
+#   MEASURED, Barrow strip, Oct 2024 - Mar 2025
+#     lag-1 hourly autocorrelation      DLR 0.988,  SHF 0.984
+#     -> one independent sample per ~72 h, not per hour
+#     DLR correlation across the domain  r = 0.99 at 50 km, still 0.65 at 600 km
+#     -> the 1100 x 550 km strip is ONE weather system wide, so 2501 grid cells
+#        carry on the order of one to three independent pieces of information,
+#        not 2501
+#
+# So a season of 4368 hours over 2501 cells is not 10.9 million independent
+# samples; it is roughly 60 independent synoptic situations. The naive SE is
+# too small by about sqrt(n / n_eff) ~ 130, and it produces intervals that
+# claim four significant figures on a slope that is not even distinguishable
+# from zero.
+#
+# WHAT A CONFIDENCE INTERVAL EVEN MEANS HERE. It is not "how much would this
+# number move if we re-measured", because there is no measurement error to
+# speak of -- ERA5 hands us the same value every time we read the file. The
+# useful question is different:
+#
+#     The record is ONE REALISATION of the atmosphere's synoptic variability.
+#     If the same climate had thrown a different sequence of weather systems at
+#     this domain, how different would the fitted slope have been?
+#
+# That is a real sampling distribution, and the record contains enough distinct
+# weather systems to estimate it -- just far fewer than it contains cell-hours.
+#
+# THE ESTIMATOR: A MOVING-BLOCK BOOTSTRAP.
+#
+#   1. Cut the record into contiguous blocks of time LONGER than the
+#      decorrelation time, so different blocks are near-independent. Each block
+#      is one or two synoptic situations' worth of information.
+#   2. Draw blocks at random WITH REPLACEMENT until a synthetic record of the
+#      original length is assembled. Each synthetic record is a plausible
+#      alternative answer to "which weather happened".
+#   3. Refit the slope on each synthetic record. The spread across synthetic
+#      records IS the sampling distribution; its 2.5th and 97.5th percentiles
+#      are the 95% interval.
+#
+# WHY BLOCKS AND NOT INDIVIDUAL POINTS. Resampling cell-hours one at a time
+# destroys the correlation structure and reproduces the too-narrow naive
+# answer. Keeping a block contiguous preserves the correlation WITHIN a weather
+# system, so each block contributes one system's worth of information, which is
+# the correct quantum.
+#
+# WHY THE SPATIAL CORRELATION NEEDS NO SEPARATE TREATMENT. A block is a slab of
+# TIME containing the entire spatial field. Whatever correlation exists between
+# grid cells travels inside the block untouched, and the resampling only shuffles
+# blocks along the time axis -- the one axis along which the record really does
+# supply repeated, near-independent draws. So the spatial degrees of freedom
+# never have to be estimated; the method is agnostic to them.
+#
+# CHOOSING THE BLOCK LENGTH. It must exceed the decorrelation time (~3 days
+# here) so that blocks are near-independent, but stay short enough to leave
+# many blocks to resample. The diagnostic is convergence: lengthen the block
+# and the interval widens until the blocks are genuinely independent, then
+# stops. MEASURED on sea ice, one season: SE = 0.0256 at 3-day blocks, 0.0285
+# at 7 days, 0.0299 at 14 days -- converged by about a week, which is why
+# DEFAULT_BOOTSTRAP_BLOCK_DAYS is 7.
+#
+# THIS IS MADE CHEAP BY THE MOMENTS BEING ADDITIVE. The per-block moment
+# matrices are accumulated during the SAME streaming pass as everything else,
+# and a bootstrap replicate is then just a weighted sum of block matrices --
+# no re-reading, no refitting from raw samples. Two thousand replicates cost
+# well under a second.
+#
+# WHAT THE INTERVAL STILL DOES NOT COVER. It is the sampling variability of the
+# weather, for THIS domain and THESE seasons. It says nothing about whether
+# ERA5's physics is right, and it does not convert a covariance into a causal
+# effect.
+DEFAULT_BOOTSTRAP_BLOCK_DAYS = 7
+DEFAULT_BOOTSTRAP_SAMPLES = 2000
+DEFAULT_BOOTSTRAP_SEED = 20260904
+
+
+def block_index(ds, use_step: np.ndarray, block_days: int):
+    """Map each time step to a contiguous block, compactly numbered.
+
+    Returns ``(blk_of_step, n_block)``; steps outside the selected seasons get
+    -1. Blocks are cut on absolute calendar days, so a block never spans two
+    seasons -- the out-of-season steps between them are simply absent, and the
+    blocks either side keep their own identities.
+    """
+    times = ds["valid_time"].values
+    day = ((times - times[0]) / np.timedelta64(1, "D")).astype(np.int64)
+    raw = day // int(block_days)
+    used = np.unique(raw[use_step])
+    lookup = {int(b): i for i, b in enumerate(used)}
+    out = np.full(raw.shape, -1, dtype=np.int64)
+    out[use_step] = [lookup[int(b)] for b in raw[use_step]]
+    return out, len(used)
+
+
+def steps_in_seasons(layout: dict, wanted_idx: list[int]) -> np.ndarray:
+    """Boolean over the time axis: steps inside one of the wanted seasons."""
+    s_idx, in_window = layout["s_idx"], layout["in_window"]
+    wanted = np.zeros(len(layout["seasons"]), dtype=bool)
+    wanted[wanted_idx] = True
+    return in_window & (s_idx >= 0) & wanted[np.clip(s_idx, 0, None)]
+
+
+def cloud_temperature_field(ds, args, use_step: np.ndarray):
+    """Liquid-weighted mean cloud temperature for every wanted cell-hour.
+
+    Returns ``(row_of, tcld_C)``. ``row_of`` maps a single-level time index to
+    a row of ``tcld_C`` (shape ``(n_matched, n_lat, n_lon)``, degrees Celsius),
+    or -1 where the pressure archive has no matching timestamp.
+
+    Held in memory rather than streamed alongside the main pass because the two
+    archives are separate files with their own time axes; at four seasons this
+    is about 175 MB, which is cheaper than the bookkeeping of interleaving two
+    block iterators.
+    """
+    region_pl = f"{strip_frequency_suffix(args.region)}_pressure"
+    data_root = resolve_data_root(args.storage, args.data_root)
+    if region_pl not in available_regions(data_root):
+        raise FileNotFoundError(
+            f"cloud temperature needs the pressure-level archive "
+            f"{data_root / region_pl}, which is not there. Download it with "
+            f"download_era5_pressure.py, or call prepare() without "
+            f"with_cloud_temperature.")
+
+    pds = load_seb_data(region_pl, None, None, data_root)
+    missing = sorted({"t", "clwc"} - set(pds.data_vars))
+    if missing:
+        raise KeyError(f"pressure archive is missing {missing}")
+
+    want = np.flatnonzero(use_step)
+    t_want = ds["valid_time"].values[want]
+    t_pl = pds["valid_time"].values
+    pos = np.searchsorted(t_pl, t_want)
+    inside = pos < t_pl.size
+    match = np.zeros(want.size, dtype=bool)
+    match[inside] = t_pl[pos[inside]] == t_want[inside]
+
+    n_lat, n_lon = ds.sizes["latitude"], ds.sizes["longitude"]
+    tcld = np.full((want.size, n_lat, n_lon), np.nan, dtype=np.float32)
+    row_of = np.full(ds.sizes["valid_time"], -1, dtype=np.int64)
+    row_of[want] = np.arange(want.size)
+
+    n_hit = int(match.sum())
+    print(f"  Cloud temp : {n_hit:,} of {want.size:,} wanted steps matched in "
+          f"{region_pl}"
+          + ("" if n_hit == want.size else "; the rest are uncoloured"))
+    if n_hit == 0:
+        return row_of, tcld
+
+    lv = pds["pressure_level"].values.astype(float)
+    order = np.argsort(lv)                       # ascending pressure
+    p_pa = lv[order] * 100.0
+
+    rows = np.flatnonzero(match)
+    step = max(1, args.block_hours // 8)         # 23 levels: smaller blocks
+    for i0 in range(0, rows.size, step):
+        sel = rows[i0:i0 + step]
+        blk = pds[["t", "clwc"]].isel(valid_time=pos[sel]).load()
+        sp_pa = ds["sp"].isel(valid_time=want[sel]).values.astype(float)
+
+        dims = [d for d in blk["t"].dims if d != "pressure_level"]
+        t_k = blk["t"].transpose(*dims, "pressure_level").values.astype(
+            np.float64)[..., order]
+        clwc = blk["clwc"].transpose(*dims, "pressure_level").values.astype(
+            np.float64)[..., order]
+
+        dp = layer_thickness_pa(p_pa, sp_pa)                 # (..., n_lev)
+        lwp_l = np.clip(clwc, 0.0, None) * dp / G_M_S2 * 1000.0   # g m-2
+        denom = lwp_l.sum(axis=-1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mean_t = (lwp_l * t_k).sum(axis=-1) / denom
+        mean_t[denom < CLOUD_T_MIN_LWP_G] = np.nan
+        tcld[sel] = (mean_t - 273.15).astype(np.float32)
+
+    return row_of, tcld
+
+
+def tcc_shape_placeholder(block, keep: np.ndarray) -> tuple:
+    """Shape of one block's kept cell-hours, for allocating an extra field."""
+    return block["tcc"].values[keep].shape
 
 
 def derived_fields(block, keep: np.ndarray) -> dict[str, np.ndarray]:
@@ -270,7 +558,14 @@ def derived_fields(block, keep: np.ndarray) -> dict[str, np.ndarray]:
     """
     v = {name: block[name].values[keep].astype(np.float64) for name in
          ("msshf", "mslhf", "msdwlwrf", "msnlwrf", "msnswrf", "skt", "t2m",
-          "u10", "v10", "tclw", "tciw")}
+          "u10", "v10", "tclw", "tciw", "d2m", "sp")}
+    p_hpa = v["sp"] / 100.0
+    wspd = np.hypot(v["u10"], v["v10"])
+    d_skt = v["skt"] - v["t2m"]
+    q2m = specific_humidity(sat_vapour_pressure_hpa(v["d2m"]), p_hpa)
+    q_surf = specific_humidity(
+        sat_vapour_pressure_hpa(v["skt"], over_ice=v["skt"] < 273.15), p_hpa)
+    dq = (q_surf - q2m) * 1000.0                     # kg kg-1 -> g kg-1
     out = {
         "shf_W_m2": v["msshf"],
         "lhf_W_m2": v["mslhf"],
@@ -280,10 +575,15 @@ def derived_fields(block, keep: np.ndarray) -> dict[str, np.ndarray]:
         "swnet_W_m2": v["msnswrf"],
         "skt_K": v["skt"],
         "t2m_K": v["t2m"],
-        "dskt_t2m_K": v["skt"] - v["t2m"],
+        "dskt_t2m_K": d_skt,
         "lwp_g_m2": v["tclw"] * 1000.0,          # kg m-2 -> g m-2
         "iwp_g_m2": v["tciw"] * 1000.0,
-        "wspd_m_s": np.hypot(v["u10"], v["v10"]),
+        "wspd_m_s": wspd,
+        "q2m_g_kg": q2m * 1000.0,
+        "dq_g_kg": dq,
+        "u_dskt_K_m_s": wspd * d_skt,
+        "u_dq_g_kg_m_s": wspd * dq,
+        "sp_hPa": p_hpa,
     }
     return out
 
@@ -319,6 +619,64 @@ POPULATIONS: tuple[str, ...] = ("cloud", "all")
 # ----------------------------------------------------------------------------
 # 2-D density histograms
 # ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# WHICH WAY TO RUN THE REGRESSION -- this is not a presentation choice
+# ---------------------------------------------------------------------------
+# The two ordinary least-squares fits of a pair are DIFFERENT ESTIMATORS, not
+# one estimator drawn two ways:
+#
+#     slope(y|x) = cov / var_x        slope(x|y) = cov / var_y
+#     slope(y|x) * slope(x|y) = r^2
+#
+# So 1/slope(y|x) = slope(x|y) / r^2. INVERTING THE WRONG FIT INFLATES THE
+# ANSWER BY 1/r^2, away from zero, and the inflation is worst exactly where the
+# scatter is largest and a reader is least likely to notice.
+#
+# MEASURED, Barrow strip, Oct-Mar 2022/23-2025/26, fraction-mode liquid-bearing
+# overcast, on (T_skin - T_2m) against sensible heat flux -- the bulk coupling
+# coefficient d(SHF)/d(dT), in W m-2 K-1:
+#
+#     class            1/slope(dT|SHF)   slope(SHF|dT)   inflation
+#     Land                        28.3             3.7       7.8x
+#     Coastal                     21.7            14.4       1.5x
+#     Open ocean                  23.9            19.1       1.3x
+#     Marginal ice zone           23.4            19.3       1.2x
+#     Sea ice                     26.7             9.9       2.7x
+#     Utqiagvik                   22.5             4.0       5.6x
+#
+# Read the first column and the coupling looks REMARKABLY UNIFORM at 22-28
+# across every surface. It is not: the correct column spans a factor of five,
+# and the ordering is different. The apparent uniformity was the 1/r^2 factor
+# tracking the scatter, not the physics. The corrected values are also the ones
+# that make physical sense -- rho*c_p*C_H*U is about 1300 * 1.3e-3 * 6 = 10
+# W m-2 K-1 for a stable Arctic boundary layer over pack ice and roughly twice
+# that over open water with stronger winds and a rougher surface, which is what
+# the second column says and the first does not.
+#
+# HOW THIS IS HANDLED HERE. Every panel now puts the RESPONSE ON THE Y AXIS, so
+# the physically meaningful fit is the ordinary y-on-x one and no panel needs a
+# special direction. The DLR panel's annotated slope is then exactly -f_SH from
+# the partition figure -- VERIFIED equal to machine precision, since both are
+# cov(SHF, LWD) / var(LWD).
+#
+# The option below survives because the WRONG direction is worth being able to
+# draw: "both" overlays the two fits, and watching them fan apart on the
+# low-r^2 panels is the clearest available statement of why the direction
+# matters.
+#
+#     "y_on_x"   fit y = a + b x. For LWP against SHF, where neither variable
+#                drives the other and the fit is descriptive.
+#     "x_on_y"   fit x = a + b y, i.e. d(SHF)/d(other). For DLR and for
+#                (T_skin - T_2m), where the question is how the FLUX responds.
+#     "both"     draw both, which makes the divergence visible; they coincide
+#                only as r^2 -> 1.
+#
+# r^2 is symmetric, so it is the same number whichever direction is fitted, and
+# it is annotated once.
+FIT_ORIENTS: tuple[str, ...] = ("y_on_x", "x_on_y", "both")
+DEFAULT_FIT_ORIENT = "panel"      # honour each panel's own declaration
+
+
 class Panel2D(NamedTuple):
     """Axis configuration for one density-scatter figure."""
 
@@ -328,6 +686,8 @@ class Panel2D(NamedTuple):
     y_range: tuple[float, float]
     x_bins: int
     y_bins: int
+    fit_orient: str = "y_on_x"
+    color_key: str | None = None      # colour by this field's MEAN, not density
 
 
 # Ranges are fixed rather than derived from the data so that runs over
@@ -338,13 +698,56 @@ class Panel2D(NamedTuple):
 # turns out to be wrong for another region announces itself instead of
 # silently clipping.
 DEFAULT_PANELS: dict[str, Panel2D] = {
-    "shf_lwp": Panel2D("shf_W_m2", "lwp_g_m2", (-250.0, 60.0), (0.0, 300.0),
-                       180, 180),
-    "shf_dlr": Panel2D("shf_W_m2", "lwd_W_m2", (-250.0, 60.0), (140.0, 330.0),
-                       180, 180),
-    "shf_dskt": Panel2D("shf_W_m2", "dskt_t2m_K", (-250.0, 60.0),
-                        (-8.0, 14.0), 180, 180),
+    # THE RESPONSE GOES ON Y. Every panel is a plain y-on-x least-squares fit
+    # whose slope is the derivative named in the figure title, so the axes and
+    # the reported number agree without the reader having to reconcile them.
+    #
+    # These four originally had the flux on the x axis, and the fit ran x on y
+    # to recover the right slope. That returns the identical number -- both are
+    # cov(flux, driver) / var(driver) -- but it asks a reader to hold "the
+    # regression runs the other way from the axes" in their head while looking
+    # at the plot. Putting the response on y removes the reconciliation step.
+    "lwp_shf": Panel2D("lwp_g_m2", "shf_W_m2", (0.0, 300.0), (-250.0, 60.0),
+                       180, 180, "y_on_x"),
+    "dlr_shf": Panel2D("lwd_W_m2", "shf_W_m2", (140.0, 330.0), (-250.0, 60.0),
+                       180, 180, "y_on_x"),
+    # The bulk coupling coefficient rho*c_p*C_H*U is d(SHF)/d(T_skin - T_2m),
+    # so the temperature difference is the predictor and the flux the response.
+    "dskt_shf": Panel2D("dskt_t2m_K", "shf_W_m2", (-8.0, 14.0), (-250.0, 60.0),
+                        180, 180, "y_on_x"),
+    "dlr_lhf": Panel2D("lwd_W_m2", "lhf_W_m2", (140.0, 330.0), (-150.0, 40.0),
+                       180, 180, "y_on_x"),
+    # The comparison against the ARM observations at Barrow. Axes and colour
+    # follow that figure so the two can be read side by side: LWP 0-350 g m-2,
+    # DLR 100-350 W m-2, coloured by mean cloud temperature. DLR is the
+    # response to LWP here, which is also the direction the published
+    # y = 0.27x + 228.26 was fitted in.
+    "lwp_dlr": Panel2D("lwp_g_m2", "lwd_W_m2", (0.0, 350.0), (100.0, 350.0),
+                       180, 180, "y_on_x", "tcld_C"),
 }
+
+
+# ---------------------------------------------------------------------------
+# LWP REGIMES: why 10 and 40 g m-2 and not terciles
+# ---------------------------------------------------------------------------
+# A liquid cloud's longwave emissivity follows eps = 1 - exp(-a * LWP) with
+# a ~ 0.15 m2 g-1 (Stephens 1978), so:
+#
+#     LWP = 10 g m-2   eps = 0.78     thin: DLR still responds to more liquid
+#     LWP = 20 g m-2   eps = 0.95
+#     LWP = 40 g m-2   eps = 0.998    radiatively BLACK: DLR no longer responds
+#
+# The two edges therefore split the population where the PHYSICS changes, which
+# is what a matched comparison needs. Data-driven edges -- terciles, say --
+# would fall in different places for each surface class, and then a bar chart
+# comparing classes within a "regime" would be comparing different regimes, and
+# would reintroduce exactly the confounding the stratification exists to
+# remove. Fixed physical edges keep the comparison matched.
+#
+# The floor of the low bin is the phase scheme's own liquid floor, so the bins
+# partition precisely the population the rest of the module describes.
+LWP_REGIME_EDGES_G: tuple[float, ...] = (10.0, 40.0)
+LWP_REGIME_LABELS: tuple[str, ...] = ("low", "medium", "high")
 
 # Bin edges of the binned-response curves in fig_response_partition. Wide
 # enough to hold the whole DLR distribution; bins holding less than
@@ -361,6 +764,23 @@ MIN_MIZ_HOURS = 500.0
 # ----------------------------------------------------------------------------
 # Weighted moment accumulation
 # ----------------------------------------------------------------------------
+def regime_of(lwp_g: np.ndarray, edges: tuple[float, ...]) -> np.ndarray:
+    """LWP regime index per sample: 0 = low, 1 = medium, 2 = high."""
+    return np.digitize(lwp_g, np.asarray(edges, dtype=float))
+
+
+def regime_labels(edges: tuple[float, ...], floor_g: float) -> list[str]:
+    """Axis labels naming the actual g m-2 span of each regime."""
+    lo = [floor_g] + list(edges)
+    hi = list(edges) + [np.inf]
+    out = []
+    for name, a, b in zip(LWP_REGIME_LABELS, lo, hi):
+        span = (f"$>$ {a:g}" if not np.isfinite(b)
+                else f"{a:g}$-${b:g}")
+        out.append(f"{name}\nLWP {span} g m$^{{-2}}$")
+    return out
+
+
 def new_moments(n_group: int) -> dict:
     """An empty moment accumulator for ``n_group`` groups.
 
@@ -576,6 +996,75 @@ def partial_slope(acc: dict, slot: int, y_key: str,
     return float(beta[0])
 
 
+def fit_pair(acc: dict, slot: int, x_key: str, y_key: str,
+             weighted: bool = True) -> dict:
+    """Both ordinary least-squares fits of a pair, and what relates them.
+
+    Returns ``{"y_on_x": ..., "x_on_y": ..., "r2": ..., "inflation": ...}``.
+    The two stat dicts are ``moment_stats`` with the arguments swapped -- there
+    is no second estimator to implement, only a second question to ask.
+
+    ``inflation`` is ``1 / r2``, the factor by which INVERTING the y-on-x slope
+    overstates the x-on-y slope. It is reported because that inversion is the
+    natural mistake to make when a figure plots the response on the x axis, and
+    because its size is not obvious: at the sea-ice r^2 of 0.37 it is a factor
+    of 2.7, and at the DLR-against-SHF r^2 of 0.025 it is a factor of forty.
+    """
+    yx = moment_stats(acc, slot, x_key, y_key, weighted=weighted)
+    xy = moment_stats(acc, slot, y_key, x_key, weighted=weighted)
+    r2 = yx["r2"]
+    return {
+        "y_on_x": yx,
+        "x_on_y": xy,
+        "r2": r2,
+        "inflation": (1.0 / r2) if np.isfinite(r2) and r2 > 0 else np.nan,
+    }
+
+
+def multiple_stats(acc: dict, slot: int, y_key: str,
+                   x_keys: tuple[str, ...], weighted: bool = True) -> dict:
+    """Full multiple regression of y on ``x_keys``: coefficients and R^2.
+
+    ``partial_slope`` returns only the first coefficient, which is all the
+    sensitivity tables need. This returns the whole fit, including the
+    MULTIPLE coefficient of determination
+
+        R^2 = beta . cov(x, y) / var(y),
+
+    the fraction of the variance in y that all the predictors together account
+    for. It is not comparable to the r^2 of a single-predictor fit on a
+    different predictor -- adding a variable can only raise R^2, so the
+    interesting comparison is always between specifications with the same y,
+    and between predictors chosen for physical reasons rather than for fit.
+    """
+    keys = tuple(x_keys)
+    w_key, xk, xyk = (("w", "x", "xy") if weighted else ("n", "x_u", "xy_u"))
+    w = acc[w_key][slot]
+    out = {"x_keys": keys, "n_hours": float(acc["n"][slot]) * HOURS_PER_STEP}
+    if w <= 0.0:
+        out.update(coef=np.full(len(keys), np.nan), intercept=np.nan, r2=np.nan)
+        return out
+
+    idx = [VAR_INDEX[k] for k in keys] + [VAR_INDEX[y_key]]
+    m = acc[xk][slot, idx] / w
+    cov = acc[xyk][slot][np.ix_(idx, idx)] / w - np.outer(m, m)
+    a, b, var_y = cov[:-1, :-1], cov[:-1, -1], cov[-1, -1]
+    try:
+        beta = np.linalg.solve(a, b)
+    except np.linalg.LinAlgError:
+        out.update(coef=np.full(len(keys), np.nan), intercept=np.nan, r2=np.nan)
+        return out
+
+    means = m + CENTERS[idx]
+    out.update(
+        coef=beta,
+        intercept=float(means[-1] - float(beta @ means[:-1])),
+        r2=float(beta @ b / var_y) if var_y > 0 else np.nan,
+        x_means=means[:-1], y_mean=float(means[-1]),
+    )
+    return out
+
+
 def slope_of(acc: dict, slot: int, y_key: str, x_key: str = "lwd_W_m2",
              control: tuple[str, ...] = ()) -> float:
     """d(y)/d(x) for one group. Shorthand for the sensitivity tables."""
@@ -602,6 +1091,168 @@ PARTITION_TERMS: tuple[tuple[str, str, str], ...] = (
     ("f_sw", "Net shortwave", "#DD8452"),
     ("f_res", "Subsurface / storage", "#BBBBBB"),
 )
+
+
+# ---------------------------------------------------------------------------
+# The two turbulent terms, as partial derivatives with respect to DLR
+# ---------------------------------------------------------------------------
+# These are the quantities the whole module is for, so they get their own
+# function rather than living as negated entries of the partition. The
+# direction matters and is fixed here once: the FLUX is regressed ON the
+# radiation,
+#
+#     d(SHF)/d(DLR) = cov(SHF, DLR) / var(DLR)
+#
+# not the reverse and not the reciprocal of the reverse. Regressing DLR on SHF
+# and inverting would inflate the answer by 1/r^2, which at the sea-ice
+# r^2 = 0.025 is a factor of forty. See FIT_ORIENTS.
+#
+# SIGN. Everything is in ERA5's positive-downward convention, so a POSITIVE
+# d(SHF)/d(DLR) means more DLR is accompanied by more heat flowing INTO the
+# surface -- the turbulent term adding to the radiative warming rather than
+# opposing it. A negative value is the damping the naive argument expects.
+TURBULENT_TERMS: tuple[tuple[str, str, str, str], ...] = (
+    ("dshf_dlwd", "shf_W_m2", "Sensible", "#4C72B0"),
+    ("dlhf_dlwd", "lhf_W_m2", "Latent", "#55A868"),
+)
+
+
+# ---------------------------------------------------------------------------
+# WHAT MAY BE CONTROLLED FOR, AND WHAT MUST NOT BE
+# ---------------------------------------------------------------------------
+# A control variable is not a free improvement. Adding the wrong one biases the
+# answer as surely as omitting the right one, and which is which follows from
+# the causal structure, not from whether the fit looks better.
+#
+# The bulk formulae name the structure:
+#
+#     SH_up ~ rho c_p C_H U (T_skin - T_2m)
+#     LH_up ~ rho L_v C_E U (q_sat(T_skin) - q_2m)
+#
+# and the pathway under test is
+#
+#     DLR ---> T_skin ---> (T_skin - T_2m) ---> SHF
+#
+# THE RULE. Control for a variable that influences y through a path that does
+# NOT run through x, and that is correlated with x. Three kinds must be left
+# alone:
+#
+#   MEDIATORS -- anything on the path x -> ... -> y. Controlling one removes
+#     the very effect being estimated. T_skin and (T_skin - T_2m) are pure
+#     mediators for d(SHF)/d(DLR): hold the skin temperature fixed and DLR by
+#     construction can no longer do anything.
+#
+#   COLLIDERS -- anything caused by BOTH x and y. Controlling one manufactures
+#     an association that is not there.
+#
+#   CAUSES OF x ALONE -- harmless but useless. They remove variance in x
+#     without removing bias. THIS ANSWERS THE OBVIOUS QUESTION ABOUT CLOUDS:
+#     liquid water path and cloud opacity are causes of DLR, and in polar night
+#     they reach the turbulent fluxes only THROUGH DLR, so controlling for them
+#     strips out exactly the variance the regression is using and buys nothing.
+#     Do not control for the drivers of the predictor.
+#
+# WHAT IS LEFT, AND WHY EACH QUALIFIES:
+#
+#   WIND SPEED. Multiplies the exchange coefficient, so it drives both fluxes
+#     directly, and it is correlated with DLR because Arctic storms are both
+#     cloudy and windy. Not on the DLR -> T_skin -> flux path. A clean
+#     confounder, and the least controversial control here.
+#
+#   2 m AIR TEMPERATURE. Enters SHF directly through the skin-to-air
+#     difference, and warm advection raises both it and DLR -- so it is a
+#     confounder. But it is ALSO a mediator, because DLR warms the skin which
+#     warms the air. Controlling it therefore removes real signal along with
+#     the spurious part, which is why this module reports the controlled and
+#     uncontrolled slopes as a bracket rather than picking one.
+#
+#   2 m HUMIDITY, for the latent flux. Enters LHF directly through the
+#     humidity difference, and water vapour is itself a strong longwave
+#     emitter, so it raises DLR too. The confounding is stronger here than the
+#     temperature case because the path from humidity to DLR is direct
+#     radiative physics rather than advection. Same mediator caveat applies.
+#
+#   SURFACE PRESSURE, as a circulation proxy. Bertrand et al. (2025) test
+#     whether synoptic variability explains their result by stratifying on
+#     daily surface pressure anomaly; carrying it as a control is the
+#     regression form of the same check.
+#
+# HOW TO READ THE LADDER FIGURE. Adding a control that matters MOVES the slope.
+# A slope that barely moves as controls are added is evidence that the
+# confounder in question was not doing much -- which is a result, not a
+# non-result, and is the same logic Bertrand et al. use when they conclude that
+# circulation variability cannot explain their trend.
+ControlStep = tuple[str, tuple[str, ...]]
+
+CONTROL_LADDERS: dict[str, dict] = {
+    "shf_lwp": {
+        "y": "shf_W_m2", "x": "lwp_g_m2",
+        "title": r"(a)  $d\mathrm{SHF}/d\mathrm{LWP}$",
+        "units": "W m$^{-2}$ per g m$^{-2}$",
+        "steps": [
+            ("no control", ()),
+            ("+ wind", ("wspd_m_s",)),
+            ("+ wind, $T_{2m}$", ("wspd_m_s", "t2m_K")),
+        ],
+    },
+    "shf_dlr": {
+        "y": "shf_W_m2", "x": "lwd_W_m2",
+        "title": r"(b)  $d\mathrm{SHF}/d\mathrm{DLR}$",
+        "units": "W m$^{-2}$ per W m$^{-2}$",
+        "steps": [
+            ("no control", ()),
+            ("+ wind", ("wspd_m_s",)),
+            ("+ wind, $T_{2m}$", ("wspd_m_s", "t2m_K")),
+            ("+ wind, $T_{2m}$, $p_s$", ("wspd_m_s", "t2m_K", "sp_hPa")),
+        ],
+    },
+    "shf_dskt": {
+        "y": "shf_W_m2", "x": "dskt_t2m_K",
+        "title": r"(c)  $\rho c_p C_H U = d\mathrm{SHF}/d\Delta T$",
+        "units": "W m$^{-2}$ K$^{-1}$",
+        "steps": [
+            ("no control", ()),
+            ("+ wind", ("wspd_m_s",)),
+            ("+ wind, $p_s$", ("wspd_m_s", "sp_hPa")),
+        ],
+    },
+    "lhf_dlr": {
+        "y": "lhf_W_m2", "x": "lwd_W_m2",
+        "title": r"(d)  $d\mathrm{LHF}/d\mathrm{DLR}$",
+        "units": "W m$^{-2}$ per W m$^{-2}$",
+        "steps": [
+            ("no control", ()),
+            ("+ wind", ("wspd_m_s",)),
+            ("+ wind, $q_{2m}$", ("wspd_m_s", "q2m_g_kg")),
+            ("+ wind, $q_{2m}$, $T_{2m}$",
+             ("wspd_m_s", "q2m_g_kg", "t2m_K")),
+        ],
+    },
+}
+
+
+def turbulent_response(acc: dict, slot: int,
+                       control: tuple[str, ...] = ()) -> dict:
+    """d(SHF)/d(DLR), d(LHF)/d(DLR) and their sum, for one group.
+
+    All three in W m-2 per W m-2 of downwelling longwave, ERA5's
+    positive-downward convention throughout. ``r2_shf`` and ``r2_lhf`` are the
+    ZERO-ORDER coefficients of determination of each flux against DLR alone --
+    they describe the scatter a reader sees on the corresponding panel, and are
+    unchanged by ``control``, which alters the slope but not that panel.
+
+    ``dturb_dlwd`` is the total turbulent response, and it is the sum of the
+    two by construction: the regression operator is linear, so regressing
+    (SHF + LHF) on DLR and adding the two separate slopes give the same number.
+    """
+    out = {"n_hours": float(acc["n"][slot]) * HOURS_PER_STEP,
+           "control": control}
+    for key, var, _, _ in TURBULENT_TERMS:
+        out[key] = slope_of(acc, slot, var, control=control)
+        st = moment_stats(acc, slot, "lwd_W_m2", var)
+        out[f"r2_{var.split('_')[0]}"] = st["r2"]
+    out["dturb_dlwd"] = out["dshf_dlwd"] + out["dlhf_dlwd"]
+    return out
 
 
 def partition(acc: dict, slot: int,
@@ -648,7 +1299,9 @@ def partition(acc: dict, slot: int,
 # ----------------------------------------------------------------------------
 def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
             panels: dict, dlr_edges: np.ndarray,
-            siconc_edges: np.ndarray, phase_kw: dict) -> dict:
+            siconc_edges: np.ndarray, phase_kw: dict,
+            cloud_t: tuple | None = None,
+            use_step: np.ndarray | None = None) -> dict:
     """Accumulate every moment and histogram this module needs, in one pass.
 
     The archive open is the expensive step -- minutes -- and everything below
@@ -661,9 +1314,8 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
     dos, s_idx, in_window = layout["dos"], layout["s_idx"], layout["in_window"]
     uniq_seasons = layout["seasons"]
 
-    wanted = np.zeros(len(uniq_seasons), dtype=bool)
-    wanted[wanted_idx] = True
-    use_step = in_window & (s_idx >= 0) & wanted[np.clip(s_idx, 0, None)]
+    if use_step is None:
+        use_step = steps_in_seasons(layout, wanted_idx)
 
     site_mask, site_lat, site_lon = site_cell_mask(ds)
     weights_2d = area_weights_2d(ds["latitude"].values, ds.sizes["longitude"])
@@ -681,10 +1333,32 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
     # cells only. One group axis, no class axis -- siconc IS the class here,
     # resolved continuously instead of cut into three.
     ice_mom = {p: new_moments(n_ice) for p in POPULATIONS}
+    # Stratified by LWP regime AND surface class: the matched comparison. Full
+    # moments per cell, so the bar chart gets a mean, the whisker gets a
+    # standard deviation, and any within-bin regression is available later
+    # without another pass. Flattened as slot * n_regime + regime.
+    n_regime = len(LWP_REGIME_LABELS)
+    regime_mom = {p: new_moments(N_SLOT * n_regime) for p in POPULATIONS}
+    # Per-block moments for the bootstrap, cloud population only: the intervals
+    # are wanted on the filtered figures, and carrying both populations would
+    # double a bookkeeping cost for nothing.
+    blk_of, n_block = block_index(ds, use_step, args.bootstrap_block_days)
+    block_mom = new_moments(n_block * N_SLOT)
 
     hist = {name: np.zeros((N_SLOT, p.x_bins, p.y_bins))
             for name, p in panels.items()}
     hist_out = {name: np.zeros(N_SLOT) for name in panels}   # off-range weight
+    # Weighted SUM of the colour field per bin, and the weight that went with
+    # it. Kept separate from `hist` because a colour field may be undefined
+    # (no liquid, so no cloud temperature) where the bin still holds samples,
+    # and the colour must then be the mean over the defined ones only.
+    colour_panels = {name: p.color_key for name, p in panels.items()
+                     if p.color_key}
+    hist_cs = {name: np.zeros((N_SLOT, p.x_bins, p.y_bins))
+               for name, p in panels.items() if p.color_key}
+    hist_cw = {name: np.zeros((N_SLOT, p.x_bins, p.y_bins))
+               for name, p in panels.items() if p.color_key}
+    row_of, tcld_all = cloud_t if cloud_t is not None else (None, None)
 
     n_unclassified = 0
     n_valid = 0.0
@@ -715,6 +1389,14 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
         site_class_counts[-1] += int((classes[:, site_mask] == UNCLASSIFIED).sum())
 
         fields = derived_fields(block, keep)
+        extra: dict[str, np.ndarray] = {}
+        if row_of is not None:
+            rows = row_of[i0:i0 + n_t][keep]
+            got = rows >= 0
+            tc = np.full(tcc_shape_placeholder(block, keep), np.nan)
+            if got.any():
+                tc[got] = tcld_all[rows[got]]
+            extra["tcld_C"] = tc
         tcc = block["tcc"].values[keep]
         siconc_k = siconc[keep]
 
@@ -754,12 +1436,34 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
         ice_flat = siconc_k.ravel()
         is_sea = np.isfinite(ice_flat)
 
+        reg_flat = regime_of(fields["lwp_g_m2"].ravel(), args.lwp_regime_edges)
+
         for pop, pmask in pop_masks.items():
-            groups = [(CLASS_CODES[name], pmask & (cls_flat == CLASS_CODES[name]))
-                      for name in CLASS_ORDER]
-            groups.append((SITE_SLOT, pmask & site_flat))
-            groups.append((ALL_SLOT, pmask))
+            slot_of = [(CLASS_CODES[name], cls_flat == CLASS_CODES[name])
+                       for name in CLASS_ORDER]
+            slot_of.append((SITE_SLOT, site_flat))
+            slot_of.append((ALL_SLOT, np.ones(cls_flat.shape, dtype=bool)))
+
+            groups = [(slot, pmask & m) for slot, m in slot_of]
             accumulate_moments(mom[pop], groups, values, w_flat)
+
+            reg_groups = [(slot * n_regime + r, pmask & m & (reg_flat == r))
+                          for slot, m in slot_of for r in range(n_regime)]
+            accumulate_moments(regime_mom[pop], reg_groups, values, w_flat)
+
+            if pop == "cloud":
+                # Only the blocks this streaming chunk actually touches, so the
+                # loop stays a handful of groups rather than all n_block.
+                bi = np.broadcast_to(blk_of[i0:i0 + n_t][keep][:, None, None],
+                                     classes.shape).ravel()
+                for b in np.unique(bi[pmask]):
+                    if b < 0:
+                        continue
+                    inb = pmask & (bi == b)
+                    accumulate_moments(
+                        block_mom,
+                        [(int(b) * N_SLOT + slot, inb & m) for slot, m in slot_of],
+                        values, w_flat)
 
             # The MIZ transect. np.digitize returns 0 below the first edge and
             # n_ice+1 above the last, so shifting by one and masking the ends
@@ -814,6 +1518,20 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
                         flat, weights=ws2[inside],
                         minlength=p.x_bins * p.y_bins,
                     ).reshape(p.x_bins, p.y_bins)
+                    ck = colour_panels.get(name)
+                    if ck and ck in extra:
+                        cv = extra[ck].ravel()[m2][inside]
+                        fin = np.isfinite(cv)
+                        if fin.any():
+                            fl, wf = flat[fin], ws2[inside][fin]
+                            hist_cs[name][slot] += np.bincount(
+                                fl, weights=wf * cv[fin],
+                                minlength=p.x_bins * p.y_bins,
+                            ).reshape(p.x_bins, p.y_bins)
+                            hist_cw[name][slot] += np.bincount(
+                                fl, weights=wf,
+                                minlength=p.x_bins * p.y_bins,
+                            ).reshape(p.x_bins, p.y_bins)
 
     # Curve means, with the centring added back. Bins holding too little are
     # NaN so the figure draws a gap instead of a spike.
@@ -825,8 +1543,17 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
     return {
         "mom": mom,
         "ice_mom": ice_mom,
+        "regime_mom": regime_mom,
+        "block_mom": block_mom,
+        "n_block": n_block,
+        "block_days": int(args.bootstrap_block_days),
+        "regime_edges": tuple(args.lwp_regime_edges),
+        "n_regime": n_regime,
         "hist": hist,
         "hist_out": hist_out,
+        "hist_colour_sum": hist_cs,
+        "hist_colour_weight": hist_cw,
+        "has_cloud_t": row_of is not None,
         "curve_mean": curve_mean,
         "curve_n": curve_n,
         "curve_w": curve_w,
@@ -917,6 +1644,43 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "annotated either way. Both moment sets are "
                              "accumulated, so this can be changed on an "
                              "existing Analysis without reloading.")
+    parser.add_argument("--bootstrap-block-days", type=int,
+                        default=DEFAULT_BOOTSTRAP_BLOCK_DAYS, metavar="D",
+                        help="Length of the contiguous time blocks the "
+                             "confidence intervals resample (default "
+                             f"{DEFAULT_BOOTSTRAP_BLOCK_DAYS}). Must exceed "
+                             "the decorrelation time, ~3 days here; see the "
+                             "note above block_index.")
+    parser.add_argument("--bootstrap-samples", type=int,
+                        default=DEFAULT_BOOTSTRAP_SAMPLES, metavar="N",
+                        help=f"Bootstrap replicates (default "
+                             f"{DEFAULT_BOOTSTRAP_SAMPLES}).")
+    parser.add_argument("--with-cloud-temperature", action="store_true",
+                        help="Also read the pressure-level archive and compute "
+                             "the liquid-weighted mean cloud temperature, "
+                             "which colours the LWP-against-DLR figure. OFF by "
+                             "default: it is a second pass over a second "
+                             "archive and only one figure uses it.")
+    parser.add_argument("--lwp-regime-edges", type=float, nargs=2,
+                        default=LWP_REGIME_EDGES_G, metavar=("G1", "G2"),
+                        help="The two LWP thresholds, g m-2, splitting low / "
+                             "medium / high for the stratified bar chart "
+                             f"(default {LWP_REGIME_EDGES_G[0]:g} "
+                             f"{LWP_REGIME_EDGES_G[1]:g}). Chosen where the "
+                             "longwave emissivity changes, not from the data -- "
+                             "see LWP_REGIME_EDGES_G.")
+    parser.add_argument("--fit-orient",
+                        choices=("panel",) + FIT_ORIENTS,
+                        default=DEFAULT_FIT_ORIENT,
+                        help="Which of the two least-squares fits the scatter "
+                             "figures draw and annotate. 'panel' (default) "
+                             "uses the direction each panel declares as "
+                             "physically meaningful -- descriptive y-on-x for "
+                             "LWP, flux-as-response x-on-y for DLR and for "
+                             "T_skin-T_2m. 'both' draws both, which makes the "
+                             "1/r^2 gap between them visible. The two are "
+                             "DIFFERENT ESTIMATORS: inverting the wrong one "
+                             "overstates the answer by 1/r^2. See FIT_ORIENTS.")
     parser.add_argument("--control", choices=tuple(CONTROL_SETS),
                         default=DEFAULT_CONTROL,
                         help="Confounders held fixed when the DLR "
@@ -953,6 +1717,14 @@ class Analysis(SimpleNamespace):
     def ice_acc(self, population: str | None = None) -> dict:
         """The sea-ice-concentration-binned moment accumulator."""
         return self.sec["ice_mom"][population or self.args.population]
+
+    def regime_acc(self, population: str | None = None) -> dict:
+        """Moments stratified by (surface class, LWP regime).
+
+        Index a group with ``slot * A.sec["n_regime"] + regime``, or use
+        :func:`regime_slot`.
+        """
+        return self.sec["regime_mom"][population or self.args.population]
 
     def control(self, control: str | None = None) -> tuple[str, ...]:
         """The tracked variables held fixed by the sensitivity regressions."""
@@ -1025,8 +1797,46 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
     keep_idx, used, mode_label = select_seasons(layout, args)
     print(f"\n  Reading {len(used)} season(s): {used}")
 
+    use_step = steps_in_seasons(layout, keep_idx)
+    cloud_t = None
+    if args.with_cloud_temperature:
+        if "sp" not in ds.data_vars:
+            raise KeyError("cloud temperature needs 'sp' in the single-level "
+                           "archive to clip levels at the ground")
+        cloud_t = cloud_temperature_field(ds, args, use_step)
+        # RESTRICT THE WHOLE ANALYSIS to the hours the pressure archive covers.
+        # The alternative -- keep every hour and colour only some of them --
+        # would put the fit, the density and the colour on three different
+        # populations of the same panel, which is precisely the kind of
+        # mismatch a comparison figure must not have. The pressure archive is
+        # not continuous, so this can drop whole seasons; which ones survive is
+        # printed below rather than left to be discovered.
+        row_of, tcld = cloud_t
+        have = np.flatnonzero(use_step)
+        # A row exists for every wanted step; a step the pressure archive did
+        # not supply leaves its row entirely NaN. That, not the row index, is
+        # the test for "covered".
+        supplied = np.isfinite(tcld).any(axis=(1, 2))
+        matched = np.zeros_like(use_step)
+        matched[have] = supplied[row_of[have]]
+        if not matched.any():
+            raise ValueError(
+                "the pressure-level archive covers none of the requested "
+                "seasons, so there is no cloud temperature to colour with. "
+                "Choose seasons it covers, or drop with_cloud_temperature.")
+        use_step = use_step & matched
+        surviving = sorted({int(layout["seasons"][i])
+                            for i in np.unique(layout["s_idx"][use_step])})
+        dropped = [y for y in used if y not in surviving]
+        used = surviving
+        keep_idx = [layout["seasons"].index(y) for y in used]
+        print(f"  Cloud temp : restricted to seasons {used}"
+              + (f"; dropped {dropped} (no pressure-level data)"
+                 if dropped else ""))
+
     sec = collect(ds, lsm, args, layout, keep_idx, panels,
-                  DEFAULT_DLR_CURVE_EDGES, DEFAULT_SICONC_EDGES, phase_kw)
+                  DEFAULT_DLR_CURVE_EDGES, DEFAULT_SICONC_EDGES, phase_kw,
+                  cloud_t=cloud_t, use_step=use_step)
     if sec["n_unclassified"]:
         print(f"  !! {sec['n_unclassified']:,} unclassified cell-times; run "
               f"surface_classification.py for the breakdown.", file=sys.stderr)
@@ -1040,7 +1850,8 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
 # ----------------------------------------------------------------------------
 # Numeric report
 # ----------------------------------------------------------------------------
-def print_report(A: Analysis, population: str | None = None) -> None:
+def print_report(A: Analysis, population: str | None = None,
+                 bootstrap_ci: bool = True) -> None:
     """Sample sizes, the two scatter fits, and the DLR partition per class.
 
     The numbers the figures draw, in a form that can be pasted into a note. The
@@ -1071,27 +1882,182 @@ def print_report(A: Analysis, population: str | None = None) -> None:
     # happens to be drawing hides how little the choice matters here.
     fmode = A.args.fit_mode
     for x_key, y_key, title in (
-        ("shf_W_m2", "lwp_g_m2", "LWP  vs  sensible heat flux"),
-        ("shf_W_m2", "lwd_W_m2", "DLR  vs  sensible heat flux"),
-        ("shf_W_m2", "dskt_t2m_K", "T_skin - T_2m  vs  sensible heat flux"),
+        ("lwp_g_m2", "shf_W_m2", "sensible heat flux  vs  LWP"),
+        ("lwd_W_m2", "shf_W_m2", "sensible heat flux  vs  DLR"),
+        ("lwd_W_m2", "lhf_W_m2", "latent heat flux  vs  DLR"),
+        ("dskt_t2m_K", "shf_W_m2", "sensible heat flux  vs  T_skin - T_2m"),
     ):
+        xt = TRACKED[VAR_INDEX[x_key]]
         yt = TRACKED[VAR_INDEX[y_key]]
-        print(f"\n  {title}   (OLS fit of y on x: y = a + b x)")
-        print(f"    {'':<20} {'':>12} {'':>9} {'':>9} "
-              f"{'--- cos(lat) weighted ---':>26}  {'---- unweighted ----':>22}")
-        print(f"    {'class':<20} {'hours':>12} {'x_mean':>9} {'y_mean':>9} "
-              f"{'slope':>11} {'r2':>6} {'r':>7}  {'slope':>11} {'r2':>6}")
+        x_u, y_u = plain_units(xt.units), plain_units(yt.units)
+        # BOTH DIRECTIONS, ALWAYS, with the inverted slope printed beside the
+        # correct one. The inverted column is not there to be used -- it is
+        # there so the size of the error sits on the page next to the number it
+        # would replace. See FIT_ORIENTS.
+        print(f"\n  {title}")
+        print(f"    {'':<20} {'':>12}{'-- dy/dx: y on x --':>21}"
+              f"{'-- dx/dy: x on y --':>21}{'1/(dy/dx)':>12}")
+        print(f"    {'class':<20} {'hours':>12}{'slope':>12}{'r2':>9}"
+              f"{'slope':>13}{'infl':>8}{'  (NOT dx/dy)':>12}")
         for slot in PANEL_SLOTS + (ALL_SLOT,):
-            sw = moment_stats(acc, slot, x_key, y_key, weighted=True)
-            su = moment_stats(acc, slot, x_key, y_key, weighted=False)
+            f = fit_pair(acc, slot, x_key, y_key, weighted=True)
+            yx, xy = f["y_on_x"], f["x_on_y"]
+            naive = (1.0 / yx["slope"] if np.isfinite(yx["slope"])
+                     and yx["slope"] != 0.0 else np.nan)
             print(f"    {SLOT_LABELS[SLOT_ORDER[slot]]:<20} "
-                  f"{sw['n_hours']:>12,.0f} {sw['x_mean']:>9.2f} "
-                  f"{sw['y_mean']:>9.2f} {sw['slope']:>11.4f} "
-                  f"{sw['r2']:>6.3f} {sw['r']:>7.3f}  "
-                  f"{su['slope']:>11.4f} {su['r2']:>6.3f}")
-        print(f"      slope units: {plain_units(yt.units)} per W m-2 | "
-              f"figures draw --fit-mode {fmode} "
-              f"({'weighted' if FIT_IS_WEIGHTED[fmode] else 'unweighted'})")
+                  f"{yx['n_hours']:>12,.0f}{yx['slope']:>12.4f}"
+                  f"{f['r2']:>9.3f}{xy['slope']:>13.4f}"
+                  f"{f['inflation']:>7.1f}x{naive:>12.2f}")
+        print(f"      dy/dx in {y_u} per {x_u}  |  dx/dy in {x_u} per {y_u}  |  "
+              f"the last column overstates dx/dy by 1/r2")
+        print(f"      figures draw --fit-mode {fmode} "
+              f"({'weighted' if FIT_IS_WEIGHTED[fmode] else 'unweighted'}), "
+              f"--fit-orient {A.args.fit_orient}")
+
+    # The matched comparison, in numbers. The pooled LWP regression above
+    # returns r2 ~ 0.03; these rows are what that number is averaging over.
+    n_reg = A.sec["n_regime"]
+    racc = A.regime_acc(pop)
+    print("\n  Mean sensible heat flux by LWP regime and surface class "
+          "[W m-2, + into the surface]")
+    edges = A.sec["regime_edges"]
+    floor = lowest_drawn_lwp(A.phase_kw)
+    heads = [f"{lab} ({a:g}-{b})" for lab, a, b in zip(
+        LWP_REGIME_LABELS, [floor] + list(edges),
+        [f"{e:g}" for e in edges] + ["inf"])]
+    print(f"    {'class':<20}" + "".join(f"{h:>20}" for h in heads)
+          + f"{'high - low':>13}")
+    for slot in PANEL_SLOTS + (ALL_SLOT,):
+        row = f"    {SLOT_LABELS[SLOT_ORDER[slot]]:<20}"
+        vals = []
+        for r in range(n_reg):
+            g = regime_slot(A, slot, r)
+            v = mean_of(racc, g, "shf_W_m2")
+            vals.append(v)
+            n = racc["n"][g]
+            row += (f"{v:>11.1f}"
+                    + (f"{n / 1e6:>7.1f}M" if n >= 1e6
+                       else f"{n / 1e3:>7.0f}k" if n >= 1e3
+                       else f"{n:>8.0f}"))
+        row += f"{vals[-1] - vals[0]:>13.1f}"
+        print(row)
+    print("    each cell is the mean and the cell-hours behind it; the last "
+          "column is the change across regimes,")
+    print("    which is the conditional cloud effect at fixed surface type.")
+
+    # THE HEADLINE ESTIMATE: both turbulent terms regressed ON DLR.
+    for cname in dict.fromkeys(("none", A.args.control)):
+        ctrl = CONTROL_SETS[cname]
+        print(f"\n  Turbulent flux response to DLR   [W m-2 per W m-2, ERA5 "
+              f"positive downward]   ({CONTROL_LABELS[cname]})")
+        print(f"    {'class':<20}{'dSHF/dDLR':>11}{'r2':>8}"
+              f"{'dLHF/dDLR':>11}{'r2':>8}{'sum':>11}{'hours':>14}")
+        for slot in PANEL_SLOTS + (ALL_SLOT,):
+            r = turbulent_response(acc, slot, control=ctrl)
+            print(f"    {SLOT_LABELS[SLOT_ORDER[slot]]:<20}"
+                  f"{r['dshf_dlwd']:>11.4f}{r['r2_shf']:>8.3f}"
+                  f"{r['dlhf_dlwd']:>11.4f}{r['r2_lhf']:>8.3f}"
+                  f"{r['dturb_dlwd']:>11.4f}{r['n_hours']:>14,.0f}")
+        print("    POSITIVE means more DLR goes with more heat INTO the "
+              "surface: the turbulent term")
+        print("    ADDS to the radiative warming. Negative is the damping the "
+              "bulk argument expects.")
+        print("    r2 is the zero-order fit of that flux against DLR alone, so "
+              "it does not change with the control.")
+
+    if bootstrap_ci:
+        try:
+            bs = bootstrap_turbulent_response(A)
+        except ValueError as exc:
+            print(f"\n  No bootstrap intervals: {exc}")
+        else:
+            nb, nboot = (bs["dshf_dlwd"][ALL_SLOT]["n_block"],
+                         bs["dshf_dlwd"][ALL_SLOT]["n_boot"])
+            print(f"\n  95% confidence intervals, moving-block bootstrap "
+                  f"({nb} blocks of {A.sec['block_days']} days, "
+                  f"{nboot:,} replicates)")
+            print(f"    {'class':<20}{'dSHF/dDLR 95% CI':>28}"
+                  f"{'dLHF/dDLR 95% CI':>28}{'naive SE':>10}{'boot SE':>10}"
+                  f"{'infl':>7}")
+            for slot in PANEL_SLOTS + (ALL_SLOT,):
+                a_, b_ = bs["dshf_dlwd"][slot], bs["dlhf_dlwd"][slot]
+                ns = naive_se(acc, slot, "lwd_W_m2", "shf_W_m2")
+                infl = a_["se"] / ns if ns and np.isfinite(ns) else np.nan
+                star = "" if (a_["lo"] > 0) == (a_["hi"] > 0) else "  spans 0"
+                print(f"    {SLOT_LABELS[SLOT_ORDER[slot]]:<20}"
+                      f"{a_['value']:>9.4f} [{a_['lo']:+.4f},{a_['hi']:+.4f}]"
+                      f"{b_['value']:>10.4f} [{b_['lo']:+.4f},{b_['hi']:+.4f}]"
+                      f"{ns:>10.5f}{a_['se']:>10.5f}{infl:>6.0f}x{star}")
+            print("    'naive SE' is the textbook OLS formula. It assumes "
+                  "independent cell-hours, which these")
+            print("    are not: DLR has a lag-1 hourly autocorrelation of 0.99 "
+                  "and stays correlated across the")
+            print("    whole domain, so the record holds tens of independent "
+                  "weather systems, not millions of")
+            print("    independent samples. The inflation factor is the price "
+                  "of that assumption.")
+
+    # SPECIFICATION CHECK: the bulk formulae are multiplicative in wind speed,
+    # so U*Delta is the predictor the physics names. If ERA5's fluxes really
+    # are bulk fluxes, that predictor should fit far better than Delta alone --
+    # and the gap is a measure of how much of the "unexplained scatter" was
+    # only ever wind speed.
+    print("\n  Specification check: does the physically correct predictor fit "
+          "better?")
+    print(f"    {'class':<20}{'SHF~dT':>9}{'SHF~U.dT':>11}"
+          f"{'LHF~dq':>10}{'LHF~U.dq':>11}   [r2]")
+    for slot in PANEL_SLOTS + (ALL_SLOT,):
+        a = moment_stats(acc, slot, "dskt_t2m_K", "shf_W_m2")["r2"]
+        b = moment_stats(acc, slot, "u_dskt_K_m_s", "shf_W_m2")["r2"]
+        c = moment_stats(acc, slot, "dq_g_kg", "lhf_W_m2")["r2"]
+        d = moment_stats(acc, slot, "u_dq_g_kg_m_s", "lhf_W_m2")["r2"]
+        print(f"    {SLOT_LABELS[SLOT_ORDER[slot]]:<20}{a:>9.3f}{b:>11.3f}"
+              f"{c:>10.3f}{d:>11.3f}")
+    print("    U.dT and U.dq are the bulk predictors: SH ~ rho c_p C_H U dT, "
+          "LH ~ rho L_v C_E U dq.")
+    print("    Where the second column is much larger than the first, the "
+          "missing variance was wind speed,")
+    print("    not missing physics -- and the slope on U.dT is rho*c_p*C_H "
+          "with no wind left in the units.")
+
+    print("\n  Control ladder: how far each slope moves when a confounder is "
+          "held fixed")
+    for name, cfg in CONTROL_LADDERS.items():
+        print(f"    {cfg['title'].replace('$', '').replace(chr(92), ''):<44}"
+              + "".join(f"{lab:>22}" for lab, _ in cfg["steps"]))
+        for slot in PANEL_SLOTS:
+            row = f"      {SLOT_LABELS[SLOT_ORDER[slot]]:<42}"
+            for _, ctrl in cfg["steps"]:
+                row += f"{partial_slope(acc, slot, cfg['y'], cfg['x'], ctrl):>22.4f}"
+            print(row)
+    print("    A slope that barely moves means that confounder was not doing "
+          "much. T_2m and q_2m are")
+    print("    MEDIATORS as well as confounders, so their rungs bound the "
+          "answer from below.")
+
+    # The bulk coupling coefficient, which is the one number from these
+    # scatters that has a physical name and an independent value to check
+    # against. Printed both ways so the 1/r^2 error is on the page beside the
+    # number it would replace, rather than left for a reader to rediscover.
+    print("\n  Bulk coupling coefficient  rho*c_p*C_H*U = "
+          "-d(SHF)/d(T_skin - T_2m)   [W m-2 K-1]")
+    print(f"    {'class':<20} {'correct':>10} {'from 1/slope':>14} "
+          f"{'inflation':>11} {'r2':>8}")
+    for slot in PANEL_SLOTS + (ALL_SLOT,):
+        f = fit_pair(acc, slot, "dskt_t2m_K", "shf_W_m2", weighted=True)
+        good = -f["y_on_x"]["slope"]
+        bad = (-1.0 / f["x_on_y"]["slope"]
+               if np.isfinite(f["x_on_y"]["slope"]) and f["x_on_y"]["slope"]
+               else np.nan)
+        print(f"    {SLOT_LABELS[SLOT_ORDER[slot]]:<20} {good:>10.1f} "
+              f"{bad:>14.1f} {f['inflation']:>10.1f}x {f['r2']:>8.3f}")
+    print("    'correct' regresses SHF on dT -- the panel's own y-on-x fit; "
+          "'from 1/slope' inverts the")
+    print("    dT-on-SHF fit instead and is wrong by 1/r2.")
+    print("    rho*c_p ~ 1300 J m-3 K-1, so 10 W m-2 K-1 is C_H*U ~ 0.008 m s-1 "
+          "-- e.g. C_H = 1.3e-3 at U = 6 m s-1,")
+    print("    a stable Arctic boundary layer. The inverted column is uniform "
+          "across surfaces; the correct one is not.")
 
     # Both estimators, always. They bracket the causal answer from opposite
     # sides and the gap between them is the size of the air-mass confound --
@@ -1146,6 +2112,11 @@ SEAWATER_FREEZING_K = 271.35
 # readable axis limits, never to hide a bar.
 PARTITION_SANE_MAX = 2.5
 
+# Above this magnitude d(flux)/d(DLR) is no longer a surface response: more
+# energy is moving than the radiation delivered, which happens where the
+# surface is pinned and the regression is tracking the air mass instead.
+TURBULENT_SANE_MAX = 0.6
+
 # Floor of the shared density colour scale, as a fraction of the densest bin in
 # a panel. Three decades: below that a bin holds a handful of cell-hours and is
 # tail, not structure.
@@ -1188,8 +2159,14 @@ FIT_LINE_LABELS: dict[str, str] = {
     "default": "weighted linear fit",
     "regression": "linear regression (unweighted)",
 }
+ORIENT_LABELS: dict[str, str] = {
+    "y_on_x": "regression of y on x",
+    "x_on_y": "regression of x on y",
+}
 
-NOTE_BOX = dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.82,
+# Opaque, not translucent: a fit line seen THROUGH the box changes colour
+# where it passes behind, which reads as two different lines.
+NOTE_BOX = dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.95,
                 edgecolor="#999999", linewidth=0.6)
 
 
@@ -1217,7 +2194,8 @@ NOTE_FS = 8.2
 
 
 def _header_block(fig, title: str, subtitle: str, note: str | None = None,
-                  title_fs: float = TITLE_FS) -> float:
+                  title_fs: float = TITLE_FS,
+                  axes_title_pts: float = 0.0) -> float:
     """Lay the title / subtitle / caveat block above the panels.
 
     Returns the figure-height fraction the panels may occupy, for
@@ -1250,6 +2228,10 @@ def _header_block(fig, title: str, subtitle: str, note: str | None = None,
         fig.text(0.5, y, note, ha="center", va="top", fontsize=NOTE_FS,
                  color="#8a5a00", style="italic")
         y -= note_h
+    # An axes title is drawn ABOVE the axes rectangle, so subplots_adjust(top=)
+    # does not reserve space for it and the caller has to say how tall it is.
+    # tight_layout() accounts for titles itself, so those callers pass nothing.
+    y -= axes_title_pts * 1.9 / 72.0 / fig_h
     return max(y - 0.12 / fig_h, 0.55)
 
 
@@ -1275,10 +2257,56 @@ def _binned_mean_y(h: np.ndarray, panel: Panel2D) -> tuple[np.ndarray, np.ndarra
     return xc, ymean
 
 
-def _density_panel(ax, h: np.ndarray, panel: Panel2D, stats: dict,
+ORIENT_LINE_STYLE: dict[str, dict] = {
+    # y-on-x keeps the established look; x-on-y is drawn in a different colour
+    # so a figure showing both cannot be misread as one line with a kink.
+    "y_on_x": dict(color="#B2182B", lw=1.8, ls="--"),
+    "x_on_y": dict(color="#000000", lw=1.6, ls="-"),
+}
+
+
+def _fit_line_xy(stats: dict, orient: str, panel: Panel2D,
+                 x_span: tuple[float, float], y_span: tuple[float, float]):
+    """Endpoints of one fitted line, in plot coordinates.
+
+    For ``y_on_x`` the fit is y = a + b x and is swept over the occupied x
+    span. For ``x_on_y`` the fit is x = a + b y -- a regression whose PREDICTOR
+    is the vertical axis -- so it is swept over the occupied y span and the
+    result is still drawn on the same axes. Sweeping x for an x-on-y fit and
+    inverting the slope is exactly the mistake the whole orientation option
+    exists to prevent.
+    """
+    if not np.isfinite(stats["slope"]):
+        return None
+    if orient == "y_on_x":
+        xs = np.array(x_span)
+        return xs, stats["intercept"] + stats["slope"] * xs
+    ys = np.array(y_span)
+    return stats["intercept"] + stats["slope"] * ys, ys
+
+
+def _slope_text(stats: dict, orient: str, panel: Panel2D) -> str:
+    """The annotated slope, with the units of the direction actually fitted."""
+    x_u = plain_units(TRACKED[VAR_INDEX[panel.x_key]].units)
+    y_u = plain_units(TRACKED[VAR_INDEX[panel.y_key]].units)
+    if orient == "y_on_x":
+        # The equation form, which is how a scatter of this kind is normally
+        # reported and what a published figure will state for comparison.
+        return (f"y = {stats['slope']:.3g}x + {stats['intercept']:.2f}"
+                f"   [{y_u} per {x_u}]")
+    return f"dx/dy = {stats['slope']:+.3g} {x_u} / ({y_u})"
+
+
+def _density_panel(ax, h: np.ndarray, panel: Panel2D, fits: dict,
                    label: str, color: str, out_weight: float,
                    fit_mode: str = DEFAULT_FIT_MODE,
-                   marker_size: float = 3.0):
+                   fit_orient: str = "y_on_x",
+                   marker_size: float = 3.0,
+                   colour: np.ndarray | None = None,
+                   colour_norm: tuple[float, float] | None = None,
+                   colour_cmap: str = "viridis",
+                   note_loc: str = "upper left",
+                   overlay_lines=None, extra_note=None):
     """One density-coloured scatter panel with its weighted linear fit.
 
     Colour is the area-weighted frequency of each bin, normalised to the
@@ -1303,9 +2331,27 @@ def _density_panel(ax, h: np.ndarray, panel: Panel2D, stats: dict,
         xi, yi = np.nonzero(occupied)
         frac = np.clip(h[xi, yi] / h.max(), DENSITY_VMIN, 1.0)
         order = np.argsort(frac)             # densest markers drawn on top
-        sm = ax.scatter(xc[xi][order], yc[yi][order], c=frac[order],
-                        s=marker_size, cmap=DENSITY_CMAP, linewidths=0,
-                        norm=norm)
+        if colour is None:
+            sm = ax.scatter(xc[xi][order], yc[yi][order], c=frac[order],
+                            s=marker_size, cmap=DENSITY_CMAP, linewidths=0,
+                            norm=norm)
+        else:
+            # Colour carries a THIRD variable's mean per bin, and density moves
+            # to opacity. Keeping density visible matters: a bin holding two
+            # cell-hours and one holding twenty thousand would otherwise be the
+            # same solid dot, and the eye would read the sparse tail as
+            # structure.
+            from matplotlib.colors import Normalize
+            cv = colour[xi, yi][order]
+            good = np.isfinite(cv)
+            lo, hi = colour_norm if colour_norm else (np.nanmin(cv),
+                                                      np.nanmax(cv))
+            alpha = 0.12 + 0.88 * (np.log10(frac[order]) - np.log10(DENSITY_VMIN)) \
+                / (-np.log10(DENSITY_VMIN))
+            sm = ax.scatter(xc[xi][order][good], yc[yi][order][good],
+                            c=cv[good], s=marker_size, cmap=colour_cmap,
+                            linewidths=0, norm=Normalize(vmin=lo, vmax=hi),
+                            alpha=np.clip(alpha[good], 0.08, 1.0))
 
         if fit_mode == "default":
             xb, ymean = _binned_mean_y(h, panel)
@@ -1314,39 +2360,68 @@ def _density_panel(ax, h: np.ndarray, panel: Panel2D, stats: dict,
             ax.plot(xb, ymean, color="#222222", lw=1.1, zorder=5,
                     label="mean y per x bin")
 
-    if np.isfinite(stats["slope"]):
-        # Drawn only across the x range the data actually occupy. Extending a
-        # fit line over an axis the class never visits -- Utqiagvik spans about
-        # 30 W m-2 of an axis 310 wide -- makes a slope fitted to a sliver look
-        # like a claim about the whole panel.
-        if occupied.any():
-            lo, hi = xc[xi.min()], xc[xi.max()]
-        else:
-            lo, hi = panel.x_range
-        xs = np.array([lo, hi])
-        ys = stats["intercept"] + stats["slope"] * xs
-        if fit_mode == "regression":
+    # Fits are swept only across the range the data actually occupy. Extending
+    # a line over an axis the class never visits -- Utqiagvik spans about
+    # 30 W m-2 of an axis 310 wide -- makes a slope fitted to a sliver look like
+    # a claim about the whole panel.
+    if occupied.any():
+        x_span = (xc[xi.min()], xc[xi.max()])
+        y_span = (yc[yi.min()], yc[yi.max()])
+    else:
+        x_span, y_span = panel.x_range, panel.y_range
+
+    drawn = ["y_on_x", "x_on_y"] if fit_orient == "both" else [fit_orient]
+    for orient in drawn:
+        line = _fit_line_xy(fits[orient], orient, panel, x_span, y_span)
+        if line is None:
+            continue
+        lx, ly = line
+        style = dict(ORIENT_LINE_STYLE[orient])
+        if fit_mode == "regression" and fit_orient != "both":
             # Thin, solid, black, and alone: the conventional rendering, and
             # with the binned mean removed there is nothing else on the panel
             # for it to be confused with.
-            ax.plot(xs, ys, color=REGRESSION_COLOR, lw=1.2, ls="-", zorder=6,
-                    label=FIT_LINE_LABELS[fit_mode])
-        else:
-            ax.plot(xs, ys, color=FIT_COLOR, lw=1.8, ls="--", zorder=6,
-                    label=FIT_LINE_LABELS[fit_mode])
+            style = dict(color=REGRESSION_COLOR, lw=1.2, ls="-")
+        ax.plot(lx, ly, zorder=6, label=ORIENT_LABELS[orient], **style)
+
+    # Extra lines the caller wants in the panel's own coordinates -- e.g. a
+    # multiple-regression prediction evaluated at several values of a control,
+    # which is what "holding wind fixed" looks like on a two-dimensional plot.
+    for lx, ly, kw in (overlay_lines or []):
+        ax.plot(lx, ly, zorder=7, **kw)
 
     ax.set_xlim(*panel.x_range)
     ax.set_ylim(*panel.y_range)
     ax.axvline(0.0, color="#444444", lw=0.7, ls=":", zorder=1)
-    ax.set_title(label, fontsize=10.5, color=color, fontweight="bold", pad=4)
+    ax.set_title(label, fontsize=10.5, color=color, fontweight="bold", pad=18)
 
-    y_units = plain_units(TRACKED[VAR_INDEX[panel.y_key]].units)
-    note = (f"slope = {stats['slope']:+.3g} {y_units} / (W m-2)\n"
-            f"$r^2$ = {stats['r2']:.3f}   (r = {stats['r']:+.3f})\n"
-            f"{stats['n_hours']:,.0f} cell-hours")
+    # Sample-size context (cell-hours, fraction outside the axes) lives in a
+    # subtitle rather than the fit box below -- it describes the PANEL, not
+    # the fit, and crowds the corner annotation otherwise.
+    ref = fits[drawn[0]]
+    sub_bits = [f"{ref['n_hours']:,.0f} cell-hours"]
     if out_weight > 0.005:
-        note += f"\n{100 * out_weight:.1f}% outside axes"
-    ax.text(0.03, 0.965, note, transform=ax.transAxes, va="top", ha="left",
+        sub_bits.append(f"{100 * out_weight:.1f}% outside axes")
+    ax.annotate("  |  ".join(sub_bits), xy=(0.5, 1.0), xycoords="axes fraction",
+                xytext=(0, 4), textcoords="offset points",
+                ha="center", va="bottom", fontsize=7.2, color="#555555")
+
+    # r^2 is symmetric, so it is annotated once no matter how many fits are
+    # drawn. In "both" mode the inflation factor is spelled out, because that
+    # number IS the reason the two lines differ.
+    lines = [_slope_text(fits[o], o, panel) for o in drawn]
+    lines.append(f"$r^2$ = {fits['r2']:.3f}   (r = {ref['r']:+.3f})")
+    lines.extend(extra_note or [])
+    if fit_orient == "both" and np.isfinite(fits["inflation"]):
+        lines.append(f"inverting dy/dx overstates dx/dy "
+                     f"{fits['inflation']:.1f}$\\times$")
+    note = "\n".join(lines)
+    note_xy, note_va, note_ha = {
+        "upper left": ((0.03, 0.965), "top", "left"),
+        "lower right": ((0.97, 0.035), "bottom", "right"),
+        "lower left": ((0.03, 0.035), "bottom", "left"),
+    }[note_loc]
+    ax.text(*note_xy, note, transform=ax.transAxes, va=note_va, ha=note_ha,
             fontsize=7.4, bbox=NOTE_BOX, zorder=7)
     ax.grid(alpha=0.18, lw=0.5)
     return sm
@@ -1386,7 +2461,10 @@ def _figure_subtitle(A: Analysis, pop: str) -> str:
 def _scatter_figure(A: Analysis, panel_name: str, title: str, stem: str,
                     out_dir=None, dpi: int | None = None,
                     population: str | None = None,
-                    fit_mode: str | None = None):
+                    fit_mode: str | None = None,
+                    fit_orient: str | None = None,
+                    note_loc: str | None = None,
+                    show_legend: bool = True):
     """Six-panel density scatter of one y against sensible heat flux.
 
     Panels are the five surface classes then the ARM site cell. The site is not
@@ -1409,8 +2487,34 @@ def _scatter_figure(A: Analysis, panel_name: str, title: str, stem: str,
     weighted = FIT_IS_WEIGHTED[fmode]
     acc = A.acc("cloud")
     panel = A.sec["panels"][panel_name]
+    # "panel" defers to the direction the panel declares as physically
+    # meaningful; anything else overrides it for every panel in the figure.
+    orient = fit_orient or A.args.fit_orient
+    if orient == "panel":
+        orient = panel.fit_orient
+    if orient not in FIT_ORIENTS:
+        raise ValueError(f"unknown fit_orient {orient!r}; choose from "
+                         f"{list(FIT_ORIENTS) + ['panel']}")
     h_all = A.sec["hist"][panel_name]
     n_r, n_c = A.args.layout
+
+    # Colour by a third variable's per-bin mean, when the panel asks for one
+    # and the run actually computed it.
+    colour_all = colour_norm = None
+    if panel.color_key and panel_name in A.sec.get("hist_colour_sum", {}):
+        cs = A.sec["hist_colour_sum"][panel_name]
+        cw = A.sec["hist_colour_weight"][panel_name]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            colour_all = np.where(cw > 0, cs / np.where(cw > 0, cw, 1.0), np.nan)
+        if np.isfinite(colour_all).any():
+            # ONE norm across every panel: the colour is a physical quantity,
+            # not a within-panel rank, so a per-panel scale would make the same
+            # colour mean different temperatures in different panels.
+            lo = float(np.nanpercentile(colour_all, 0.5))
+            hi = float(np.nanpercentile(colour_all, 99.5))
+            colour_norm = (np.floor(lo / 5) * 5, np.ceil(hi / 5) * 5)
+        else:
+            colour_all = None
 
     fig, axes = plt.subplots(n_r, n_c, figsize=(4.1 * n_c, 3.6 * n_r),
                              sharex=True, sharey=True)
@@ -1418,14 +2522,22 @@ def _scatter_figure(A: Analysis, panel_name: str, title: str, stem: str,
     sm = None
     for ax, slot in zip(axes, PANEL_SLOTS):
         name = SLOT_ORDER[slot]
-        stats = moment_stats(acc, slot, panel.x_key, panel.y_key,
-                             weighted=weighted)
+        fits = fit_pair(acc, slot, panel.x_key, panel.y_key, weighted=weighted)
         w_tot = acc["w"][slot]
         out_frac = (A.sec["hist_out"][panel_name][slot] / w_tot
                     if w_tot > 0 else 0.0)
-        s = _density_panel(ax, h_all[slot], panel, stats,
+        ov_lines, ov_note = (overlay(A, acc, slot, panel)
+                             if overlay is not None else ([], []))
+        s = _density_panel(ax, h_all[slot], panel, fits,
                            SLOT_LABELS[name], SLOT_COLORS[name], out_frac,
-                           fit_mode=fmode)
+                           fit_mode=fmode, fit_orient=orient,
+                           colour=None if colour_all is None
+                           else colour_all[slot],
+                           colour_norm=colour_norm,
+                           note_loc=(note_loc or
+                                     ("lower right" if panel_name == "lwp_dlr"
+                                      else "upper left")),
+                           overlay_lines=ov_lines, extra_note=ov_note)
         sm = s if s is not None else sm
     for ax in axes[len(PANEL_SLOTS):]:
         ax.set_visible(False)
@@ -1442,27 +2554,42 @@ def _scatter_figure(A: Analysis, panel_name: str, title: str, stem: str,
     # layout that leaves a hole would otherwise strand an unlabelled x axis.
     axes[len(PANEL_SLOTS) - 1].set_xlabel(x_label)
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels, loc="lower center", ncol=2, frameon=False,
-                   fontsize=9, bbox_to_anchor=(0.5, -0.035))
+    if show_legend:
+        handles, labels = axes[0].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="lower right", ncol=2, frameon=False,
+                       fontsize=9, bbox_to_anchor=(0.5, -0.035))
 
+    what = {
+        "y_on_x": "y on x (descriptive)",
+        "x_on_y": "x on y - the flux as the response",
+        "both": "both directions; they differ by 1/$r^2$ and answer "
+                "different questions",
+    }[orient]
     subtitle = (_figure_subtitle(A, pop)
-                + f"\nfit: {FIT_LINE_LABELS[fmode]} of y on x, ordinary least "
-                  f"squares on the full unbinned sample")
+                + f"\nfit: {FIT_LINE_LABELS[fmode]}, {what}")
     # Header first, so the colourbar below sizes itself against the panel
-    # rectangle the block actually leaves.
-    fig.subplots_adjust(top=_header_block(fig, title, subtitle))
+    # rectangle the block actually leaves. axes_title_pts is 18, not the 10.5pt
+    # panel title font, because each panel title now sits above a cell-hours
+    # subtitle line (see _density_panel) and needs the taller reserved band.
+    fig.subplots_adjust(top=_header_block(fig, title, subtitle,
+                                          axes_title_pts=18.0))
     if sm is not None:
         cb = fig.colorbar(sm, ax=axes[:len(PANEL_SLOTS)].tolist(),
                           fraction=0.022, pad=0.015)
-        cb.set_label("area-weighted frequency,\nrelative to the densest bin "
-                     "in the panel", fontsize=8.5)
-    return _save(fig, A, f"{stem}_{fmode}", out_dir, dpi)
+        if colour_all is None:
+            cb.set_label("area-weighted frequency,\nrelative to the densest "
+                         "bin in the panel", fontsize=8.5)
+        else:
+            lab, unit = EXTRA_FIELDS[panel.color_key]
+            cb.set_label(f"{lab} ({unit})\n"
+                         f"opacity $\\propto$ log(frequency)", fontsize=8.5)
+    return _save(fig, A, f"{stem}{stem_suffix}_{fmode}_{orient}",
+                 out_dir, dpi)
 
 
 def fig_shf_vs_lwp(A: Analysis, out_dir=None, dpi: int | None = None,
-                 fit_mode: str | None = None):
+                 fit_mode: str | None = None, fit_orient: str | None = None):
     """Liquid water path against sensible heat flux, by surface class.
 
     The first of the two the request asks for. Read it as a joint distribution,
@@ -1472,13 +2599,14 @@ def fig_shf_vs_lwp(A: Analysis, out_dir=None, dpi: int | None = None,
     is good for is the SIGN and the contrast between classes.
     """
     return _scatter_figure(
-        A, "shf_lwp",
-        "Liquid water path against surface sensible heat flux",
-        "shf_vs_lwp", out_dir, dpi, fit_mode=fit_mode)
+        A, "lwp_shf",
+        "Surface sensible heat flux against liquid water path",
+        "shf_vs_lwp", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower right", show_legend=False)
 
 
 def fig_shf_vs_dlr(A: Analysis, out_dir=None, dpi: int | None = None,
-                 fit_mode: str | None = None):
+                 fit_mode: str | None = None, fit_orient: str | None = None):
     """Downwelling longwave against sensible heat flux, by surface class.
 
     The same population as ``fig_shf_vs_lwp`` with the intermediate variable
@@ -1487,13 +2615,14 @@ def fig_shf_vs_dlr(A: Analysis, out_dir=None, dpi: int | None = None,
     correspondingly tighter.
     """
     return _scatter_figure(
-        A, "shf_dlr",
-        "Downwelling longwave against surface sensible heat flux",
-        "shf_vs_dlr", out_dir, dpi, fit_mode=fit_mode)
+        A, "dlr_shf",
+        "Surface sensible heat flux against downwelling longwave",
+        "shf_vs_dlr", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower right", show_legend=False)
 
 
 def fig_shf_vs_dskt(A: Analysis, out_dir=None, dpi: int | None = None,
-                 fit_mode: str | None = None):
+                 fit_mode: str | None = None, fit_orient: str | None = None):
     """(T_skin - T_2m) against sensible heat flux: the bulk relation itself.
 
     Not requested, but it is the premise the other two figures rest on, and it
@@ -1503,9 +2632,11 @@ def fig_shf_vs_dskt(A: Analysis, out_dir=None, dpi: int | None = None,
     and stability dependence that the LWP and DLR panels inherit.
     """
     return _scatter_figure(
-        A, "shf_dskt",
-        r"Skin-to-air temperature difference against sensible heat flux",
-        "shf_vs_dskt", out_dir, dpi, fit_mode=fit_mode)
+        A, "dskt_shf",
+        "Surface sensible heat flux against the skin-to-air temperature "
+        "difference",
+        "shf_vs_dskt", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower left", show_legend=False)
 
 
 # ----------------------------------------------------------------------------
@@ -1851,12 +2982,597 @@ def fig_miz_transect(A: Analysis, out_dir=None, dpi: int | None = None,
     return _save(fig, A, f"miz_transect_{pop}_{cname}", out_dir, dpi)
 
 
+def fig_lhf_vs_dlr(A: Analysis, out_dir=None, dpi: int | None = None,
+                   fit_mode: str | None = None, fit_orient: str | None = None):
+    """Downwelling longwave against LATENT heat flux, by surface class.
+
+    The companion to ``fig_shf_vs_dlr``. Fitted x on y, so the annotated slope
+    is d(LHF)/d(DLR) directly -- the second of the two turbulent terms, and the
+    one the sensible-heat argument leaves out. Over open water the latent term
+    is the larger of the two in the mean, so a turbulent-flux budget that
+    stops at sensible heat is incomplete there.
+    """
+    return _scatter_figure(
+        A, "dlr_lhf",
+        "Surface latent heat flux against downwelling longwave",
+        "lhf_vs_dlr", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower right", show_legend=False)
+
+
+def fig_turbulent_response(A: Analysis, out_dir=None, dpi: int | None = None,
+                           population: str | None = None,
+                           control: str | None = None,
+                           bootstrap_ci: bool = True,
+                           n_boot: int | None = None):
+    """d(SHF)/d(DLR) and d(LHF)/d(DLR) by surface type, side by side.
+
+    The headline estimate, with both turbulent terms shown together because
+    they are the two halves of one flux and can have opposite signs. Bars are
+    the flux regressed ON the radiation; the r^2 printed under each pair is the
+    zero-order fit of that flux against DLR, so a reader can see immediately
+    how much scatter the slope was drawn through.
+
+    Open water is drawn but its bars run off the scale, for the reason
+    ``fig_response_partition`` gives: the surface is pinned near freezing, the
+    air is not, and the regression there is describing the air mass rather than
+    a surface response. Rescaling the panel to fit it would compress the other
+    five classes into a flat line.
+    """
+    import matplotlib.pyplot as plt
+
+    pop = population or A.args.population
+    cname = control or A.args.control
+    ctrl = CONTROL_SETS[cname]
+    acc = A.acc(pop)
+    slots = list(PANEL_SLOTS)
+    names = [SLOT_ORDER[s] for s in slots]
+    resp = [turbulent_response(acc, s, control=ctrl) for s in slots]
+    x = np.arange(len(slots))
+    bw = 0.34
+
+    bs = None
+    if bootstrap_ci:
+        try:
+            bs = bootstrap_turbulent_response(A, n_boot=n_boot,
+                                              control=cname)
+        except ValueError:
+            bs = None            # too few blocks; the bars stand on their own
+
+    fig, ax = plt.subplots(figsize=(12.4, 6.4))
+    for i, (key, var, label, colour) in enumerate(TURBULENT_TERMS):
+        vals = np.array([r[key] for r in resp])
+        pos = x + (i - 0.5) * bw
+        ax.bar(pos, vals, bw, color=colour, edgecolor="#333333", linewidth=0.6,
+               label=f"{label} heat flux", zorder=3)
+        if bs is not None:
+            # Asymmetric by construction: these are PERCENTILES of the
+            # bootstrap distribution, not value +/- k*sigma, so a skewed
+            # sampling distribution shows as an off-centre bar.
+            lo = np.array([bs[key][sl]["lo"] for sl in slots])
+            hi = np.array([bs[key][sl]["hi"] for sl in slots])
+            ax.errorbar(pos, vals,
+                        yerr=np.vstack([vals - lo, hi - vals]),
+                        fmt="none", ecolor="#222222", elinewidth=1.1,
+                        capsize=3.0, zorder=6)
+        for xi, v in zip(pos, vals):
+            ax.annotate(f"{v:+.3f}", (xi, v), textcoords="offset points",
+                        xytext=(0, -11 if v < 0 else 4), ha="center",
+                        fontsize=7.4, zorder=5)
+    total = np.array([r["dturb_dlwd"] for r in resp])
+    ax.scatter(x, total, marker="_", s=520, color="#B2182B", linewidth=2.2,
+               zorder=6, label="sum: d(SH+LH)/d(DLR)")
+
+    # Scale to the classes where the estimator is a surface response, and mark
+    # the ones that run past it rather than dropping or rescaling for them.
+    stack = np.concatenate([[r[k] for k, _, _, _ in TURBULENT_TERMS]
+                            for r in resp] + [total[:, None].ravel()])
+    if bs is not None:
+        stack = np.concatenate([stack] + [
+            [bs[k][sl][e] for sl in slots]
+            for k, _, _, _ in TURBULENT_TERMS for e in ("lo", "hi")])
+    sane = np.abs(stack) <= TURBULENT_SANE_MAX
+    if sane.any():
+        m = float(np.nanmax(np.abs(stack[sane])))
+        ax.set_ylim(-1.55 * m, 1.55 * m)
+    lo, hi = ax.get_ylim()
+    for j, r in enumerate(resp):
+        if max(abs(r["dshf_dlwd"]), abs(r["dlhf_dlwd"])) > TURBULENT_SANE_MAX:
+            # The values still have to be readable: a bar that runs past the
+            # axis with no number on it is worse than no bar.
+            ax.annotate(f"off scale\nSH {r['dshf_dlwd']:+.2f}   "
+                        f"LH {r['dlhf_dlwd']:+.2f}\n"
+                        f"surface pinned:\nthis is the air mass",
+                        (x[j], 0.55 * hi), ha="center", va="center",
+                        fontsize=7.4, color="#8a5a00", fontweight="bold",
+                        bbox=NOTE_BOX, zorder=7)
+
+    ax.axhline(0.0, color="#333333", lw=1.0, zorder=2)
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        [SLOT_LABELS[n].replace(" (", "\n(").replace(" zone", "\nzone")
+         .replace("Utqiagvik ", "Utqiagvik\n") for n in names], fontsize=9)
+    ax.set_ylabel("d(flux) / d(DLR)   [W m$^{-2}$ per W m$^{-2}$]")
+    ax.grid(axis="y", alpha=0.2, lw=0.5, zorder=0)
+    ax.legend(fontsize=9, ncol=3, frameon=False, loc="upper center",
+              bbox_to_anchor=(0.5, -0.14))
+
+    for j, r in enumerate(resp):
+        ax.annotate(f"$r^2$ {r['r2_shf']:.3f} / {r['r2_lhf']:.3f}",
+                    (x[j], lo), textcoords="offset points", xytext=(0, 6),
+                    ha="center", fontsize=7.2, color="#666666")
+
+    top = _header_block(
+        fig, "Turbulent flux response to downwelling longwave, by surface type",
+        _figure_subtitle(A, pop),
+        note=(f"each flux REGRESSED ON DLR ({CONTROL_LABELS[cname]}); "
+              "positive = more DLR accompanies more heat INTO the surface. "
+              + (f"whiskers are 95% moving-block bootstrap intervals "
+                 f"({A.sec['n_block']} blocks of {A.sec['block_days']} days) - "
+                 f"a bar whose whisker crosses zero is not distinguishable "
+                 f"from no response"
+                 if bs is not None else
+                 "r^2 under each pair is sensible / latent against DLR alone")),
+        title_fs=14,
+    )
+    fig.tight_layout(rect=(0, 0.02, 1, top))
+    return _save(fig, A, f"turbulent_response_{pop}_{cname}", out_dir, dpi)
+
+
+def fig_control_ladder(A: Analysis, out_dir=None, dpi: int | None = None,
+                       population: str | None = None,
+                       bootstrap_ci: bool = True, n_boot: int | None = None,
+                       ladders: dict | None = None):
+    """How each slope moves as confounders are added to the regression.
+
+    Four panels, one per regression, each showing every surface class under a
+    ladder of control sets. This is the figure that turns "what should I
+    control for" from an argument into a measurement: a slope that barely moves
+    as a control is added is evidence that the confounder was not doing much,
+    and one that moves a lot is evidence that it was.
+
+    Read it with the note above CONTROL_LADDERS in hand. In particular the
+    2 m temperature and humidity controls are mediators as well as confounders,
+    so the last rung of a ladder is a LOWER bound on the response rather than a
+    better estimate of it -- the bracket, not the answer.
+    """
+    import matplotlib.pyplot as plt
+
+    pop = population or A.args.population
+    acc = A.acc(pop)
+    lad = ladders or CONTROL_LADDERS
+    slots = list(PANEL_SLOTS)
+    x = np.arange(len(slots))
+
+    fig, axes = plt.subplots(2, 2, figsize=(14.0, 9.4))
+    for ax, (name, cfg) in zip(axes.ravel(), lad.items()):
+        steps = cfg["steps"]
+        bw = 0.82 / len(steps)
+        shades = plt.get_cmap("cividis")(np.linspace(0.15, 0.85, len(steps)))
+        vals = np.full((len(steps), len(slots)), np.nan)
+        for si, (label, ctrl) in enumerate(steps):
+            for j, slot in enumerate(slots):
+                vals[si, j] = partial_slope(acc, slot, cfg["y"], cfg["x"], ctrl)
+            pos = x - 0.41 + bw * (si + 0.5)
+            ax.bar(pos, vals[si], bw, color=shades[si], edgecolor="#333333",
+                   linewidth=0.5, label=label, zorder=3)
+            if bootstrap_ci:
+                try:
+                    bs = bootstrap(
+                        A, lambda a, sl, c=ctrl, cf=cfg: partial_slope(
+                            a, sl, cf["y"], cf["x"], c),
+                        n_boot=n_boot or 500, slots=slots)
+                except ValueError:
+                    bootstrap_ci = False
+                else:
+                    lo = np.array([bs[sl]["lo"] for sl in slots])
+                    hi = np.array([bs[sl]["hi"] for sl in slots])
+                    ax.errorbar(pos, vals[si],
+                                yerr=np.vstack([np.maximum(vals[si] - lo, 0),
+                                                np.maximum(hi - vals[si], 0)]),
+                                fmt="none", ecolor="#333333", elinewidth=0.8,
+                                capsize=1.6, alpha=0.8, zorder=5)
+
+        # Scale to the classes where the estimator is a surface response. Open
+        # water runs off every one of these panels for the reason given in
+        # fig_response_partition, and rescaling for it flattens the rest.
+        finite = vals[np.isfinite(vals)]
+        med = np.median(np.abs(finite)) if finite.size else 1.0
+        keep = np.abs(finite) <= max(8.0 * med, 1e-6)
+        if keep.any():
+            m = float(np.max(np.abs(finite[keep])))
+            ax.set_ylim(-1.5 * m, 1.5 * m)
+        lo_a, hi_a = ax.get_ylim()
+        for j in range(len(slots)):
+            if np.any(np.abs(vals[:, j]) > hi_a):
+                ax.annotate("off\nscale", (x[j], 0.72 * hi_a), ha="center",
+                            va="center", fontsize=7, color="#8a5a00",
+                            fontweight="bold", bbox=NOTE_BOX, zorder=7)
+
+        ax.axhline(0.0, color="#333333", lw=0.9, zorder=2)
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [SLOT_LABELS[SLOT_ORDER[sl]].replace(" (", "\n(")
+             .replace(" zone", "\nzone").replace("Utqiagvik ", "Utqiagvik\n")
+             for sl in slots], fontsize=7.6)
+        ax.set_ylabel(cfg["units"], fontsize=9)
+        ax.set_title(cfg["title"], fontsize=11, loc="left", fontweight="bold")
+        ax.grid(axis="y", alpha=0.2, lw=0.5, zorder=0)
+        ax.legend(fontsize=7.4, frameon=False, ncol=2, loc="upper left")
+
+    top = _header_block(
+        fig, "Does controlling for a confounder move the answer?",
+        _figure_subtitle(A, pop),
+        note=("bars are the slope with the named variables held fixed; "
+              "whiskers are 95% block-bootstrap intervals. A slope that does "
+              "not move as a control is added is evidence that confounder was "
+              "not doing much. $T_{2m}$ and $q_{2m}$ are MEDIATORS as well as "
+              "confounders, so their rungs are a lower bound, not a better "
+              "estimate - see CONTROL_LADDERS"),
+        title_fs=14,
+    )
+    fig.tight_layout(rect=(0, 0, 1, top))
+    return _save(fig, A, f"control_ladder_{pop}", out_dir, dpi)
+
+
+def fig_dlr_vs_lwp(A: Analysis, out_dir=None, dpi: int | None = None,
+                   fit_mode: str | None = None, fit_orient: str | None = None):
+    """Downwelling longwave against liquid water path -- the ERA5 counterpart
+    to the ARM observational figure from Barrow.
+
+    Axes, colour and fit direction follow that figure so the two can be read
+    side by side: LWP 0-350 g m-2, DLR 100-350 W m-2, coloured by mean cloud
+    temperature, and DLR fitted on LWP so the reported equation is in the same
+    sense as the published y = 0.27x + 228.26.
+
+    READ THE COLOUR, NOT ONLY THE SLOPE. The scatter fans out at low LWP into a
+    near-vertical spread of more than 100 W m-2, and that spread is almost
+    entirely temperature: a thin cloud at -35 C and a thin cloud at -5 C sit at
+    the same x and 100 W m-2 apart in y. The LWP-DLR correlation is therefore
+    part opacity -- more liquid, higher emissivity, more DLR -- and part
+    covariance, because warm Arctic air masses are also the moist ones that
+    carry more liquid. A single r^2 does not separate those, which is what
+    makes the colour worth the second pass over the pressure archive.
+
+    Requires ``prepare(with_cloud_temperature=True)`` for the colour; without
+    it the panels fall back to density shading and everything else is unchanged.
+    """
+    return _scatter_figure(
+        A, "lwp_dlr",
+        "Downwelling longwave against liquid water path",
+        "dlr_vs_lwp", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient)
+
+
+# ----------------------------------------------------------------------------
+# Figure 6: the matched comparison
+# ----------------------------------------------------------------------------
+def regime_slot(A: Analysis, slot: int, regime: int) -> int:
+    """Flat group index into the regime-stratified accumulator."""
+    return slot * A.sec["n_regime"] + regime
+
+
+def fig_shf_by_lwp_regime(A: Analysis, out_dir=None, dpi: int | None = None,
+                          population: str | None = None,
+                          value_key: str = "shf_W_m2"):
+    """Mean sensible heat flux by LWP regime and surface class.
+
+    WHY THIS FIGURE EXISTS. A weak correlation across a heterogeneous
+    population can hide a strong conditional relationship. The scatter figures
+    pool every surface and every cloud thickness together and return
+    r^2 = 0.001-0.06 on LWP; that number is a statement about the pooled
+    population, not about the physics inside it. Stratifying by LWP regime AND
+    by surface class holds the two dominant confounders roughly fixed within
+    each bar, so a difference BETWEEN bars in the same regime is a difference
+    between surfaces at comparable cloud forcing, and a difference ACROSS
+    regimes within one surface is a cloud effect at fixed surface. That is a
+    matched comparison, and it is a better estimator of the thing in question
+    than a regression slope through the pooled cloud.
+
+    SAMPLE SIZE IS ENCODED TWICE, deliberately. The classes differ in sample
+    size by more than a hundredfold -- tens of thousands of cell-hours over
+    land against millions over sea ice -- and a grouped bar chart that hides
+    that invites the obvious objection. Bar WIDTH is proportional to
+    log10(cell-hours), which makes the disparity visible at a glance, and the
+    count is PRINTED on every bar, which makes it exact. The width encoding is
+    logarithmic and is labelled as such: at a linear encoding the land bars
+    would be invisible.
+
+    The whisker is +/- one standard deviation WITHIN the bin, not a standard
+    error. With millions of cell-hours the standard error is a fraction of a
+    W m-2 and would draw a line thinner than the bar edge, which would imply a
+    precision the matching does not have; the spread is what tells you whether
+    two bars are really different.
+    """
+    import matplotlib.pyplot as plt
+
+    pop = population or A.args.population
+    acc = A.regime_acc(pop)
+    n_reg = A.sec["n_regime"]
+    slots = list(PANEL_SLOTS)
+    names = [SLOT_ORDER[s] for s in slots]
+    v = TRACKED[VAR_INDEX[value_key]]
+
+    means = np.full((n_reg, len(slots)), np.nan)
+    sds = np.zeros((n_reg, len(slots)))
+    hours = np.zeros((n_reg, len(slots)))
+    for j, slot in enumerate(slots):
+        for r in range(n_reg):
+            g = regime_slot(A, slot, r)
+            if acc["w"][g] <= 0:
+                continue
+            means[r, j] = mean_of(acc, g, value_key)
+            st = moment_stats(acc, g, value_key, value_key)
+            sds[r, j] = st["x_sd"]
+            hours[r, j] = acc["n"][g] * HOURS_PER_STEP
+
+    # Bar width from log10(cell-hours), floored so an empty-ish bin is still a
+    # visible sliver rather than nothing at all.
+    with np.errstate(divide="ignore"):
+        lg = np.where(hours > 0, np.log10(np.maximum(hours, 1.0)), np.nan)
+    lo, hi = np.nanmin(lg), np.nanmax(lg)
+    span = hi - lo if hi > lo else 1.0
+    frac = np.clip((lg - lo) / span, 0.0, 1.0)
+    slot_w = 0.86 / len(slots)
+    widths = slot_w * (0.30 + 0.70 * np.nan_to_num(frac))
+
+    fig, ax = plt.subplots(figsize=(13.0, 6.6))
+    x = np.arange(n_reg)
+    for j, (slot, name) in enumerate(zip(slots, names)):
+        centre = x - 0.43 + slot_w * (j + 0.5)
+        ax.bar(centre, means[:, j], widths[:, j], color=SLOT_COLORS[name],
+               edgecolor="#333333", linewidth=0.6, label=SLOT_LABELS[name],
+               zorder=3)
+        ax.errorbar(centre, means[:, j], yerr=sds[:, j], fmt="none",
+                    ecolor="#555555", elinewidth=0.7, capsize=1.8, alpha=0.45,
+                    zorder=4)
+        # The count goes at the BAR's own tip, not the whisker's. Chasing the
+        # whisker end scatters the labels over the whole panel and breaks the
+        # association between a number and the bar it belongs to.
+        for r in range(n_reg):
+            if not np.isfinite(means[r, j]):
+                continue
+            h = hours[r, j]
+            txt = (f"{h / 1e6:.1f}M" if h >= 1e6
+                   else f"{h / 1e3:.0f}k" if h >= 1e3 else f"{h:.0f}")
+            ax.annotate(txt, (centre[r], means[r, j]),
+                        textcoords="offset points",
+                        xytext=(0, -10 if means[r, j] < 0 else 4),
+                        ha="center", fontsize=7.0, color="#222222", zorder=6,
+                        bbox=dict(boxstyle="square,pad=0.12", facecolor="white",
+                                  edgecolor="none", alpha=0.7))
+
+    ax.axhline(0.0, color="#333333", lw=1.0, zorder=2)
+    ax.set_xticks(x)
+    ax.set_xticklabels(regime_labels(A.sec["regime_edges"],
+                                     lowest_drawn_lwp(A.phase_kw)), fontsize=9.5)
+    ax.set_ylabel(f"mean {v.label.lower()}   [{v.units}]")
+    # No x label: the tick labels already name the quantity and its units, and
+    # a third line of text there collides with the legend.
+    ax.grid(axis="y", alpha=0.2, lw=0.5, zorder=0)
+
+    ax.legend(fontsize=8.6, ncol=6, frameon=False, loc="upper center",
+              bbox_to_anchor=(0.5, -0.115))
+    # The encoding legend is a text note, not a legend entry: a blank swatch
+    # standing for "width means something" reads as a seventh surface class.
+    fig.text(0.5, 0.015,
+             "bar width $\\propto$ log$_{10}$(cell-hours)  |  printed count is "
+             "exact  |  whisker is $\\pm$1 standard deviation WITHIN the bin, "
+             "not a standard error",
+             ha="center", fontsize=8.0, color="#555555")
+
+    top = _header_block(
+        fig, "Sensible heat flux stratified by cloud regime and surface type",
+        _figure_subtitle(A, pop),
+        note=("a matched comparison: within a regime the classes see "
+              "comparable cloud forcing, so a difference between bars is a "
+              "difference between surfaces, not between cloud populations"),
+        title_fs=14,
+    )
+    fig.tight_layout(rect=(0, 0.055, 1, top))
+    return _save(fig, A, f"shf_by_lwp_regime_{pop}", out_dir, dpi)
+
+
+# ----------------------------------------------------------------------------
+# The bootstrap
+# ----------------------------------------------------------------------------
+MOMENT_KEYS: tuple[str, ...] = ("w", "n", "x", "xy", "x_u", "xy_u")
+
+
+def _acc_from_block_counts(A: Analysis, counts: np.ndarray) -> dict:
+    """Assemble a moment accumulator from a weighted selection of blocks.
+
+    ``counts[b]`` is how many times block ``b`` was drawn. Because the moments
+    are additive, a bootstrap replicate is exactly this contraction -- no
+    resampling of individual samples and no refitting from raw data. That is
+    what makes two thousand replicates cost less than a second.
+    """
+    bm, n_block = A.sec["block_mom"], A.sec["n_block"]
+    out = {}
+    for k in MOMENT_KEYS:
+        arr = bm[k].reshape((n_block, N_SLOT) + bm[k].shape[1:])
+        out[k] = np.tensordot(counts.astype(float), arr, axes=(0, 0))
+    return out
+
+
+def bootstrap(A: Analysis, stat, n_boot: int | None = None,
+              seed: int = DEFAULT_BOOTSTRAP_SEED, ci: float = 95.0,
+              slots=None) -> dict:
+    """Moving-block bootstrap confidence intervals for any moment statistic.
+
+    ``stat(acc, slot) -> float`` is evaluated on the full record and on each
+    synthetic record assembled by drawing ``n_block`` blocks with replacement.
+    Returns ``{slot: {"value", "lo", "hi", "se", "n_block"}}`` with the
+    percentile interval.
+
+    See the long note above ``block_index`` for why this is the right estimator
+    and the textbook standard error is not. In one line: the blocks, not the
+    cell-hours, are the units the record supplies independently, so they are
+    what gets resampled.
+
+    ``value`` is the point estimate from the real record, not the bootstrap
+    mean -- the interval describes the uncertainty around the estimate, it does
+    not replace it.
+    """
+    n_block = A.sec["n_block"]
+    if n_block < 8:
+        raise ValueError(
+            f"only {n_block} blocks of {A.sec['block_days']} days; a "
+            f"percentile interval from that few is not worth quoting. Load "
+            f"more seasons or shorten --bootstrap-block-days.")
+    n_boot = int(n_boot or A.args.bootstrap_samples)
+    slots = list(PANEL_SLOTS) + [ALL_SLOT] if slots is None else list(slots)
+    rng = np.random.default_rng(seed)
+
+    full = _acc_from_block_counts(A, np.ones(n_block))
+    draws = {sl: np.empty(n_boot) for sl in slots}
+    for i in range(n_boot):
+        counts = np.bincount(rng.integers(0, n_block, n_block),
+                             minlength=n_block)
+        acc = _acc_from_block_counts(A, counts)
+        for sl in slots:
+            draws[sl][i] = stat(acc, sl)
+
+    lo_q, hi_q = 50.0 - ci / 2.0, 50.0 + ci / 2.0
+    out = {}
+    for sl in slots:
+        d = draws[sl][np.isfinite(draws[sl])]
+        out[sl] = {
+            "value": stat(full, sl),
+            "lo": float(np.percentile(d, lo_q)) if d.size else np.nan,
+            "hi": float(np.percentile(d, hi_q)) if d.size else np.nan,
+            "se": float(d.std(ddof=1)) if d.size > 1 else np.nan,
+            "n_block": n_block,
+            "n_boot": n_boot,
+        }
+    return out
+
+
+def naive_se(acc: dict, slot: int, x_key: str, y_key: str) -> float:
+    """The textbook OLS standard error -- WRONG HERE, kept for comparison.
+
+    Reported beside the bootstrap interval so the size of the independence
+    assumption is visible as a number rather than as an assertion. It is too
+    small by roughly sqrt(n / n_eff), which on this domain is a factor of
+    order a hundred.
+    """
+    st = moment_stats(acc, slot, x_key, y_key, weighted=False)
+    n, r2 = st["n_hours"], st["r2"]
+    if not np.isfinite(r2) or n < 3 or st["x_sd"] <= 0:
+        return float("nan")
+    return float(st["y_sd"] / st["x_sd"] * np.sqrt(max(1.0 - r2, 0.0) / (n - 2)))
+
+
+def bootstrap_turbulent_response(A: Analysis, n_boot: int | None = None,
+                                 control: str | None = None,
+                                 seed: int = DEFAULT_BOOTSTRAP_SEED) -> dict:
+    """Bootstrap intervals for d(SHF)/d(DLR), d(LHF)/d(DLR) and their sum."""
+    ctrl = CONTROL_SETS[control or A.args.control]
+    out = {}
+    for key, var, _, _ in TURBULENT_TERMS:
+        out[key] = bootstrap(
+            A, lambda a, sl, v=var: partial_slope(a, sl, v, "lwd_W_m2", ctrl),
+            n_boot=n_boot, seed=seed)
+    out["dturb_dlwd"] = bootstrap(
+        A, lambda a, sl: (partial_slope(a, sl, "shf_W_m2", "lwd_W_m2", ctrl)
+                          + partial_slope(a, sl, "lhf_W_m2", "lwd_W_m2", ctrl)),
+        n_boot=n_boot, seed=seed)
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Self-check
+# ----------------------------------------------------------------------------
+def self_check(A: Analysis, tol: float = 1e-9, verbose: bool = True) -> bool:
+    """Assert the algebraic identities the estimates depend on.
+
+    None of these can fail for a reason that is visible in a figure, which is
+    why they are checked rather than trusted:
+
+    1. Regressing DLR on itself returns exactly 1. If it does not, the moment
+       matrix or the centring is wrong and EVERY slope is wrong with it.
+    2. d(SHF)/d(DLR) agrees across all four routes that compute it -- the
+       partial regression, the swapped-argument ``moment_stats``, the x-on-y
+       member of ``fit_pair``, and the negated partition fraction. These share
+       the accumulator but not the code path, so agreement rules out a swapped
+       argument somewhere.
+    3. The same for d(LHF)/d(DLR).
+    4. The five partition fractions sum to one.
+    5. The two turbulent terms sum to the total turbulent response.
+    6. Controlling on a variable drives its own slope to zero, which is the
+       test that the multiple regression is solving what it claims to.
+    7. The regime bins partition the pooled population exactly.
+
+    Returns True when everything holds. Raises nothing: a failure is reported
+    and returned, so a notebook cell shows it rather than aborting.
+    """
+    acc = A.acc()
+    bad: list[str] = []
+
+    def near(a, b, what):
+        if not (np.isfinite(a) and np.isfinite(b) and abs(a - b) <= tol):
+            bad.append(f"{what}: {a!r} vs {b!r}")
+
+    for slot in PANEL_SLOTS + (ALL_SLOT,):
+        nm = SLOT_LABELS[SLOT_ORDER[slot]]
+        near(partial_slope(acc, slot, "lwd_W_m2", "lwd_W_m2"), 1.0,
+             f"{nm}: d(DLR)/d(DLR)")
+        p = partition(acc, slot)
+        t = turbulent_response(acc, slot)
+        for var, key, frac in (("shf_W_m2", "dshf_dlwd", "f_sh"),
+                               ("lhf_W_m2", "dlhf_dlwd", "f_lh")):
+            direct = partial_slope(acc, slot, var, "lwd_W_m2")
+            near(direct, moment_stats(acc, slot, "lwd_W_m2", var)["slope"],
+                 f"{nm}: {var} via moment_stats")
+            near(direct, fit_pair(acc, slot, var, "lwd_W_m2")["x_on_y"]["slope"],
+                 f"{nm}: {var} via fit_pair")
+            near(direct, -p[frac], f"{nm}: {var} via partition")
+            near(direct, t[key], f"{nm}: {var} via turbulent_response")
+        near(p["f_lwu"] + p["f_sh"] + p["f_lh"] + p["f_sw"] + p["f_res"], 1.0,
+             f"{nm}: partition closure")
+        near(t["dshf_dlwd"] + t["dlhf_dlwd"], t["dturb_dlwd"],
+             f"{nm}: turbulent sum")
+
+    near(partial_slope(acc, ALL_SLOT, "t2m_K", "lwd_W_m2", ("t2m_K",)), 0.0,
+         "controlling on T2m zeroes its own slope")
+
+    racc = A.regime_acc()
+    pooled = acc["n"][ALL_SLOT]
+    binned = sum(racc["n"][regime_slot(A, ALL_SLOT, r)]
+                 for r in range(A.sec["n_regime"]))
+    near(binned, pooled, "regime bins partition the population")
+
+    # 8. Summing every block once must reproduce the pooled accumulator: the
+    #    blocks partition the record, so the bootstrap is resampling exactly
+    #    the data the point estimate was computed from.
+    full = _acc_from_block_counts(A, np.ones(A.sec["n_block"]))
+    for slot in PANEL_SLOTS + (ALL_SLOT,):
+        near(full["n"][slot], acc["n"][slot],
+             f"{SLOT_LABELS[SLOT_ORDER[slot]]}: blocks partition the record")
+        near(partial_slope(full, slot, "shf_W_m2", "lwd_W_m2"),
+             partial_slope(acc, slot, "shf_W_m2", "lwd_W_m2"),
+             f"{SLOT_LABELS[SLOT_ORDER[slot]]}: block sum reproduces the slope")
+
+    if verbose:
+        if bad:
+            print(f"SELF-CHECK FAILED ({len(bad)}):")
+            for b in bad[:20]:
+                print(f"  {b}")
+        else:
+            print(f"self-check passed: every identity holds to {tol:g} "
+                  f"across {len(PANEL_SLOTS) + 1} groups")
+    return not bad
+
+
 ALL_FIGURES = (
     fig_shf_vs_lwp,
     fig_shf_vs_dlr,
     fig_shf_vs_dskt,
     fig_response_partition,
     fig_miz_transect,
+    fig_shf_by_lwp_regime,
+    fig_lhf_vs_dlr,
+    fig_turbulent_response,
+    fig_control_ladder,
+    fig_dlr_vs_lwp,
 )
 
 

@@ -313,6 +313,89 @@ HOURS_PER_STEP = 1.0
 REQUIRED_VARS = ("tcc", "tclw", "tciw", "siconc")
 
 # ----------------------------------------------------------------------------
+# Which ERA5 field stands for "liquid"
+# ----------------------------------------------------------------------------
+# tclw  total column CLOUD liquid water -- all suspended cloud liquid, at any
+#       temperature, excluding precipitating rain and drizzle.
+# tcslw total column SUPERCOOLED liquid water -- liquid existing below 0 C.
+#
+# Physically the second ought to be a subset of the first. IN THE ARCHIVED
+# SINGLE-LEVEL FIELDS IT IS NOT: over the Barrow strip, tcslw exceeds tclw by
+# more than the 0.031 g m-2 storage quantum in 22.5% of cells in January 2023
+# and 38.5% in November 2022, by up to +361 g m-2, with a p95 ratio near 3.5.
+# Measured, not inferred. Three explanations were tested and rejected:
+#
+#   * precipitating liquid folded in -- tcrw is below the quantum in 99% of the
+#     exceeding cells, so rain cannot account for it;
+#   * a time-axis offset between the two fields -- the lag-0 correlation
+#     (r = 0.938) is higher than lag +/-1 (0.886, 0.898), so they are aligned;
+#   * ordinary quantisation -- the excess survives a full-quantum margin.
+#
+# So swapping one for the other is NOT a strict narrowing, and the difference
+# in cloud hours is a SIGNED change: some scenes lose liquid, others gain it.
+# Any figure built on this pair has to report both directions rather than
+# calling the difference a loss. The cause is a property of ERA5's own
+# diagnostics and is not resolved here.
+LIQUID_VARS: tuple[str, ...] = ("tclw", "tcslw")
+DEFAULT_LIQUID_VAR = "tclw"
+
+LIQUID_VAR_LABEL = {
+    "tclw": "cloud liquid water (tclw)",
+    "tcslw": "supercooled liquid water (tcslw)",
+}
+LIQUID_VAR_SHORT = {"tclw": "all liquid", "tcslw": "supercooled"}
+
+
+def parse_utc_hours(text) -> tuple[int, ...] | None:
+    """'7,8,9' or '7-9,19-21' -> the UTC hours to keep; None or '' means all.
+
+    Exists because tclw and tcslw are not the same kind of product: tclw is the
+    4D-Var analysis at step 0, while tcslw comes from a free-running forecast
+    initialised at 06 and 18 UTC, so its error against the analysis grows with
+    the forecast lead. Restricting to short-lead hours is the only way to
+    compare the two fields without that error dominating. See
+    compare_liquid_definitions.hours_for_lead.
+    """
+    if text is None:
+        return None
+    if isinstance(text, (list, tuple, set)):
+        vals = sorted({int(v) for v in text})
+        return tuple(vals) if vals else None
+    text = str(text).strip()
+    if not text or text.lower() == "all":
+        return None
+    out: set[int] = set()
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part.lstrip("-"):
+            a, b = part.split("-", 1)
+            lo, hi = sorted((int(a), int(b)))
+            out.update(range(lo, hi + 1))
+        else:
+            out.add(int(part))
+    bad = sorted(h for h in out if not 0 <= h <= 23)
+    if bad:
+        raise ValueError(f"--utc-hours must be 0-23; got {bad}")
+    if not out:
+        return None
+    return tuple(sorted(out))
+
+
+def utc_hour_mask(ds, args) -> np.ndarray:
+    """Per-time-step boolean: is this step's UTC hour selected?
+
+    All True when --utc-hours is unset, so callers apply it unconditionally.
+    """
+    times = np.asarray(ds["valid_time"].values)
+    hours = parse_utc_hours(getattr(args, "utc_hours", None))
+    if hours is None:
+        return np.ones(times.shape[0], dtype=bool)
+    h = times.astype("datetime64[h]").astype(np.int64) % 24
+    return np.isin(h, np.asarray(hours, dtype=np.int64))
+
+# ----------------------------------------------------------------------------
 # Precipitation filter
 # ----------------------------------------------------------------------------
 # The literature threshold for "ERA5 says it is precipitating" is 0.1 mm/hr,
@@ -1073,6 +1156,13 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
     wanted = np.zeros(len(uniq_seasons), dtype=bool)
     wanted[wanted_idx] = True
     use_step = in_window & (s_idx >= 0) & wanted[np.clip(s_idx, 0, None)]
+    # Restricting the UTC hours narrows the SAMPLE, not the window: every
+    # denominator below counts only the kept steps, so the per-season and
+    # per-month hours still read as "hours per season at this sampling rate"
+    # and stay comparable with an unrestricted run.
+    use_step = use_step & utc_hour_mask(ds, args)
+    if not use_step.any():
+        raise ValueError("--utc-hours removed every time step in the window")
 
     # The ARM site rides along as one extra slot on the class axis. It is NOT a
     # sixth class -- it is already inside whichever class it falls in -- so it
@@ -1124,7 +1214,17 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
     w_sweep_site = np.zeros((n_sweep, n_season, n_month, n_sph))
     sweep_phase_index = {p: i for i, p in enumerate(SWEEP_PHASES)}
 
-    weights_2d = area_weights_2d(ds["latitude"].values, ds.sizes["longitude"])
+    # cos(latitude) by default. The weighting decides what "a typical cell of
+    # this class" means: 'area' answers "per unit AREA of the class", 'uniform'
+    # answers "per GRID CELL of the class". They differ here because the classes
+    # are latitude-structured -- pack ice sits north, where a 0.25 deg cell is
+    # half the area of one at the southern edge -- so uniform weighting
+    # over-represents the northern part of an ice class relative to its area.
+    if getattr(args, "cell_weighting", "area") == "uniform":
+        weights_2d = np.ones((ds.sizes["latitude"], ds.sizes["longitude"]))
+    else:
+        weights_2d = area_weights_2d(ds["latitude"].values,
+                                     ds.sizes["longitude"])
     w_per_step = float(weights_2d.sum())
 
     n_unclassified = 0
@@ -1133,6 +1233,9 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
     site_class_counts = np.zeros(len(CLASS_ORDER) + 1, dtype=np.int64)
 
     read_vars = list(REQUIRED_VARS)
+    liquid_var = getattr(args, "liquid_var", DEFAULT_LIQUID_VAR)
+    if liquid_var not in read_vars:
+        read_vars.append(liquid_var)
     if args.no_precip:
         read_vars += [v for v in PRECIP_SOURCE_VARS[args.precip_var]
                       if v not in read_vars]
@@ -1159,7 +1262,10 @@ def build_histograms(ds, lsm: np.ndarray, args, layout: dict,
             site_class_counts[code] += int((site_codes == code).sum())
         site_class_counts[-1] += int((site_codes == UNCLASSIFIED).sum())
 
-        tclw_g = block["tclw"].values[keep] * 1000.0        # kg m-2 -> g m-2
+        # The "liquid" axis is whichever field --liquid-var names; everything
+        # downstream -- phase masks, LWP bins, the sweep -- reads this one array,
+        # so tcslw flows through the identical logic rather than a parallel path.
+        tclw_g = block[liquid_var].values[keep] * 1000.0    # kg m-2 -> g m-2
         tciw_g = block["tciw"].values[keep] * 1000.0
         tcc = block["tcc"].values[keep]
 
@@ -2250,6 +2356,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "in: '2019', '2019-2025', or '2000,2019-2020'. "
                              "Default: every season meeting "
                              "--min-season-coverage.")
+    parser.add_argument("--cell-weighting", choices=("area", "uniform"),
+                        default="area",
+                        help="How cells are weighted when averaging over a "
+                             "surface class (default area = cos(latitude)). "
+                             "'area' makes a class average per unit AREA; "
+                             "'uniform' makes it per GRID CELL. The classes are "
+                             "latitude-structured, so the two are not "
+                             "interchangeable.")
+    parser.add_argument("--utc-hours", type=parse_utc_hours, default=None,
+                        metavar="SPEC",
+                        help="Keep only these UTC hours: '7,8,9' or "
+                             "'7-9,19-21'; default all 24. Narrows the SAMPLE, "
+                             "not the season window, so hours-per-season stay "
+                             "comparable. Its purpose is tcslw: that field is a "
+                             "forecast initialised at 06/18 UTC, so its error "
+                             "against the tclw analysis grows with lead, and "
+                             "restricting to short-lead hours is the only way "
+                             "to isolate the liquid definition from forecast "
+                             "error.")
+    parser.add_argument("--liquid-var", choices=LIQUID_VARS,
+                        default=DEFAULT_LIQUID_VAR,
+                        help="Which ERA5 field is treated as liquid water "
+                             f"(default {DEFAULT_LIQUID_VAR}). 'tcslw' restricts "
+                             "it to supercooled liquid. See the note at "
+                             "LIQUID_VARS: the two are NOT nested in the "
+                             "archived fields, so the switch is not a strict "
+                             "narrowing.")
     parser.add_argument("--min-cloud-fraction", type=float,
                         default=DEFAULT_MIN_CLOUD_FRACTION, metavar="F",
                         help="Total cloud cover at or above which a scene counts "
@@ -2443,7 +2576,8 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
     )
     lsm = align_lsm_to_grid(lsm_da, ds)
 
-    missing = sorted(set(REQUIRED_VARS) - set(ds.data_vars))
+    missing = sorted((set(REQUIRED_VARS) | {args.liquid_var})
+                     - set(ds.data_vars))
     if missing:
         raise KeyError(f"dataset is missing {missing}. Re-download with "
                        f"--var-set recommended or extended")
@@ -2459,6 +2593,13 @@ def prepare(argv=None, args=None, **overrides) -> Analysis:
           f"{args.open_ocean_max_siconc:g} | pack ice > "
           f"{args.sea_ice_min_siconc:g}")
     print(f"  Cloudy     : tcc >= {args.min_cloud_fraction:g}")
+    print(f"  Liquid     : {LIQUID_VAR_LABEL[args.liquid_var]}")
+    print(f"  Cell weight: {getattr(args, 'cell_weighting', 'area')}"
+          f"{' (cos latitude)' if getattr(args, 'cell_weighting', 'area') == 'area' else ' (per grid cell)'}")
+    _uh = parse_utc_hours(getattr(args, "utc_hours", None))
+    if _uh:
+        print(f"  UTC hours  : {', '.join(f'{h:02d}' for h in _uh)}"
+              f"   ({len(_uh)} of 24)")
     print(f"  Phase mode : {phase_kw['mode']}")
     print(f"  Categories : {phase_definition_label(phase_kw, mathtext=False)}")
     print(f"               {ice_definition_label(phase_kw, mathtext=False)}")
@@ -2636,11 +2777,11 @@ SEASON_STACK_ORDER: tuple[str, ...] = ("liquid", "mixed", "ice", "none")
 NONE_COLOR = "#c8cdd2"
 
 
-def _save_stack(fig, A, out_dir, stem, dpi):
+def _save_stack(fig, A, out_dir, stem, dpi, suffix: str = ""):
     """Write a season-stack figure, matching the naming the other figures use."""
     if out_dir is None:
         return fig
-    path = Path(out_dir) / f"{A.args.region}_{stem}_{A.tag}.png"
+    path = Path(out_dir) / f"{A.args.region}_{stem}_{A.tag}{suffix}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=dpi or A.args.dpi, bbox_inches="tight")
     print(f"  -> {path}")
@@ -2953,6 +3094,7 @@ GENIE_LIQUID_PRECIP_COLOR = "pink"
 GENIE_ICE_PRECIP_COLOR = "lightblue"
 
 ERA5_HATCH = "...."  # stippling that marks ERA5 bars apart from the solid obs bars
+MISSING_HATCH = "///"  # diagonal stripes marking a bar built from incomplete obs
 
 # Text sizes for fig_era5_vs_obs, exposed as function arguments so a notebook
 # can bump them per call rather than editing the source.
@@ -3182,7 +3324,7 @@ def _residual_stem(stem: str, mode: str) -> str:
     return stem if mode == "hours" else f"{stem}_pct"
 
 
-def _bar_total_label(ax, xi, total_h, liquid_h, season_h, top, starred=False,
+def _bar_total_label(ax, xi, total_h, liquid_h, season_h, top,
                      fontsize=8.0):
     """Two-line label above a bar: total hours, then the liquid-containing share.
 
@@ -3190,13 +3332,12 @@ def _bar_total_label(ax, xi, total_h, liquid_h, season_h, top, starred=False,
     observations are divided by the same number and the two labels can be read
     against each other directly. For an observation bar with missing hours that
     denominator is too generous -- the site was not watched for the whole window
-    -- which is what the asterisk marks.
+    -- which is what the bar's diagonal-stripe hatch marks (see MISSING_HATCH).
     """
     if not np.isfinite(total_h) or total_h <= 0:
         return
-    star = "*" if starred else ""
     ax.text(xi, total_h + 0.015 * top,
-            f"{total_h:,.0f} h{star}\n{100.0 * liquid_h / season_h:.1f}%",
+            f"{total_h:,.0f} h\n{100.0 * liquid_h / season_h:.1f}%",
             ha="center", va="bottom", fontsize=fontsize, linespacing=1.15)
 
 
@@ -3206,7 +3347,8 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
                     tick_fontsize: float = DEFAULT_COMPARISON_TICK_FONTSIZE,
                     legend_fontsize: float = DEFAULT_COMPARISON_LEGEND_FONTSIZE,
                     residual_mode: str | None = None,
-                    show_digitization_uncert: bool | None = None):
+                    show_digitization_uncert: bool | None = None,
+                    show_residual: bool = True):
     """ERA5 beside the ARM observations, with the residual underneath.
 
     Upper panel: two stacked bars per season -- ERA5 on the left, observations
@@ -3217,7 +3359,10 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
     Lower panel: ERA5 against the observations, one bar per category per
     season. ``residual_mode`` chooses the units: ``'percent_diff'`` (the
     default) shows it as a share of the observed value, ``'hours'`` as the raw
-    difference. ``None`` follows the run's ``--residual-mode``.
+    difference. ``None`` follows the run's ``--residual-mode``. Set
+    ``show_residual=False`` to drop this panel entirely and save the upper
+    panel alone -- the saved file name gets a `` - no-residual-panel`` suffix
+    so it does not overwrite the two-panel version.
 
     The precipitation filter decides which observation categories are used, so
     that the two sides mean the same thing. With ``--no-precip`` set, ERA5's
@@ -3262,39 +3407,52 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
 
     x = np.arange(len(shared))
     w = 0.38
-    fig, (ax, ax_r) = plt.subplots(
-        2, 1, figsize=(2.0 + 1.35 * len(shared), 9.0), sharex=True,
-        gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+    if show_residual:
+        fig, (ax, ax_r) = plt.subplots(
+            2, 1, figsize=(2.0 + 1.35 * len(shared), 9.0), sharex=True,
+            gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(2.0 + 1.35 * len(shared), 6.2))
+        ax_r = None
 
     # ERA5 bars carry the same liquid/ice colors as the obs bars but stippled
     # rather than solid, so the two datasets no longer need a second, easily
     # confused color (a colored outline) layered on top of the phase colors.
+    missing_mask = miss > 0.05 * s_h
     for off, (lq, ic, name, stippled) in (
             (-w / 2, (e_liq, e_ice, "ERA5", True)),
             (+w / 2, (o_liq, o_ice, "ARM obs", False))):
         hatch = ERA5_HATCH if stippled else None
-        ax.bar(x + off, lq, width=w,
+        liq_bars = ax.bar(x + off, lq, width=w,
                color="white" if stippled else GENIE_LIQUID_COLOR,
                edgecolor=GENIE_LIQUID_COLOR if stippled else "none",
                linewidth=0.7, hatch=hatch)
-        ax.bar(x + off, ic, width=w, bottom=lq,
+        ice_bars = ax.bar(x + off, ic, width=w, bottom=lq,
                color="white" if stippled else GENIE_ICE_COLOR,
                edgecolor=GENIE_ICE_COLOR if stippled else "none",
                linewidth=0.7, hatch=hatch)
+        # Observation bars built from an incomplete season get diagonal
+        # stripes instead of a solid fill, so the gap is visible on the bar
+        # itself rather than relegated to a footnote. ERA5 keeps its stippling
+        # regardless -- it has no missing hours to flag.
+        if not stippled:
+            for xi in x[missing_mask]:
+                for patch in (liq_bars[xi], ice_bars[xi]):
+                    patch.set_hatch(MISSING_HATCH)
+                    patch.set_edgecolor("white")
+                    patch.set_linewidth(0.6)
 
     # Totals above every bar: hours on top, liquid-containing share of the
     # season window underneath. Seasons whose observations are substantially
-    # incomplete get an asterisk instead of a separate annotation -- the
-    # "how many hours missing" note now lives in the lower panel, where it does
-    # not compete with the totals for space.
-    missing_mask = miss > 0.05 * s_h
+    # incomplete are flagged by the bar's own stripe hatch rather than a
+    # separate mark here -- the "how many hours missing" note lives in the
+    # lower panel, where it does not compete with the totals for space.
     top = float(max((e_liq + e_ice).max(), (o_liq + o_ice).max())) * 1.40
     for xi in x:
         _bar_total_label(ax, xi - w / 2, e_liq[xi] + e_ice[xi], e_liq[xi],
                          s_h[xi], top, fontsize=label_fontsize - 5.0)
         _bar_total_label(ax, xi + w / 2, o_liq[xi] + o_ice[xi], o_liq[xi],
-                         s_h[xi], top, starred=bool(missing_mask[xi]),
-                         fontsize=label_fontsize - 5.0)
+                         s_h[xi], top, fontsize=label_fontsize - 5.0)
     ax.set_ylim(0, top)
     ax.set_ylabel("Hours per season", fontsize=label_fontsize)
     ax.tick_params(axis="both", labelsize=tick_fontsize)
@@ -3309,52 +3467,64 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
         plt.Rectangle((0, 0), 1, 1, fc="white", ec="0.35", lw=0.8,
                       hatch=ERA5_HATCH),
         plt.Rectangle((0, 0), 1, 1, fc="0.55", ec="none"),
+        plt.Rectangle((0, 0), 1, 1, fc="0.55", ec="white", lw=0.6,
+                      hatch=MISSING_HATCH),
     ]
     ax.legend(handles, ["liquid containing", "ice only",
-                        "ERA5 (left, stippled)", "ARM obs (right, solid)"],
+                        "ERA5 (left, stippled)", "ARM obs (right, solid)",
+                        "missing observations"],
               fontsize=legend_fontsize, ncol=2, framealpha=0.9, loc="upper left")
     draw_threshold_box(ax, A, loc="upper right",
                        fontsize=legend_fontsize - 2.0)
 
-    # ---- residual panel ----------------------------------------------------
-    d_liq = residual_values(e_liq, o_liq, residual_mode)
-    d_ice = residual_values(e_ice, o_ice, residual_mode)
-    # Band first, so the residual bars sit on top of it.
-    band_note = draw_residual_band(
-        ax_r, residual_mode, OBS_SEASONAL_UNCERTAINTY_H,
-        bars=((x - w / 2, o_liq), (x + w / 2, o_ice)), width=w, show=show_band)
-    ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
-             edgecolor="white", linewidth=0.5, label="liquid containing")
-    ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
-             edgecolor="white", linewidth=0.5, label="ice only")
-    ax_r.axhline(0.0, color="0.3", lw=1.0)
+    band_note = ""
+    if show_residual:
+        # ---- residual panel -------------------------------------------------
+        d_liq = residual_values(e_liq, o_liq, residual_mode)
+        d_ice = residual_values(e_ice, o_ice, residual_mode)
+        # Band first, so the residual bars sit on top of it.
+        band_note = draw_residual_band(
+            ax_r, residual_mode, OBS_SEASONAL_UNCERTAINTY_H,
+            bars=((x - w / 2, o_liq), (x + w / 2, o_ice)), width=w, show=show_band)
+        liq_r_bars = ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
+                 edgecolor="white", linewidth=0.5, label="liquid containing")
+        ice_r_bars = ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
+                 edgecolor="white", linewidth=0.5, label="ice only")
+        ax_r.axhline(0.0, color="0.3", lw=1.0)
 
-    # Star the same seasons flagged "missing" in the upper panel, so the
-    # residual there is not read as if it were on equal footing with the rest,
-    # and say how many hours are missing here rather than in the upper panel.
-    if missing_mask.any():
-        floor = (max(OBS_SEASONAL_UNCERTAINTY_H, 50.0)
-                 if residual_mode == "hours" else 10.0)
-        resid_span = float(max(np.nanmax(np.abs(d_liq)),
-                               np.nanmax(np.abs(d_ice)), floor))
-        star_margin = 0.05 * resid_span
+        # Stripe the same seasons flagged "missing" in the upper panel, so the
+        # residual there is not read as if it were on equal footing with the
+        # rest, and say how many hours are missing here rather than in the
+        # upper panel.
         for xi in x[missing_mask]:
-            y_top = np.nanmax([d_liq[xi], d_ice[xi], 0.0]) + star_margin
-            ax_r.text(xi, y_top, f"*\n{miss[xi]:,.0f} h\nmissing",
-                      ha="center", va="bottom", fontsize=7.5,
-                      color="0.25", linespacing=1.15)
+            liq_r_bars[xi].set_hatch(MISSING_HATCH)
+            ice_r_bars[xi].set_hatch(MISSING_HATCH)
+        if missing_mask.any():
+            floor = (max(OBS_SEASONAL_UNCERTAINTY_H, 50.0)
+                     if residual_mode == "hours" else 10.0)
+            resid_span = float(max(np.nanmax(np.abs(d_liq)),
+                                   np.nanmax(np.abs(d_ice)), floor))
+            star_margin = 0.05 * resid_span
+            for xi in x[missing_mask]:
+                y_top = np.nanmax([d_liq[xi], d_ice[xi], 0.0]) + star_margin
+                ax_r.text(xi, y_top, f"{miss[xi]:,.0f} h\nmissing",
+                          ha="center", va="bottom", fontsize=11.0,
+                          color="0.25", linespacing=1.15)
 
-    ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
-    ax_r.tick_params(axis="both", labelsize=tick_fontsize)
-    ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
-    ax_r.set_axisbelow(True)
-    for sp in ("top", "right"):
-        ax_r.spines[sp].set_visible(False)
-    # No legend here: the colours repeat the upper panel's, and the asterisk
-    # annotation now names itself.
-    ax_r.set_xticks(x)
-    ax_r.set_xticklabels([f"{y}/{(y + 1) % 100:02d}" for y in shared],
-                         rotation=45, ha="right", fontsize=tick_fontsize)
+        ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
+        ax_r.tick_params(axis="both", labelsize=tick_fontsize)
+        ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+        ax_r.set_axisbelow(True)
+        for sp in ("top", "right"):
+            ax_r.spines[sp].set_visible(False)
+        # No legend here: the colours repeat the upper panel's, and the
+        # stripe hatch names itself.
+        tick_ax = ax_r
+    else:
+        tick_ax = ax
+    tick_ax.set_xticks(x)
+    tick_ax.set_xticklabels([f"{y}/{(y + 1) % 100:02d}" for y in shared],
+                            rotation=45, ha="right", fontsize=tick_fontsize)
 
     pair = ("precipitating scenes EXCLUDED from both sides" if args.no_precip
             else "precipitation INCLUDED on both sides")
@@ -3362,11 +3532,16 @@ def fig_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
     fig.suptitle(f"ERA5 against ARM observations \u2014 {series_label}\n"
                  f"{args.region}   |   {pair}   |   {precip_label(args)}{note}",
                  fontsize=12.5, y=0.965)
-    fig.subplots_adjust(top=0.90, bottom=0.135, left=0.09, right=0.985)
+    if show_residual:
+        fig.subplots_adjust(top=0.90, bottom=0.135, left=0.09, right=0.985)
+    else:
+        fig.subplots_adjust(top=0.86, bottom=0.22, left=0.09, right=0.985)
     draw_figure_footnotes(fig, [band_note])
     tag = "noprecip" if args.no_precip else "allsky"
+    suffix = "" if show_residual else " - no-residual-panel"
     return _save_stack(fig, A, out_dir,
-                       _residual_stem(f"era5_vs_obs_{tag}", residual_mode), dpi)
+                       _residual_stem(f"era5_vs_obs_{tag}", residual_mode), dpi,
+                       suffix=suffix)
 
 
 def fig_era5_vs_obs_allsky(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
@@ -3375,7 +3550,8 @@ def fig_era5_vs_obs_allsky(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
                            tick_fontsize=DEFAULT_COMPARISON_TICK_FONTSIZE,
                            legend_fontsize=DEFAULT_COMPARISON_LEGEND_FONTSIZE,
                            residual_mode: str | None = None,
-                           show_digitization_uncert: bool | None = None):
+                           show_digitization_uncert: bool | None = None,
+                           show_residual: bool = True):
     """All-sky comparison: nothing filtered, and the obs precip split shown.
 
     The companion to :func:`fig_era5_vs_obs`. There, precipitating scenes are
@@ -3397,6 +3573,8 @@ def fig_era5_vs_obs_allsky(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
     hours already exclude precipitation and the two sides would not correspond.
 
     ``residual_mode`` sets the lower panel's units; see :func:`fig_era5_vs_obs`.
+    Set ``show_residual=False`` to drop that panel and save the upper panel
+    alone, with a `` - no-residual-panel`` suffix on the file name.
     """
     import matplotlib.pyplot as plt
 
@@ -3431,9 +3609,13 @@ def fig_era5_vs_obs_allsky(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
 
     x = np.arange(len(shared))
     w = 0.38
-    fig, (ax, ax_r) = plt.subplots(
-        2, 1, figsize=(2.0 + 1.35 * len(shared), 9.0), sharex=True,
-        gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+    if show_residual:
+        fig, (ax, ax_r) = plt.subplots(
+            2, 1, figsize=(2.0 + 1.35 * len(shared), 9.0), sharex=True,
+            gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(2.0 + 1.35 * len(shared), 6.2))
+        ax_r = None
 
     ax.bar(x - w / 2, e_liq, width=w, color="white",
            edgecolor=GENIE_LIQUID_COLOR, linewidth=0.7, hatch=ERA5_HATCH)
@@ -3443,17 +3625,24 @@ def fig_era5_vs_obs_allsky(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
     # Observation stack, grouped BY PHASE rather than in Genie's original
     # order, so the liquid block and the ice block are each contiguous and can
     # be read against the two-segment ERA5 bar beside them.
+    missing_mask = miss > 0.05 * s_h
     bottom = np.zeros(len(shared))
     for seg, colr in ((o_liq, GENIE_LIQUID_COLOR),
                       (o_liq_p, GENIE_LIQUID_PRECIP_COLOR),
                       (o_ice, GENIE_ICE_COLOR),
                       (o_ice_p, GENIE_ICE_PRECIP_COLOR)):
-        ax.bar(x + w / 2, seg, width=w, bottom=bottom, color=colr,
+        seg_bars = ax.bar(x + w / 2, seg, width=w, bottom=bottom, color=colr,
                edgecolor="none")
+        # Diagonal stripes over every observation segment in a season with
+        # incomplete coverage, so the gap is visible on the bar itself. ERA5
+        # keeps its stippling regardless -- it has no missing hours to flag.
+        for xi in x[missing_mask]:
+            seg_bars[xi].set_hatch(MISSING_HATCH)
+            seg_bars[xi].set_edgecolor("white")
+            seg_bars[xi].set_linewidth(0.6)
         bottom += seg
 
     e_tot, o_tot = e_liq + e_ice, bottom
-    missing_mask = miss > 0.05 * s_h
     # More headroom than the two-segment figure: these bars are taller and the
     # legend shares the upper-left corner with the labels above them.
     top = float(max(e_tot.max(), o_tot.max())) * 1.52
@@ -3461,8 +3650,7 @@ def fig_era5_vs_obs_allsky(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
         _bar_total_label(ax, xi - w / 2, e_tot[xi], e_liq[xi], s_h[xi], top,
                          fontsize=label_fontsize - 5.0)
         _bar_total_label(ax, xi + w / 2, o_tot[xi], o_liq[xi] + o_liq_p[xi],
-                         s_h[xi], top, starred=bool(missing_mask[xi]),
-                         fontsize=label_fontsize - 5.0)
+                         s_h[xi], top, fontsize=label_fontsize - 5.0)
     ax.set_ylim(0, top)
     ax.set_ylabel("Hours per season", fontsize=label_fontsize)
     ax.tick_params(axis="both", labelsize=tick_fontsize)
@@ -3476,55 +3664,70 @@ def fig_era5_vs_obs_allsky(A: Analysis, obs_path=DEFAULT_OBS_FILE, out_dir=None,
                 GENIE_ICE_COLOR, GENIE_ICE_PRECIP_COLOR)]
     handles.append(plt.Rectangle((0, 0), 1, 1, fc="white", ec="0.35", lw=0.8,
                                  hatch=ERA5_HATCH))
+    handles.append(plt.Rectangle((0, 0), 1, 1, fc="0.55", ec="white", lw=0.6,
+                                 hatch=MISSING_HATCH))
     ax.legend(handles,
               ["liquid containing", "liquid containing (precip)",
-               "ice only", "ice only (precip)", "ERA5 (left, stippled)"],
+               "ice only", "ice only (precip)", "ERA5 (left, stippled)",
+               "missing observations"],
               fontsize=legend_fontsize, ncol=2, framealpha=0.9, loc="upper left")
     draw_threshold_box(ax, A, loc="upper right",
                        fontsize=legend_fontsize - 2.0)
 
-    # ---- residual panel, against the obs totals INCLUDING precipitation -----
-    o_liq_tot, o_ice_tot = o_liq + o_liq_p, o_ice + o_ice_p
-    d_liq = residual_values(e_liq, o_liq_tot, residual_mode)
-    d_ice = residual_values(e_ice, o_ice_tot, residual_mode)
-    band_note = draw_residual_band(
-        ax_r, residual_mode, OBS_SEASONAL_UNCERTAINTY_H,
-        bars=((x - w / 2, o_liq_tot), (x + w / 2, o_ice_tot)), width=w,
-        show=show_band)
-    ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
-             edgecolor="white", linewidth=0.5)
-    ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
-             edgecolor="white", linewidth=0.5)
-    ax_r.axhline(0.0, color="0.3", lw=1.0)
-    if missing_mask.any():
-        floor = (max(OBS_SEASONAL_UNCERTAINTY_H, 50.0)
-                 if residual_mode == "hours" else 10.0)
-        span = float(max(np.nanmax(np.abs(d_liq)), np.nanmax(np.abs(d_ice)),
-                         floor))
+    band_note = ""
+    if show_residual:
+        # ---- residual panel, against the obs totals INCLUDING precip -------
+        o_liq_tot, o_ice_tot = o_liq + o_liq_p, o_ice + o_ice_p
+        d_liq = residual_values(e_liq, o_liq_tot, residual_mode)
+        d_ice = residual_values(e_ice, o_ice_tot, residual_mode)
+        band_note = draw_residual_band(
+            ax_r, residual_mode, OBS_SEASONAL_UNCERTAINTY_H,
+            bars=((x - w / 2, o_liq_tot), (x + w / 2, o_ice_tot)), width=w,
+            show=show_band)
+        liq_r_bars = ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
+                 edgecolor="white", linewidth=0.5)
+        ice_r_bars = ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
+                 edgecolor="white", linewidth=0.5)
+        ax_r.axhline(0.0, color="0.3", lw=1.0)
         for xi in x[missing_mask]:
-            ax_r.text(xi, np.nanmax([d_liq[xi], d_ice[xi], 0.0]) + 0.05 * span,
-                      f"*\n{miss[xi]:,.0f} h\nmissing", ha="center",
-                      va="bottom", fontsize=7.5, color="0.25", linespacing=1.15)
-    ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
-    ax_r.tick_params(axis="both", labelsize=tick_fontsize)
-    ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
-    ax_r.set_axisbelow(True)
-    for sp in ("top", "right"):
-        ax_r.spines[sp].set_visible(False)
-    ax_r.set_xticks(x)
-    ax_r.set_xticklabels([f"{y}/{(y + 1) % 100:02d}" for y in shared],
-                         rotation=45, ha="right", fontsize=tick_fontsize)
+            liq_r_bars[xi].set_hatch(MISSING_HATCH)
+            ice_r_bars[xi].set_hatch(MISSING_HATCH)
+        if missing_mask.any():
+            floor = (max(OBS_SEASONAL_UNCERTAINTY_H, 50.0)
+                     if residual_mode == "hours" else 10.0)
+            span = float(max(np.nanmax(np.abs(d_liq)), np.nanmax(np.abs(d_ice)),
+                             floor))
+            for xi in x[missing_mask]:
+                ax_r.text(xi, np.nanmax([d_liq[xi], d_ice[xi], 0.0]) + 0.05 * span,
+                          f"{miss[xi]:,.0f} h\nmissing", ha="center",
+                          va="bottom", fontsize=11.0, color="0.25", linespacing=1.15)
+        ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
+        ax_r.tick_params(axis="both", labelsize=tick_fontsize)
+        ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+        ax_r.set_axisbelow(True)
+        for sp in ("top", "right"):
+            ax_r.spines[sp].set_visible(False)
+        tick_ax = ax_r
+    else:
+        tick_ax = ax
+    tick_ax.set_xticks(x)
+    tick_ax.set_xticklabels([f"{y}/{(y + 1) % 100:02d}" for y in shared],
+                            rotation=45, ha="right", fontsize=tick_fontsize)
 
     note = f"   |   {dropped} ERA5 season(s) not in the obs file" if dropped else ""
     fig.suptitle(f"ERA5 against ARM observations, ALL SKY \u2014 {series_label}"
                  f"\n{args.region}   |   nothing filtered; the observations' "
                  f"precipitating categories are shown separately{note}",
                  fontsize=12.5, y=0.965)
-    fig.subplots_adjust(top=0.90, bottom=0.135, left=0.09, right=0.985)
+    if show_residual:
+        fig.subplots_adjust(top=0.90, bottom=0.135, left=0.09, right=0.985)
+    else:
+        fig.subplots_adjust(top=0.86, bottom=0.22, left=0.09, right=0.985)
     draw_figure_footnotes(fig, [band_note])
+    suffix = "" if show_residual else " - no-residual-panel"
     return _save_stack(fig, A, out_dir,
                        _residual_stem("era5_vs_obs_allsky_split", residual_mode),
-                       dpi)
+                       dpi, suffix=suffix)
 
 
 # ----------------------------------------------------------------------------
@@ -3692,7 +3895,8 @@ def fig_monthly_era5_vs_obs(A: Analysis, obs_path=DEFAULT_MONTHLY_OBS_FILE,
                             legend_fontsize=DEFAULT_COMPARISON_LEGEND_FONTSIZE,
                             residual_mode: str | None = None,
                             exclude_months=GENIE_EXCLUDED_MONTHS,
-                            show_digitization_uncert: bool | None = None):
+                            show_digitization_uncert: bool | None = None,
+                            show_residual: bool = True):
     """Monthly mean cloud hours, ERA5 beside the observations.
 
     Upper panel: two stacked bars per month -- ERA5 stippled on the left,
@@ -3719,6 +3923,9 @@ def fig_monthly_era5_vs_obs(A: Analysis, obs_path=DEFAULT_MONTHLY_OBS_FILE,
     which is accumulated from ``w_phase_month``, which is masked by ``cloudy``.
     Lowering the gate raises these bars. The threshold box in the corner is
     there so a figure that did NOT move can be told apart from a stale one.
+
+    Set ``show_residual=False`` to drop the lower panel and save the upper
+    panel alone, with a `` - no-residual-panel`` suffix on the file name.
     """
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
@@ -3761,9 +3968,13 @@ def fig_monthly_era5_vs_obs(A: Analysis, obs_path=DEFAULT_MONTHLY_OBS_FILE,
 
     x = np.arange(len(shared))
     w = 0.38
-    fig, (ax, ax_r) = plt.subplots(
-        2, 1, figsize=(2.0 + 1.6 * len(shared), 9.0), sharex=True,
-        gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+    if show_residual:
+        fig, (ax, ax_r) = plt.subplots(
+            2, 1, figsize=(2.0 + 1.6 * len(shared), 9.0), sharex=True,
+            gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.10})
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(2.0 + 1.6 * len(shared), 6.2))
+        ax_r = None
 
     ax.bar(x - w / 2, e_liq, width=w, color="white",
            edgecolor=GENIE_LIQUID_COLOR, linewidth=0.7, hatch=ERA5_HATCH)
@@ -3807,27 +4018,32 @@ def fig_monthly_era5_vs_obs(A: Analysis, obs_path=DEFAULT_MONTHLY_OBS_FILE,
     draw_threshold_box(ax, A, loc="upper left",
                        fontsize=legend_fontsize - 2.0)
 
-    # ---- residual panel ----------------------------------------------------
-    d_liq = residual_values(e_liq, o_liq, residual_mode)
-    d_ice = residual_values(e_ice, o_ice, residual_mode)
-    # The monthly file is still digitised, so unlike the seasonal figures this
-    # one does still have a band to draw.
-    band_note = draw_residual_band(
-        ax_r, residual_mode, OBS_MONTHLY_UNCERTAINTY_H,
-        bars=((x - w / 2, o_liq), (x + w / 2, o_ice)), width=w, show=show_band)
-    ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
-             edgecolor="white", linewidth=0.5)
-    ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
-             edgecolor="white", linewidth=0.5)
-    ax_r.axhline(0.0, color="0.3", lw=1.0)
-    ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
-    ax_r.tick_params(axis="both", labelsize=tick_fontsize)
-    ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
-    ax_r.set_axisbelow(True)
-    for sp in ("top", "right"):
-        ax_r.spines[sp].set_visible(False)
-    ax_r.set_xticks(x)
-    ax_r.set_xticklabels(
+    band_note = ""
+    if show_residual:
+        # ---- residual panel --------------------------------------------------
+        d_liq = residual_values(e_liq, o_liq, residual_mode)
+        d_ice = residual_values(e_ice, o_ice, residual_mode)
+        # The monthly file is still digitised, so unlike the seasonal figures
+        # this one does still have a band to draw.
+        band_note = draw_residual_band(
+            ax_r, residual_mode, OBS_MONTHLY_UNCERTAINTY_H,
+            bars=((x - w / 2, o_liq), (x + w / 2, o_ice)), width=w, show=show_band)
+        ax_r.bar(x - w / 2, d_liq, width=w, color=GENIE_LIQUID_COLOR,
+                 edgecolor="white", linewidth=0.5)
+        ax_r.bar(x + w / 2, d_ice, width=w, color=GENIE_ICE_COLOR,
+                 edgecolor="white", linewidth=0.5)
+        ax_r.axhline(0.0, color="0.3", lw=1.0)
+        ax_r.set_ylabel(RESIDUAL_YLABEL[residual_mode], fontsize=label_fontsize)
+        ax_r.tick_params(axis="both", labelsize=tick_fontsize)
+        ax_r.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+        ax_r.set_axisbelow(True)
+        for sp in ("top", "right"):
+            ax_r.spines[sp].set_visible(False)
+        tick_ax = ax_r
+    else:
+        tick_ax = ax
+    tick_ax.set_xticks(x)
+    tick_ax.set_xticklabels(
         [calendar.month_abbr[m] + ("\u2020" if n_per_month[k] < n_hi else "")
          for k, m in enumerate(shared)], fontsize=tick_fontsize)
 
@@ -3844,10 +4060,308 @@ def fig_monthly_era5_vs_obs(A: Analysis, obs_path=DEFAULT_MONTHLY_OBS_FILE,
                  f"all sky, precipitation included on both "
                  f"sides   |   percentage is the liquid-containing share of the "
                  f"month", fontsize=12, y=0.965)
-    fig.subplots_adjust(top=0.90, bottom=0.115, left=0.09, right=0.985)
+    if show_residual:
+        fig.subplots_adjust(top=0.90, bottom=0.115, left=0.09, right=0.985)
+    else:
+        fig.subplots_adjust(top=0.86, bottom=0.20, left=0.09, right=0.985)
     draw_figure_footnotes(fig, [drop_note, band_note])
+    suffix = "" if show_residual else " - no-residual-panel"
     return _save_stack(fig, A, out_dir,
-                       _residual_stem("monthly_era5_vs_obs", residual_mode), dpi)
+                       _residual_stem("monthly_era5_vs_obs", residual_mode), dpi,
+                       suffix=suffix)
+
+
+# ----------------------------------------------------------------------------
+# Season/month-by-season residual tables -- the same numbers as the lower
+# panel of fig_era5_vs_obs / fig_era5_vs_obs_allsky / fig_monthly_era5_vs_obs,
+# typeset as a table rather than plotted, for pasting into a manuscript.
+# ----------------------------------------------------------------------------
+
+def _residual_header(mode: str) -> str:
+    """Column-header fragment matching ``residual_values``' units."""
+    return "% diff" if mode == "percent_diff" else "diff (h)"
+
+
+def _residual_cell(v: float, mode: str) -> str:
+    """One formatted table cell; an em dash where the obs denominator is 0."""
+    if not np.isfinite(v):
+        return "—"
+    return f"{v:+,.0f} h" if mode == "hours" else f"{v:+.1f}%"
+
+
+def _threshold_tag(A: Analysis) -> str:
+    """``min_cloud_fraction`` and ``ice_fraction_min``, formatted for a file name.
+
+    Requires ``phase_mode="fraction"`` -- the LWP-threshold mode has no single
+    ``ice_fraction_min`` to report, and these tables are read against the
+    fraction-mode comparison figures.
+    """
+    args = A.args
+    pk = A.phase_kw
+    if pk["mode"] != "fraction":
+        raise ValueError(
+            "percent-diff tables need phase_mode='fraction' so "
+            "ice_fraction_min is defined for the file name")
+    return f"mcf{args.min_cloud_fraction:g}_ifm{pk['ice_fraction_min']:g}"
+
+
+def _render_residual_table(headers: list[str], rows: list[tuple],
+                           avg_row: tuple | None = None,
+                           font_size: float = 11):
+    """A minimalist 'booktabs'-style table: horizontal rules only, no vertical
+    lines, serif type -- the look of a typeset journal table rather than a
+    spreadsheet grid.
+
+    ``rows`` is a list of ``(label, [cell_strs...], flagged)`` tuples. A row
+    with ``flagged=True`` gets an asterisk appended to its label and its
+    values set in italics -- the table's equivalent of the diagonal-stripe
+    hatch the comparison figures use for the same seasons. ``avg_row``, if
+    given, is a ``(label, [cell_strs...])`` tuple drawn in bold below its own
+    rule, and is left out of the flagging entirely (the caller excludes
+    flagged rows from the mean before formatting it).
+
+    Row height and margins scale with ``font_size`` (anchored at the
+    long-standing default of 11 pt) so a larger or smaller font doesn't end
+    up cramped or floating in oversized whitespace.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    n_cols = len(headers)
+    n_data = len(rows)
+    n_slots = 1 + n_data + (1 if avg_row is not None else 0)
+
+    scale = font_size / 11.0
+    row_h = 0.28 * scale    # inches
+    top_m, bot_m = 0.14 * scale, 0.14 * scale
+    fig_w = 5.4
+    fig_h = top_m + bot_m + row_h * n_slots
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, fig_h)
+    ax.axis("off")
+
+    x_label = 0.04
+    x_right = 0.97
+    x_vals = (np.linspace(0.60, x_right, n_cols - 1) if n_cols > 2
+             else np.array([x_right]))
+
+    y0 = fig_h - top_m   # y of the top rule
+
+    def rule(y, lw):
+        ax.add_line(Line2D([0.02, 0.98], [y, y], color="black", linewidth=lw))
+
+    rule(y0, 1.4)
+    for slot in range(n_slots):
+        yc = y0 - row_h * slot - row_h / 2.0
+        is_header = slot == 0
+        is_avg = avg_row is not None and slot == n_slots - 1
+        if is_header:
+            label, values, flagged, weight = headers[0], headers[1:], False, "normal"
+        elif is_avg:
+            label, values, flagged, weight = avg_row[0], avg_row[1], False, "bold"
+        else:
+            label, values, flagged = rows[slot - 1]
+            weight = "normal"
+        shown_label = f"{label}*" if flagged else label
+        ax.text(x_label, yc, shown_label, ha="left", va="center",
+               fontsize=font_size, family="serif", fontweight=weight)
+        style = "italic" if flagged else "normal"
+        for xv, val in zip(x_vals, values):
+            ax.text(xv, yc, val, ha="right", va="center", fontsize=font_size,
+                   family="serif", fontstyle=style, fontweight=weight)
+        if is_header:
+            rule(y0 - row_h, 0.8)
+        if avg_row is not None and slot == n_slots - 2:
+            rule(y0 - row_h * (slot + 1), 0.8)
+
+    rule(y0 - row_h * n_slots, 1.4)
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    return fig
+
+
+def _save_table(fig, out_dir, fname: str, dpi, pad_inches: float = 0.03):
+    if out_dir is None:
+        return fig
+    path = Path(out_dir) / fname
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi, bbox_inches="tight", pad_inches=pad_inches,
+               facecolor="white")
+    print(f"  -> {path}")
+    import matplotlib.pyplot as plt
+    plt.close(fig)
+    return path
+
+
+def table_era5_vs_obs_pct_diff(A: Analysis, obs_path=DEFAULT_OBS_FILE,
+                               out_dir=None, surface_class: str = "arm_site",
+                               residual_mode: str | None = None,
+                               dpi: int = 350, font_size: float = 11):
+    """Season-by-season residual table matching :func:`fig_era5_vs_obs`.
+
+    One row per season, liquid-containing and ice-only side by side, in
+    whichever units ``residual_mode`` (default from the run's
+    ``--residual-mode``) gives :func:`residual_values` -- percent difference
+    by default. Seasons flagged by the same rule the figure uses (missing
+    hours over 5% of the season window) get an asterisk on the season label,
+    italic values, and are excluded from the ``Average`` row.
+
+    ``font_size`` controls the table's type size in points; row height and
+    margins scale with it automatically.
+    """
+    args = A.args
+    residual_mode = resolve_residual_mode(residual_mode, args)
+    obs = load_observations(obs_path)
+    labels, liquid, ice, _clear, season_h = season_phase_binary(A)
+    code, _series_label = resolve_series_code(A.col, surface_class)
+
+    era_years = [int(l.split("/")[0]) for l in labels]
+    obs_liq_all, obs_ice_all = obs_binary(obs, exclude_precip=args.no_precip)
+    obs_idx = {y: i for i, y in enumerate(obs["seasons"])}
+    shared = [y for y in era_years if y in obs_idx]
+    if not shared:
+        raise ValueError("no season appears in both the ERA5 run and "
+                         f"{obs_path}")
+    ei = {y: i for i, y in enumerate(era_years)}
+    e_liq = np.array([liquid[ei[y], code] for y in shared])
+    e_ice = np.array([ice[ei[y], code] for y in shared])
+    o_liq = np.array([obs_liq_all[obs_idx[y]] for y in shared])
+    o_ice = np.array([obs_ice_all[obs_idx[y]] for y in shared])
+    miss = np.array([obs["missing"][obs_idx[y]] for y in shared])
+    s_h = np.array([_sh(season_h, ei[y]) for y in shared])
+    missing_mask = miss > 0.05 * s_h
+
+    d_liq = residual_values(e_liq, o_liq, residual_mode)
+    d_ice = residual_values(e_ice, o_ice, residual_mode)
+
+    hdr = _residual_header(residual_mode)
+    rows = [(f"{y}/{(y + 1) % 100:02d}",
+            [_residual_cell(d_liq[i], residual_mode),
+             _residual_cell(d_ice[i], residual_mode)],
+            bool(missing_mask[i]))
+           for i, y in enumerate(shared)]
+    keep = ~missing_mask
+    avg_row = ("Average",
+              [_residual_cell(np.nanmean(d_liq[keep]), residual_mode),
+               _residual_cell(np.nanmean(d_ice[keep]), residual_mode)])
+
+    fig = _render_residual_table(
+        ["Season", f"Liquid {hdr}", f"Ice {hdr}"], rows, avg_row=avg_row,
+        font_size=font_size)
+    tag = "noprecip" if args.no_precip else "allsky"
+    fname = (f"{args.region}_era5_vs_obs_{tag}_pct_diff_table_"
+            f"{_threshold_tag(A)}.png")
+    return _save_table(fig, out_dir, fname, dpi)
+
+
+def table_era5_vs_obs_allsky_pct_diff(A: Analysis, obs_path=DEFAULT_OBS_FILE,
+                                      out_dir=None, surface_class="arm_site",
+                                      residual_mode: str | None = None,
+                                      dpi: int = 350, font_size: float = 11):
+    """Season-by-season residual table matching :func:`fig_era5_vs_obs_allsky`.
+
+    Same layout as :func:`table_era5_vs_obs_pct_diff`; the observation side is
+    the all-sky total (with-liquid + liquid-precip, ice-only + ice-precip),
+    matching the unfiltered ERA5 run the figure requires.
+    """
+    args = A.args
+    residual_mode = resolve_residual_mode(residual_mode, args)
+    if args.no_precip:
+        raise ValueError(
+            "table_era5_vs_obs_allsky_pct_diff needs a run with "
+            "no_precip=False, same as fig_era5_vs_obs_allsky.")
+
+    obs = load_observations(obs_path)
+    labels, liquid, ice, _clear, season_h = season_phase_binary(A)
+    code, _series_label = resolve_series_code(A.col, surface_class)
+
+    era_years = [int(l.split("/")[0]) for l in labels]
+    obs_idx = {y: i for i, y in enumerate(obs["seasons"])}
+    shared = [y for y in era_years if y in obs_idx]
+    if not shared:
+        raise ValueError(f"no season appears in both the run and {obs_path}")
+    ei = {y: i for i, y in enumerate(era_years)}
+    e_liq = np.array([liquid[ei[y], code] for y in shared])
+    e_ice = np.array([ice[ei[y], code] for y in shared])
+    o_liq_tot = np.array([obs["with_liquid"][obs_idx[y]]
+                          + obs["liq_precip"][obs_idx[y]] for y in shared])
+    o_ice_tot = np.array([obs["ice_only"][obs_idx[y]]
+                          + obs["ice_precip"][obs_idx[y]] for y in shared])
+    miss = np.array([obs["missing"][obs_idx[y]] for y in shared])
+    s_h = np.array([_sh(season_h, ei[y]) for y in shared])
+    missing_mask = miss > 0.05 * s_h
+
+    d_liq = residual_values(e_liq, o_liq_tot, residual_mode)
+    d_ice = residual_values(e_ice, o_ice_tot, residual_mode)
+
+    hdr = _residual_header(residual_mode)
+    rows = [(f"{y}/{(y + 1) % 100:02d}",
+            [_residual_cell(d_liq[i], residual_mode),
+             _residual_cell(d_ice[i], residual_mode)],
+            bool(missing_mask[i]))
+           for i, y in enumerate(shared)]
+    keep = ~missing_mask
+    avg_row = ("Average",
+              [_residual_cell(np.nanmean(d_liq[keep]), residual_mode),
+               _residual_cell(np.nanmean(d_ice[keep]), residual_mode)])
+
+    fig = _render_residual_table(
+        ["Season", f"Liquid {hdr}", f"Ice {hdr}"], rows, avg_row=avg_row,
+        font_size=font_size)
+    fname = (f"{args.region}_era5_vs_obs_allsky_split_pct_diff_table_"
+            f"{_threshold_tag(A)}.png")
+    return _save_table(fig, out_dir, fname, dpi)
+
+
+def table_monthly_era5_vs_obs_pct_diff(A: Analysis,
+                                       obs_path=DEFAULT_MONTHLY_OBS_FILE,
+                                       out_dir=None,
+                                       surface_class: str = "arm_site",
+                                       residual_mode: str | None = None,
+                                       exclude_months=GENIE_EXCLUDED_MONTHS,
+                                       dpi: int = 220, font_size: float = 11):
+    """Month-by-month residual table matching :func:`fig_monthly_era5_vs_obs`.
+
+    One row per calendar month, liquid-containing and ice-only side by side.
+    No seasons are dropped here -- the monthly file has no per-month
+    "missing hours" figure the way the seasonal one does -- so there is no
+    asterisk column and no average row, just the twelve (or fewer) months.
+    """
+    args = A.args
+    residual_mode = resolve_residual_mode(residual_mode, args)
+    if args.no_precip:
+        raise ValueError(
+            "table_monthly_era5_vs_obs_pct_diff needs a run with "
+            "no_precip=False, same as fig_monthly_era5_vs_obs.")
+
+    obs = load_monthly_observations(obs_path)
+    months, liq, ice, _month_h = monthly_phase_binary(A, surface_class,
+                                                      exclude_months)
+    o_idx = {m: i for i, m in enumerate(obs["months"])}
+    shared = [m for m in months if m in o_idx]
+    if not shared:
+        raise ValueError(f"no month appears in both the run and {obs_path}")
+    mi = {m: i for i, m in enumerate(months)}
+    e_liq = np.array([nanmean_quiet(liq[:, mi[m]]) for m in shared])
+    e_ice = np.array([nanmean_quiet(ice[:, mi[m]]) for m in shared])
+    o_liq = np.array([obs["with_liquid"][o_idx[m]] for m in shared])
+    o_ice = np.array([obs["ice_only"][o_idx[m]] for m in shared])
+
+    d_liq = residual_values(e_liq, o_liq, residual_mode)
+    d_ice = residual_values(e_ice, o_ice, residual_mode)
+
+    hdr = _residual_header(residual_mode)
+    rows = [(calendar.month_abbr[m],
+            [_residual_cell(d_liq[i], residual_mode),
+             _residual_cell(d_ice[i], residual_mode)], False)
+           for i, m in enumerate(shared)]
+
+    fig = _render_residual_table(["Month", f"Liquid {hdr}", f"Ice {hdr}"], rows,
+        font_size=font_size)
+    fname = (f"{args.region}_monthly_era5_vs_obs_pct_diff_table_"
+            f"{_threshold_tag(A)}.png")
+    return _save_table(fig, out_dir, fname, dpi)
 
 
 def fig_linear(A: Analysis, out_dir=None, dpi: int | None = None):

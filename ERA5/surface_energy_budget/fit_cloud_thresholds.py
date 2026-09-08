@@ -516,12 +516,12 @@ def fig_cost_surfaces(S, results, surfaces, A=None, out_dir=None, dpi=200):
         ax.plot(r["ice_frac"], r["tcc"], marker="*", ms=20, mfc="red",
                 mec="white", mew=1.2, ls="none",
                 label=f"min: {r['tcc']:.3f}, {r['ice_frac']:.3f}")
-        if A is not None:
-            ax.plot(A.phase_kw["ice_fraction_min"], A.args.min_cloud_fraction,
-                    marker="o", ms=10, mfc="none", mec="white", mew=2.0,
-                    ls="none", label="current setting")
-        ax.set_xlabel("ice_fraction_min   IWP/(LWP+IWP) for 'ice only'")
-        ax.set_ylabel("min_cloud_fraction   tcc gate")
+        # if A is not None:
+        #     ax.plot(A.phase_kw["ice_fraction_min"], A.args.min_cloud_fraction,
+        #             marker="o", ms=10, mfc="none", mec="white", mew=2.0,
+        #             ls="none", label="current setting")
+        ax.set_xlabel("Ice-Only Threshold   IWP/(LWP+IWP)")
+        ax.set_ylabel("Cloud Fraction threshold")
         ax.set_title(target.label, fontsize=10.5)
         ax.legend(loc="lower left", fontsize=9, framealpha=0.85)
         fig.colorbar(pcm, ax=ax, label="RSS of liquid-containing residual [h]")
