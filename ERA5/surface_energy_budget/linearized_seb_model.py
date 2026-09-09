@@ -456,6 +456,11 @@ COLUMN_BY_SLOT: dict[str, str] = {
     "open_ocean": "sea_ice",      # nominal only; see PINNED_SLOTS
     "marginal_ice": "sea_ice",
     "sea_ice": "sea_ice",
+    # The ARM grid cell sits on the tundra at Utqiagvik, so it takes the soil
+    # column like the land class it falls in. Without this line it would
+    # inherit the "sea_ice" default and be given the wrong conductance in
+    # every per-slot table.
+    "arm_site": "frozen_soil",
 }
 
 # Forcing periods the timescale figures sweep, in seconds. The synoptic band --
@@ -1602,6 +1607,748 @@ ALL_FIGURES = (
     fig_forcing_response,
     fig_model_vs_era5,
 )
+
+
+# ----------------------------------------------------------------------------
+# LYNN'S FIGURE: the turbulent share at FIXED cloud liquid water path
+# ----------------------------------------------------------------------------
+# THE QUESTION. "What fraction of a 1 W m-2 DLR perturbation goes to turbulence,
+# and how does that differ between land, ocean and sea ice?" Comparing the
+# classes on the pooled record does not answer it, because the classes do not
+# see the same clouds: on this archive land carries the highest mean LWP before
+# the melt season while ocean carries it during freeze-up, so a land-minus-ocean
+# difference in the pooled numbers is partly a difference in cloud regime.
+#
+# THE FIX IS TO CONDITION ON LWP. Bin every cell-hour by liquid water path,
+# estimate the coefficients WITHIN each bin, and compare classes bin by bin.
+# LWP is then held fixed by construction rather than controlled for
+# statistically, and what is left is the surface.
+#
+# TWO ESTIMATES OF THE SAME THING, AND THEY ARE NOT INTERCHANGEABLE.
+#
+#   BINNED REGRESSION (the line).  Within one (class, LWP bin), regress the
+#   sensible heat flux on (T_skin - T_2m) and the latent heat flux on
+#   (q_sat(T_skin) - q_2m). The slopes are rho c_p C_H U and rho L C_E U, which
+#   is what the bulk formula calls them. This is the robust route and it is the
+#   one plotted, because it does not divide by a small number.
+#
+#   POINTWISE DIVISION (the shading).  lam_SH = -SHF / (T_skin - T_2m) at each
+#   cell-hour, and likewise for moisture. This recovers ERA5's own
+#   stability-dependent transfer coefficient at that hour -- no roughness
+#   length or C_H needed, because the model has already applied them -- and its
+#   spread within a bin is a real property of the surface, not an error bar.
+#
+# WHY THE POINTWISE ROUTE NEEDS A GUARD. lam_SH = -SHF / dT blows up as dT -> 0,
+# and over pack ice dT is small: a 1 W m-2 error in SHF becomes a 10% error in
+# lam_SH at |dT| = 0.5 K and a 50% error at 0.1 K. ERA5's fluxes are hourly
+# MEANS while skt and t2m are instantaneous, so a discrepancy of that size is
+# guaranteed. Cell-hours below DT_MIN_K are therefore dropped from the
+# pointwise distribution and the surviving fraction is reported per bin -- a
+# number worth reading, because where it is small the shading describes a
+# minority of the hours.
+#
+# WHAT THE FRACTION MEANS. Equation (1) of this module with the shortwave term
+# absent (polar night, which is what the Oct-Mar window is mostly made of):
+#
+#     f_turb = (lam_SH + lam_LH) / (lam_LW + lam_SH + lam_LH + lam_G)
+#
+# at alpha = 0, the fixed-atmosphere limit. It CANNOT be negative: every lambda
+# is a damping coefficient, so the turbulent terms always oppose the skin
+# perturbation. The regression answer in ``turbulent_flux_response.py`` can be
+# and sometimes is negative, and that sign is the diagnostic -- it means DLR and
+# downward sensible heat rose together, which a skin response cannot produce and
+# an advecting warm air mass can. The two bracket the answer; see the module
+# docstring on alpha.
+
+# LWP bin edges, g m-2. Geometric-ish rather than uniform because the LWP
+# distribution is roughly lognormal: uniform bins would put nine tenths of the
+# record in the first two and leave the rest empty. The top bin is open above
+# 250 g m-2 in the sense that heavier scenes fall outside and are counted.
+LWP_BIN_EDGES_G_M2: tuple[float, ...] = (
+    2.0, 2.8, 3.8, 5.3, 7.2, 10.0, 13.8, 19.0, 26.0, 36.0, 50.0, 69.0,
+    95.0, 131.0, 181.0, 250.0,
+)
+# FIFTEEN BINS, geometric, ratio 1.38. Ten and twenty were both tried on the
+# full record: doubling the bin count moves f_turb by at most 0.009 (land) and
+# typically 0.003-0.008, on a quantity whose alpha bracket spans about 0.6, so
+# the choice is not where the uncertainty lives. Twenty was slightly SMOOTHER
+# for four of the five classes -- mean |second difference| of the curve fell
+# from 0.0099 to 0.0040 for coastal, 0.0067 to 0.0040 for sea ice -- which says
+# ten was not over-resolved either.
+#
+# THE BINDING CONSTRAINT IS NOT CELL-HOURS, IT IS INDEPENDENT WEATHER. Land
+# occupies about 13 grid cells on this strip, so its thinnest bin at twenty
+# bins holds ~3,000 cell-hours but only about three independent synoptic events
+# at the 72-hour decorrelation time; pack ice holds 24,000 cell-hours in under
+# one. Fifteen keeps land near half a dozen while giving the four large classes
+# the extra resolution they can support. Any error bar on these curves must
+# come from the block bootstrap, never from the cell-hour count.
+
+# Guards on the POINTWISE coefficients only; the binned regression uses every
+# cell-hour in the bin regardless. See the note above on why these exist.
+DT_MIN_K = 0.5                 # |T_skin - T_2m| below this: lam_SH unusable
+DQ_MIN_G_KG = 0.02             # |q_sat(T_skin) - q_2m| below this: lam_LH too
+
+# The pointwise f_turb histogram's y axis. f_turb is a ratio of positive
+# damping coefficients and therefore lies on [0, 1] whenever the pointwise
+# lambdas come out positive; the range is widened below zero and above one so
+# that hours where they do NOT -- a counter-gradient flux, or ERA5's hourly-mean
+# flux disagreeing in sign with its instantaneous temperatures -- are visible as
+# out-of-range weight rather than silently piled into an edge bin.
+FTURB_RANGE: tuple[float, float] = (-0.25, 1.25)
+FTURB_BINS = 300
+
+
+def dq_sat_dT(T_K: np.ndarray, p_hPa: np.ndarray) -> np.ndarray:
+    """d(q_sat)/dT, K-1, over ice below freezing and over water above.
+
+    Clausius-Clapeyron, q_sat L / (R_v T^2), with the SAME saturation vapour
+    pressure and phase switch ``turbulent_flux_response.derived_fields`` uses to
+    build ``dq_g_kg``. Sharing that choice matters: the numerator and the
+    denominator of ``lam_LH`` would otherwise be built on two different
+    definitions of saturation.
+    """
+    over_ice = T_K < 273.15
+    q_sat = tfr.specific_humidity(
+        tfr.sat_vapour_pressure_hpa(T_K, over_ice=over_ice), p_hPa)
+    latent = np.where(over_ice, L_SUBLIMATION, L_VAPORISATION)
+    return q_sat * latent / (R_VAPOUR * T_K**2)
+
+
+def _guarded_ratio(num: np.ndarray, den: np.ndarray,
+                   floor: float) -> np.ndarray:
+    """``num / den`` where ``|den| >= floor``, NaN elsewhere.
+
+    NaN rather than a sentinel, and returned as a fresh array rather than
+    written into ``fields``: everything downstream of this is the pointwise
+    histogram alone, and nothing that feeds the moments or the other figures
+    may acquire a NaN from it.
+    """
+    out = np.full(num.shape, np.nan, dtype=np.float64)
+    ok = np.isfinite(num) & np.isfinite(den) & (np.abs(den) >= floor)
+    np.divide(num, den, out=out, where=ok)
+    out[~ok] = np.nan
+    return out
+
+
+def lambda_g_by_slot(period_s: float = DEFAULT_PERIOD_S,
+                     column: tuple[Layer, ...] | str | None = None
+                     ) -> np.ndarray:
+    """lam_G for every slot, W m-2 K-1, in slot order.
+
+    Open water gets the sea-ice column like every other ocean class, which is
+    NOMINAL and wrong in the same documented way ``PINNED_SLOTS`` describes: the
+    SST is prescribed, so the real coefficient is far larger. Every figure that
+    uses this marks the open-water entry rather than quietly reporting it.
+    """
+    out = np.zeros(tfr.N_SLOT)
+    for si, name in enumerate(SLOT_ORDER):
+        col = (column if column is not None
+               else COLUMN_BY_SLOT.get(name, "sea_ice"))
+        out[si] = lambda_g(period_s, col)
+    return out
+
+
+def lambda_g_clamped(A: Analysis, slot: int | str,
+                     period_s: float = DEFAULT_PERIOD_S,
+                     population: str | None = None) -> float:
+    """lam_G inferred from the MEASURED skin response, for the pinned classes.
+
+    Over open water ERA5 holds the surface temperature at a prescribed SST, so
+    the conducting-column value is meaningless. What can be measured is the
+    total damping, because equation (1) says
+
+        d(T_skin)/d(LWD) = 1 / (lam_LW + lam_SH + lam_LH + lam_G),
+
+    and the left-hand side is a regression this project already computes. Invert
+    it and subtract the three coefficients that are known:
+
+        lam_G = 1 / [d(T_skin)/d(LWD)] - lam_LW - lam_SH - lam_LH.
+
+    This is an INFERENCE, not a measurement of conduction -- it lumps every
+    damping the regression sees and is not free of the air-mass confound, since
+    d(T_skin)/d(LWD) is itself a covariance. It is reported beside the nominal
+    value so the size of the difference is visible.
+    """
+    si = _slot_index(slot)
+    lam = lambdas(A, si, period_s=period_s, population=population)
+    dt_dlwd = tfr.slope_of(A.acc(population), si, "skt_K", "lwd_W_m2")
+    if not np.isfinite(dt_dlwd) or dt_dlwd <= 0.0:
+        return float("nan")
+    return float(1.0 / dt_dlwd - lam.lw - lam.sh - lam.lh)
+
+
+class LwpLambdas(NamedTuple):
+    """What ``collect_lwp_lambdas`` accumulates. One pass over the archive.
+
+    Attributes
+    ----------
+    mom : Moments per ``slot * n_bin + bin``, over the liquid-bearing overcast
+        population, carrying every ``tfr.TRACKED`` variable. The binned
+        regressions come out of this.
+    hist : ``(N_SLOT, n_bin, FTURB_BINS)`` weighted histogram of the POINTWISE
+        f_turb. Quantiles per bin come out of this.
+    hist_out : Weight that fell outside ``FTURB_RANGE``, per slot and bin.
+    n_point, n_kept : Cell-hours entering the pointwise route, and how many
+        survived the ``DT_MIN_K`` / ``DQ_MIN_G_KG`` guards.
+    n_out : ``(N_SLOT, 2)`` weight falling below the first bin edge and above
+        the last. Report it: a gap here is not harmless in proportion to its
+        size, because the hours outside the range sit far from the mean on both
+        axes and therefore carry outsized leverage.
+    """
+
+    mom: dict
+    hist: np.ndarray
+    hist_out: np.ndarray
+    n_point: np.ndarray
+    n_kept: np.ndarray
+    n_out: np.ndarray
+    edges: np.ndarray
+    period_s: float
+    lam_g: np.ndarray
+    args: object
+    used: list
+
+
+def collect_lwp_lambdas(argv=None, args=None,
+                        period_s: float = DEFAULT_PERIOD_S,
+                        edges: tuple[float, ...] = LWP_BIN_EDGES_G_M2,
+                        column: tuple[Layer, ...] | str | None = None,
+                        **overrides) -> LwpLambdas:
+    """Stream the archive once, binning by (surface class, LWP).
+
+    A SECOND PASS, deliberately. ``tfr.prepare`` could carry these accumulators
+    too, and the cost would be one more histogram; what it could not carry is
+    the pointwise lambda, because that field is NaN wherever the guard rejects
+    it and ``tfr.collect`` intersects a finite mask across every field it
+    builds. A NaN introduced here would silently drop those cell-hours from all
+    seventeen figures in that module. Keeping the two passes separate makes that
+    impossible rather than merely unlikely.
+
+    Takes the same options as ``tfr.prepare``.
+    """
+    if args is None:
+        args = tfr.parse_args([] if argv is None else argv)
+    for k, v in overrides.items():
+        if not hasattr(args, k):
+            raise TypeError(f"unknown option {k!r}")
+        setattr(args, k, v)
+
+    edges_a = np.asarray(edges, dtype=np.float64)
+    n_bin = len(edges_a) - 1
+    if n_bin < 1:
+        raise ValueError("need at least two LWP bin edges")
+
+    phase_kw = tfr.resolve_phase_thresholds(args)
+    region_dir = tfr.resolve_region_dir(args)
+    ds = tfr.load_seb_data(args.region, None, None, region_dir.parent)
+    lsm = tfr.align_lsm_to_grid(
+        tfr.load_land_sea_mask(
+            args.region,
+            tfr.resolve_data_root(args.storage, args.data_root),
+            args.mask_grid),
+        ds)
+
+    layout = tfr.season_layout(ds, args)
+    keep_idx, used, _ = tfr.select_seasons(layout, args)
+    use_step = tfr.steps_in_seasons(layout, keep_idx)
+
+    print("=" * 72)
+    print("Turbulent share at fixed LWP: pointwise and binned coefficients")
+    print("=" * 72)
+    print(f"  Source     : {region_dir}")
+    print(f"  Reading {len(used)} season(s): {used}")
+    print(f"  LWP bins   : {n_bin} from {edges_a[0]:g} to {edges_a[-1]:g} "
+          f"g m-2")
+    print(f"  Period     : {_period_label(period_s)}  (sets lam_G)")
+
+    site_mask, _, _ = tfr.site_cell_mask(ds)
+    weights_2d = tfr.area_weights_2d(ds["latitude"].values,
+                                     ds.sizes["longitude"])
+    lam_g_slot = lambda_g_by_slot(period_s, column)
+
+    mom = tfr.new_moments(tfr.N_SLOT * n_bin)
+    hist = np.zeros((tfr.N_SLOT, n_bin, FTURB_BINS))
+    hist_out = np.zeros((tfr.N_SLOT, n_bin))
+    n_point = np.zeros((tfr.N_SLOT, n_bin))
+    n_kept = np.zeros((tfr.N_SLOT, n_bin))
+    # Cell-hours of the population whose LWP falls OUTSIDE the bins, below the
+    # first edge or above the last. Tracked because the bins are not required
+    # to cover the population and the consequences of a gap are not
+    # proportional to its size: rebuilding the pooled d(SHF)/d(DLR) from bins
+    # that stopped at 250 g m-2 was 32% low over land on 1.3% of the hours,
+    # because those hours sit far out on BOTH axes and least squares weights a
+    # point by its squared distance from the mean. Extending the top edge to
+    # 1500 g m-2 closed it to 0.1%.
+    n_out = np.zeros((tfr.N_SLOT, 2))
+    f_edges = np.linspace(*FTURB_RANGE, FTURB_BINS + 1)
+
+    read_vars = list(tfr.READ_VARS)
+    if args.no_precip:
+        read_vars += [v for v in ("tp", "tcrw", "tcsw")
+                      if v in ds.data_vars and v not in read_vars]
+
+    for i0, block in tfr.iter_time_blocks(ds, read_vars, args.block_hours,
+                                          keep_mask=use_step):
+        n_t = block.sizes["valid_time"]
+        keep = use_step[i0:i0 + n_t]
+        if not keep.any():
+            continue
+
+        classes = tfr.classify_cells(
+            lsm, block["siconc"].values, args.lsm_tol,
+            args.open_ocean_max_siconc, args.sea_ice_min_siconc,
+            args.land_max_siconc)[keep]
+        fields = tfr.derived_fields(block, keep)
+        tcc = block["tcc"].values[keep]
+
+        finite = np.isfinite(tcc)
+        for arr in fields.values():
+            finite &= np.isfinite(arr)
+        with np.errstate(invalid="ignore"):
+            overcast = finite & (tcc >= args.min_cloud_fraction)
+        cloudy = overcast & ~tfr.precip_mask(block, keep, args)
+        ph = tfr.phase_masks(fields["lwp_g_m2"], fields["iwp_g_m2"], phase_kw)
+        liquid = np.zeros(tcc.shape, dtype=bool)
+        for name in tfr.PHASE_STACK:
+            liquid |= ph[name]
+        sel = (cloudy & liquid).ravel()
+        if not sel.any():
+            continue
+
+        values = np.empty((tfr.N_VAR, tcc.size), dtype=np.float64)
+        for vi, t in enumerate(tfr.TRACKED):
+            values[vi] = fields[t.key].ravel() - t.center
+        w_flat = np.broadcast_to(weights_2d, tcc.shape).ravel().astype(float)
+        cls_flat = classes.ravel()
+        site_flat = np.broadcast_to(site_mask, tcc.shape).ravel()
+
+        lb = np.digitize(fields["lwp_g_m2"].ravel(), edges_a) - 1
+        in_lwp = sel & (lb >= 0) & (lb < n_bin)
+
+        # ---- the pointwise coefficients, on the flattened sample axis -------
+        # lam_SH: SHF = lam_SH (T_2m - T_skin) = -lam_SH * dskt, so
+        # lam_SH = -SHF / dskt. lam_LH likewise, with dq = q_sat(T_sk) - q_2m
+        # and the Clausius factor converting a moisture slope into a
+        # temperature one.
+        dskt = fields["dskt_t2m_K"].ravel()
+        dq = fields["dq_g_kg"].ravel()
+        skt = fields["skt_K"].ravel()
+        lam_sh_pt = -_guarded_ratio(fields["shf_W_m2"].ravel(), dskt, DT_MIN_K)
+        k_lh = -_guarded_ratio(fields["lhf_W_m2"].ravel(), dq, DQ_MIN_G_KG)
+        lam_lh_pt = k_lh * (dq_sat_dT(skt, fields["sp_hPa"].ravel()) * 1000.0)
+        eps_slot = np.array([broadband_emissivity(250.0, n)
+                             for n in SLOT_ORDER])
+
+        slot_masks = [(tfr.CLASS_CODES[name], cls_flat == tfr.CLASS_CODES[name])
+                      for name in CLASS_ORDER]
+        slot_masks.append((tfr.SITE_SLOT, site_flat))
+        slot_masks.append((tfr.ALL_SLOT, np.ones(cls_flat.shape, dtype=bool)))
+
+        groups = [(slot * n_bin + b, in_lwp & m & (lb == b))
+                  for slot, m in slot_masks for b in range(n_bin)]
+        tfr.accumulate_moments(mom, groups, values, w_flat)
+
+        for slot, m in slot_masks:
+            n_out[slot, 0] += float(w_flat[sel & m & (lb < 0)].sum())
+            n_out[slot, 1] += float(w_flat[sel & m & (lb >= n_bin)].sum())
+
+        for slot, smask in slot_masks:
+            base = in_lwp & smask
+            if not base.any():
+                continue
+            lam_lw_pt = (4.0 * eps_slot[slot] * SIGMA_SB * skt**3)
+            f_pt = ((lam_sh_pt + lam_lh_pt)
+                    / (lam_lw_pt + lam_sh_pt + lam_lh_pt + lam_g_slot[slot]))
+            good = base & np.isfinite(f_pt)
+            for b in range(n_bin):
+                inb = base & (lb == b)
+                n_point[slot, b] += float(w_flat[inb].sum())
+                m = good & (lb == b)
+                if not m.any():
+                    continue
+                n_kept[slot, b] += float(w_flat[m].sum())
+                fi = np.digitize(f_pt[m], f_edges) - 1
+                inside = (fi >= 0) & (fi < FTURB_BINS)
+                ws = w_flat[m]
+                hist_out[slot, b] += float(ws[~inside].sum())
+                if inside.any():
+                    hist[slot, b] += np.bincount(
+                        fi[inside], weights=ws[inside], minlength=FTURB_BINS)
+
+    ds.close()
+    return LwpLambdas(mom=mom, hist=hist, hist_out=hist_out, n_point=n_point,
+                      n_kept=n_kept, n_out=n_out, edges=edges_a,
+                      period_s=period_s,
+                      lam_g=lam_g_slot, args=args, used=list(used))
+
+
+def _hist_quantiles(h: np.ndarray, edges: np.ndarray,
+                    q: tuple[float, ...] = (0.25, 0.5, 0.75)) -> np.ndarray:
+    """Weighted quantiles of one histogram column, by linear interpolation.
+
+    Returns NaN for every quantile when the column is empty. The interpolation
+    is within the bin the quantile falls in, so the answer is not quantised to
+    the bin width -- at 300 bins over a range of 1.5 that would otherwise be a
+    0.005 floor on the interquartile range, which is the same size as some of
+    the differences the figure is drawn to show.
+    """
+    total = h.sum()
+    if total <= 0.0:
+        return np.full(len(q), np.nan)
+    cum = np.concatenate([[0.0], np.cumsum(h)]) / total
+    return np.interp(q, cum, edges)
+
+
+def turbulent_fraction_by_lwp(LW: LwpLambdas, slot: int | str,
+                              alpha: float = 0.0,
+                              lam_g_override: float | None = None,
+                              period_s: float | None = None) -> dict:
+    """The turbulent share per LWP bin, by both routes, for one class.
+
+    Returns arrays of length ``n_bin``:
+
+    ``f_lambda``   the binned-regression estimate of equation (1). The line.
+    ``f_p25/50/75`` quantiles of the POINTWISE estimate. The shading.
+    ``f_regress``  the co-adjusted lower bound: -(d SHF/d DLR + d LHF/d DLR)
+                   fitted within the same bin. Negative where the air mass is
+                   driving both, which a skin response cannot produce.
+    ``lam_sh/lh/lw/g`` the coefficients the line was built from.
+    ``sh_r2/lh_r2`` how well the bulk formula fits inside the bin.
+    ``n_hours``    cell-hours in the bin; ``kept`` the fraction surviving the
+                   pointwise guards; ``out_frac`` the fraction of the pointwise
+                   distribution falling outside ``FTURB_RANGE``.
+    """
+    si = _slot_index(slot)
+    name = SLOT_ORDER[si]
+    n_bin = len(LW.edges) - 1
+    f_edges = np.linspace(*FTURB_RANGE, FTURB_BINS + 1)
+    # THE LINE MAY BE RE-EVALUATED AT ANY FORCING PERIOD; THE SHADING MAY NOT.
+    # lam_G enters the binned regression only at the end, so ``period_s`` here
+    # re-solves equation (1) for free. The pointwise histogram, by contrast,
+    # had lam_G folded in at accumulation time and is fixed at
+    # ``LW.period_s`` -- which is why a figure that draws a second period draws
+    # it without shading.
+    if lam_g_override is not None:
+        lam_g_v = lam_g_override
+    elif period_s is not None:
+        lam_g_v = lambda_g(period_s, COLUMN_BY_SLOT.get(name, "sea_ice"))
+    else:
+        lam_g_v = LW.lam_g[si]
+    eps = broadband_emissivity(250.0, name)
+
+    out = {k: np.full(n_bin, np.nan) for k in
+           ("f_lambda", "f_p25", "f_p50", "f_p75", "f_regress", "lam_sh",
+            "lam_lh", "lam_lw", "sh_r2", "lh_r2", "n_hours", "kept",
+            "out_frac", "T_skin_K", "alpha", "dtskin_dlwd", "lam_sh_bulk",
+            "c_h", "bulk_r2", "wspd_m_s", "f_lwu_regress")}
+    out["lam_g"] = np.full(n_bin, lam_g_v)
+    out["slot_name"] = name
+
+    for b in range(n_bin):
+        g = si * n_bin + b
+        n_h = float(LW.mom["n"][g]) * tfr.HOURS_PER_STEP
+        out["n_hours"][b] = n_h
+        if LW.mom["w"][g] <= 0.0:
+            continue
+
+        # --- the line: coefficients from the regression INSIDE the bin -------
+        # SHF = -lam_SH * (T_skin - T_2m), so lam_SH is the negated slope.
+        sh = tfr.moment_stats(LW.mom, g, "dskt_t2m_K", "shf_W_m2")
+        lh = tfr.moment_stats(LW.mom, g, "dq_g_kg", "lhf_W_m2")
+        T_skin = tfr.mean_of(LW.mom, g, "skt_K")
+        p_hPa = tfr.mean_of(LW.mom, g, "sp_hPa")
+        lam_sh = -sh["slope"]
+        # The moisture slope is W m-2 per g kg-1; the Clausius factor turns it
+        # into W m-2 per K, which is what equation (1) needs.
+        lam_lh = -lh["slope"] * float(dq_sat_dT(np.array(T_skin),
+                                                np.array(p_hPa))) * 1000.0
+        lam_lw = 4.0 * eps * SIGMA_SB * T_skin**3
+        turb = (1.0 - alpha) * (lam_sh + lam_lh)
+        denom = lam_lw + turb + lam_g_v
+        out["lam_sh"][b], out["lam_lh"][b] = lam_sh, lam_lh
+        out["lam_lw"][b], out["T_skin_K"][b] = lam_lw, T_skin
+        out["sh_r2"][b], out["lh_r2"][b] = sh["r2"], lh["r2"]
+        if denom > 0.0:
+            out["f_lambda"][b] = turb / denom
+
+        # --- the co-adjusted lower bound, in the same bin --------------------
+        # f_SH + f_LH of turbulent_flux_response.partition, restricted to this
+        # LWP bin. Positive means turbulence removed part of the perturbation;
+        # negative means the two rose together, which is the confounding test.
+        d_sh = tfr.slope_of(LW.mom, g, "shf_W_m2", "lwd_W_m2")
+        d_lh = tfr.slope_of(LW.mom, g, "lhf_W_m2", "lwd_W_m2")
+        out["f_regress"][b] = -(d_sh + d_lh)
+        out["f_lwu_regress"][b] = tfr.slope_of(LW.mom, g, "lwu_W_m2",
+                                               "lwd_W_m2")
+
+        # --- alpha: how much of the skin warming the air does too ------------
+        # Equation (3). This is the single number that decides whether the
+        # fixed-atmosphere limit is anywhere near the realised covariance, and
+        # it is a ratio of two regressions rather than an assumption.
+        d_tsk = tfr.slope_of(LW.mom, g, "skt_K", "lwd_W_m2")
+        d_t2m = tfr.slope_of(LW.mom, g, "t2m_K", "lwd_W_m2")
+        out["dtskin_dlwd"][b] = d_tsk
+        if np.isfinite(d_tsk) and abs(d_tsk) > 1e-9:
+            out["alpha"][b] = d_t2m / d_tsk
+
+        # --- lam_SH the OTHER way, and the transfer coefficient it implies ---
+        # The bulk formula is MULTIPLICATIVE in wind speed, so the predictor
+        # the physics names is U * (T_skin - T_2m), not the temperature
+        # difference alone. Regressing on that product returns rho c_p C_H
+        # directly -- no wind speed left in the units -- and multiplying by the
+        # mean wind gives a lam_SH that can be compared with the one above.
+        # The two agreeing is the evidence that lam_SH is not an artefact of
+        # regressing on the wrong variable; the implied C_H is what makes it
+        # checkable against a boundary-layer expectation.
+        prod = tfr.moment_stats(LW.mom, g, "u_dskt_K_m_s", "shf_W_m2")
+        U = tfr.mean_of(LW.mom, g, "wspd_m_s")
+        rho = (p_hPa * 100.0) / (287.05 * tfr.mean_of(LW.mom, g, "t2m_K"))
+        rho_cp_ch = -prod["slope"]
+        out["lam_sh_bulk"][b] = rho_cp_ch * U
+        out["c_h"][b] = rho_cp_ch / (rho * CP_AIR)
+        out["bulk_r2"][b] = prod["r2"]
+        out["wspd_m_s"][b] = U
+
+        # --- the shading: quantiles of the pointwise distribution ------------
+        col = LW.hist[si, b]
+        tot = col.sum()
+        out["kept"][b] = (LW.n_kept[si, b] / LW.n_point[si, b]
+                          if LW.n_point[si, b] > 0 else np.nan)
+        out["out_frac"][b] = (LW.hist_out[si, b] / (tot + LW.hist_out[si, b])
+                              if tot + LW.hist_out[si, b] > 0 else np.nan)
+        if tot > 0.0:
+            q25, q50, q75 = _hist_quantiles(col, f_edges)
+            out["f_p25"][b], out["f_p50"][b], out["f_p75"][b] = q25, q50, q75
+    return out
+
+
+# Reference transfer coefficients for the stability check in panel (d). These
+# are C_H = lam_SH / (rho c_p U) evaluated at rho = 1.35 kg m-3 and U = 6 m s-1
+# for the four stability regimes a boundary-layer scheme would distinguish --
+# the arithmetic is on the page so the comparison can be argued with rather
+# than taken on trust.
+C_H_REFERENCE: tuple[tuple[str, float], ...] = (
+    ("near-neutral", 1.47e-3),
+    ("weakly stable", 9.8e-4),
+    ("stable", 4.9e-4),
+    ("very stable", 2.0e-4),
+)
+
+
+def fig_turbulent_fraction_vs_lwp(LW: LwpLambdas, out_dir=None,
+                                  dpi: int | None = None,
+                                  alpha: float = 0.0,
+                                  slots: tuple[str, ...] = CLASS_ORDER,
+                                  min_hours: float = 500.0,
+                                  period2_s: float | None = None):
+    """The turbulent share of a DLR perturbation at fixed LWP, and its bracket.
+
+    Binning on LWP is what makes the classes comparable: they do not see the
+    same clouds, so a pooled land-minus-ocean difference is partly a difference
+    in cloud regime rather than in surface.
+
+    (a) The fixed-atmosphere estimate, equation (1) at alpha = 0, coefficients
+        fitted inside each bin, with the interquartile range of the POINTWISE
+        estimate shaded behind it. The shading is the spread of surface states
+        in the bin, not a confidence interval on the line. UPPER BOUND.
+    (b) The DLR regression of the two turbulent fluxes over the same bins --
+        what ``turbulent_flux_response.py`` reports. LOWER BOUND, and where it
+        goes negative it is diagnosing the air-mass confound rather than
+        measuring a surface response.
+    (c) Why the two differ: alpha, the fraction of the skin warming that the 2 m
+        air does too. At alpha = 1 the turbulent term of equation (3) vanishes
+        identically, whatever the coefficients are.
+    (d) Whether lam_SH is defensible: the transfer coefficient it implies,
+        against the four stability regimes. This panel exists because the
+        obvious objection to (a) is that a strongly stable Arctic boundary
+        layer cannot support these coefficients -- and the answer is that the
+        population is OVERCAST and liquid-bearing, which is the coupled state,
+        not the clear-sky stable one.
+    (e) Cell-hours per bin. (f) The share of the bin the pointwise estimate can
+        see, which over pack ice is small by construction.
+    """
+    import matplotlib.pyplot as plt
+
+    edges = LW.edges
+    centres = np.sqrt(edges[:-1] * edges[1:])      # geometric, for a log axis
+    res = {n: turbulent_fraction_by_lwp(LW, n, alpha=alpha) for n in slots}
+
+    fig, axes = plt.subplots(2, 3, figsize=(16.6, 9.6), sharex=True)
+    ax_a, ax_b, ax_c, ax_d, ax_e, ax_f = axes.ravel()
+
+    for name in slots:
+        r = res[name]
+        col = tfr.SLOT_COLORS[name]
+        ok = r["n_hours"] >= min_hours
+        if not ok.any():
+            continue
+        x = centres[ok]
+        if name in PINNED_SLOTS:
+            # NOT AN ESTIMATE, A BOUND. ERA5 prescribes the sea surface
+            # temperature, so lam_G over open water is not the conductance of
+            # any column -- it is whatever it takes to hold the skin at the
+            # analysed SST, and the larger it is the smaller the turbulent
+            # share. The honest statement is the interval between the
+            # nominal-column value and the clamped limit of zero, drawn as a
+            # band rather than a line that invites being read off.
+            ax_a.fill_between(x, 0.0, r["f_lambda"][ok], color=col,
+                              alpha=0.13, linewidth=0, hatch="////",
+                              edgecolor=col,
+                              label=f"{SLOT_LABELS[name]} (unconstrained)")
+            ax_a.plot(x, r["f_lambda"][ok], lw=1.4, ls=":", color=col)
+        else:
+            ax_a.fill_between(x, r["f_p25"][ok], r["f_p75"][ok], color=col,
+                              alpha=0.16, linewidth=0)
+            ax_a.plot(x, r["f_lambda"][ok], marker="o", ms=4, lw=1.9,
+                      color=col, label=SLOT_LABELS[name])
+            ax_a.plot(x, r["f_p50"][ok], lw=1.0, ls=":", color=col, alpha=0.85)
+        if period2_s is not None:
+            r2 = turbulent_fraction_by_lwp(LW, name, alpha=alpha,
+                                           period_s=period2_s)
+            ax_a.plot(x, r2["f_lambda"][ok], lw=1.1, ls=(0, (5, 2)),
+                      color=col, alpha=0.85)
+        ax_b.plot(x, r["f_regress"][ok], marker="s", ms=3.6, lw=1.6,
+                  ls="--", color=col, label=SLOT_LABELS[name])
+        ax_c.plot(x, r["alpha"][ok], marker="o", ms=3.4, lw=1.5, color=col)
+        ax_d.plot(x, r["c_h"][ok], marker="o", ms=3.4, lw=1.5, color=col)
+        ax_e.plot(x, r["n_hours"][ok], marker="o", ms=3.4, lw=1.5, color=col)
+        ax_f.plot(x, 100.0 * r["kept"][ok], marker="o", ms=3.4, lw=1.5,
+                  color=col)
+
+    ax_a.set_ylim(0.0, 1.0)
+    ax_a.set_ylabel("fraction of a 1 W m$^{-2}$ DLR perturbation\n"
+                    "taken up by SH + LH")
+    ax_a.set_title("(a)  Fixed atmosphere ($\\alpha = 0$): the upper bound",
+                   fontsize=11, loc="left", fontweight="bold")
+    ax_a.legend(fontsize=7.6, frameon=False, ncol=2, loc="lower left")
+    note_a = ("solid: coefficients fitted in the bin\n"
+              "dotted: median of the pointwise estimate\n"
+              "shading: its interquartile range")
+    if period2_s is not None:
+        note_a += (f"\ndashed: the same line at a "
+                   f"{_period_label(period2_s)} period")
+    ax_a.annotate(note_a, (0.985, 0.97), xycoords="axes fraction",
+                  ha="right", va="top", fontsize=7.4, bbox=tfr.NOTE_BOX,
+                  zorder=7)
+
+    ax_b.axhline(0.0, color="#333333", lw=1.0)
+    ax_b.set_ylabel("$-[d\\mathrm{SHF}/d\\mathrm{DLR} + "
+                    "d\\mathrm{LHF}/d\\mathrm{DLR}]$")
+    ax_b.set_title("(b)  Co-adjusted: the DLR regression, same bins",
+                   fontsize=11, loc="left", fontweight="bold")
+    ax_b.annotate("below zero: DLR and downward turbulent heat\n"
+                  "rose together, which no skin response can do.\n"
+                  "That is the air mass, not the surface.",
+                  (0.985, 0.03), xycoords="axes fraction", ha="right",
+                  va="bottom", fontsize=7.4, bbox=tfr.NOTE_BOX, zorder=7)
+
+    ax_c.axhline(1.0, color="#B2182B", lw=1.1, ls="--")
+    ax_c.set_ylim(0.0, 2.0)
+    ax_c.set_ylabel(r"$\alpha = \dfrac{dT_{2m}/d\mathrm{DLR}}"
+                    r"{dT_{skin}/d\mathrm{DLR}}$")
+    ax_c.set_title("(c)  Why (a) and (b) differ", fontsize=11, loc="left",
+                   fontweight="bold")
+    ax_c.annotate("$\\alpha = 1$: the air warms exactly as much as\n"
+                  "the skin, the skin-to-air difference does not\n"
+                  "move, and the turbulent term of eq. (3) is zero\n"
+                  "no matter how large $\\lambda_{SH}$ is",
+                  (0.985, 0.03), xycoords="axes fraction", ha="right",
+                  va="bottom", fontsize=7.4, bbox=tfr.NOTE_BOX, zorder=7)
+
+    for lab, v in C_H_REFERENCE:
+        ax_d.axhline(v, color="#777777", lw=0.8, ls=":")
+        ax_d.annotate(lab, (0.985, v), xycoords=("axes fraction", "data"),
+                      fontsize=7.0, color="#555555", va="bottom", ha="right")
+    ax_d.set_yscale("log")
+    ax_d.set_ylim(1.4e-4, 3.2e-3)
+    ax_d.set_ylabel("$C_H$ implied by $\\lambda_{SH}$\n"
+                    "(from the $U\\,\\Delta T$ regression)")
+    ax_d.set_title("(d)  Is $\\lambda_{SH}$ defensible?", fontsize=11,
+                   loc="left", fontweight="bold")
+
+    ax_e.set_yscale("log")
+    ax_e.set_ylabel("cell-hours in the bin")
+    ax_e.set_title("(e)  How much record each point rests on", fontsize=11,
+                   loc="left", fontweight="bold")
+
+    ax_f.set_ylim(0.0, 100.0)
+    ax_f.set_ylabel(f"% of cell-hours with\n"
+                    f"$|T_{{skin}} - T_{{2m}}| \\geq$ {DT_MIN_K:g} K")
+    ax_f.set_title("(f)  What the pointwise estimate sees", fontsize=11,
+                   loc="left", fontweight="bold")
+
+    for ax in (ax_a, ax_b, ax_c, ax_d, ax_e, ax_f):
+        ax.set_xscale("log")
+        ax.grid(alpha=0.2, lw=0.5, which="both")
+        ax.set_xlabel("liquid water path   [g m$^{-2}$]")
+
+    pop = LW.args.population
+    sub = (f"{LW.args.region} | seasons {LW.used[0]}/{LW.used[0] + 1}-"
+           f"{LW.used[-1]}/{LW.used[-1] + 1} | overcast (tcc $\\geq$ "
+           f"{LW.args.min_cloud_fraction:g}) and liquid-bearing\n"
+           f"$\\lambda_G$ at a {_period_label(LW.period_s)} forcing period; "
+           f"open water is drawn with the sea-ice column and is NOMINAL - "
+           f"ERA5 prescribes its SST, so its true $\\lambda_G$ is far larger "
+           f"and its turbulent share far smaller")
+    top = tfr._header_block(
+        fig,
+        "Fraction of a DLR perturbation taken up by turbulence, at fixed LWP",
+        sub,
+        note=("binning on LWP holds the cloud fixed, so what separates the "
+              "classes is the surface and not the cloud regime above it\n"
+              "(a) and (b) bracket the answer and neither is it: the "
+              "atmosphere is neither held fixed nor fully co-adjusted on the "
+              "timescale of a cloud event"),
+        title_fs=14)
+    fig.subplots_adjust(top=top - 0.02, bottom=0.07, left=0.062, right=0.99,
+                        hspace=0.30, wspace=0.27)
+    stem = f"turbulent_fraction_vs_lwp_{pop}_a{alpha:g}"
+    if out_dir is None:
+        return fig
+    from pathlib import Path
+    path = Path(out_dir) / f"{LW.args.region}_{stem}.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi or LW.args.dpi, bbox_inches="tight")
+    print(f"  -> {path}")
+    return fig
+
+
+def print_lwp_report(LW: LwpLambdas, alpha: float = 0.0,
+                     slots: tuple[str, ...] = CLASS_ORDER,
+                     min_hours: float = 500.0) -> None:
+    """The numbers behind the figure, per class and LWP bin."""
+    edges = LW.edges
+    for name in slots:
+        r = turbulent_fraction_by_lwp(LW, name, alpha=alpha)
+        print()
+        si = _slot_index(name)
+        n_bin = len(edges) - 1
+        lo_w, hi_w = LW.n_out[si]
+        in_w = float(sum(LW.mom["w"][si * n_bin + b]
+                         for b in range(n_bin)))
+        tot_w = in_w + lo_w + hi_w
+        print(f"{SLOT_LABELS[name]}   lam_G = {r['lam_g'][0]:.2f} W m-2 K-1"
+              + ("   [NOMINAL: SST is prescribed]"
+                 if name in PINNED_SLOTS else ""))
+        if tot_w > 0:
+            print(f"  coverage: {100 * in_w / tot_w:.2f}% of the class is "
+                  f"inside the bins  ({100 * lo_w / tot_w:.2f}% below "
+                  f"{edges[0]:g}, {100 * hi_w / tot_w:.2f}% above "
+                  f"{edges[-1]:g} g m-2)")
+        print(f"  {'LWP bin':>14}{'hours':>12}{'lam_SH':>9}{'lam_LH':>8}"
+              f"{'lam_LW':>8}{'f_turb':>8}{'p25':>7}{'p50':>7}{'p75':>7}"
+              f"{'kept%':>7}{'f_reg':>8}{'shr2':>7}")
+        for b in range(len(edges) - 1):
+            if not np.isfinite(r["n_hours"][b]) or r["n_hours"][b] < min_hours:
+                continue
+            print(f"  {edges[b]:6.0f}-{edges[b+1]:<7.0f}"
+                  f"{r['n_hours'][b]:>12,.0f}{r['lam_sh'][b]:>9.2f}"
+                  f"{r['lam_lh'][b]:>8.2f}{r['lam_lw'][b]:>8.2f}"
+                  f"{r['f_lambda'][b]:>8.3f}{r['f_p25'][b]:>7.3f}"
+                  f"{r['f_p50'][b]:>7.3f}{r['f_p75'][b]:>7.3f}"
+                  f"{100 * r['kept'][b]:>7.1f}{r['f_regress'][b]:>8.3f}"
+                  f"{r['sh_r2'][b]:>7.3f}")
 
 
 # ----------------------------------------------------------------------------
