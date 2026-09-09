@@ -277,6 +277,50 @@ COORDINATION_WINDOW_S = 3600.0
 RADAR_MIN_COVERAGE_FRACTION = 0.5
 
 # ---------------------------------------------------------------------------
+# Forty Meter Tower winds and the Taylor frozen-turbulence cloud-scale estimate
+# ---------------------------------------------------------------------------
+
+# Measurement heights of the NSA C1 40-m tower [m AGL], in the order they
+# appear along the `height` dimension of nsatwrC1.b1 (read back from the file's
+# own height coordinate -- this tuple is a convenience, not an override).
+TOWER_HEIGHTS_M = (2.0, 10.0, 20.0, 40.0)
+
+# Physical ceiling on a 1-min mean wind speed at this site [m/s]. ARM's own
+# valid_max on nsatwrC1.b1 wind speed is 100 m/s, which is a plausibility check
+# on the DATA LOGGER, not on the atmosphere, and it lets clear instrument
+# faults through: the 2025/26 season contains 43 one-minute samples above
+# 30 m/s at the 2-m level -- including several at exactly 99.0 m/s -- while the
+# 10, 20 and 40 m levels simultaneously read 10-12 m/s. Utqiagvik's strongest
+# recorded sustained winds are well under this ceiling, so anything above it is
+# a failed anemometer, not weather. Applied only as a screen; the affected
+# samples are reported, never silently dropped.
+MAX_PLAUSIBLE_WSPD_M_S = 30.0
+
+# Cold season used for the wind climatology, following the convention already
+# used for the Barrow cloud-susceptibility work: 1 October - 31 March.
+COLD_SEASON_START_MONTH_DAY = "10-01"
+COLD_SEASON_END_MONTH_DAY = "03-31"
+
+# Taylor (1938) frozen-turbulence hypothesis: a field advected past a fixed
+# sensor faster than it evolves maps time onto space as
+#
+#     L_horizontal = U_advection * dt_observed
+#
+# so a cloud that sits over the site for dt at mean wind U has a horizontal
+# extent L ALONG THE WIND DIRECTION. Two caveats worth carrying into any
+# interpretation:
+#   * L is a chord, not a diameter -- the site samples one transect through
+#     the cloud, generally off-centre, so L is a LOWER bound on the cloud's
+#     largest horizontal dimension.
+#   * The hypothesis fails when the cloud's own evolution timescale is
+#     comparable to dt. At U = 6 m/s a 1-h duration implies ~22 km, which is
+#     well beyond the ~10-20 min lifetime of individual Arctic stratocumulus
+#     cells; treat the long-duration end as the scale of the cloud DECK
+#     (a persistent, advecting field) rather than of any single cell.
+CLOUD_DURATION_MIN_S = 60.0  # 1 minute
+CLOUD_DURATION_MAX_S = 3600.0  # 1 hour
+
+# ---------------------------------------------------------------------------
 # Datastream registry
 # ---------------------------------------------------------------------------
 
@@ -540,6 +584,41 @@ DATASTREAMS: Dict[str, DatastreamSpec] = {
             "iwc_g_m3": ("iwc",),
             "lwp_g_m2": ("lwp",),
             "iwp_g_m2": ("iwp",),
+        },
+        role="extension",
+    ),
+    "twr": DatastreamSpec(
+        key="twr",
+        datastreams=("nsatwrC1.b1",),
+        description=(
+            "Forty Meter Tower meteorological data at NSA C1: 1-min averages "
+            "of wind speed, wind direction, temperature and RH at FOUR "
+            "heights -- 2, 10, 20 and 40 m AGL -- carried on a (time, height) "
+            "grid rather than as per-level variable names. Ingested from the "
+            "same METData collection as 'met' (see the file's `input_source` "
+            "attribute), so the 10-m level is numerically identical to "
+            "nsametC1.b1's single wind level; the tower stream is what adds "
+            "the 2, 20 and 40 m levels. Archive coverage runs at least "
+            "2008-present (checked 2026-09-08), i.e. it covers the modern "
+            "record that the 1998-2003 'mettwr' key does not.\n\n"
+            "This is the wind source for the Taylor frozen-turbulence "
+            "cloud-scale estimate: L = U * dt, with U taken at the top of the "
+            "tower as the best available surrogate for boundary-layer cloud "
+            "advection speed."
+        ),
+        variables={
+            # All wind/thermo fields are (time, height); the height coordinate
+            # is TOWER_HEIGHTS_M below. Two wind-speed flavours are exposed
+            # because they answer different questions: the arithmetic mean is
+            # the mean SPEED over the minute, the vector mean is the mean
+            # DISPLACEMENT per unit time and so is the quantity Taylor's
+            # hypothesis actually wants. They differ only when the direction
+            # swings inside the averaging interval.
+            "wspd_arith_m_s": ("wspd_arith_mean",),
+            "wspd_vec_m_s": ("wspd_vec_mean",),
+            "wdir_deg": ("wdir_vec_mean",),
+            "temp_c": ("temp_mean",),
+            "rh_pct": ("rh_mean",),
         },
         role="extension",
     ),

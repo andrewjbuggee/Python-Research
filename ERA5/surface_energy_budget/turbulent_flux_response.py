@@ -14,8 +14,9 @@ skin-to-air difference falls with it, and the turbulent flux that had been
 carrying heat AWAY from the surface weakens. The turbulent term therefore acts
 as a DAMPER on longwave forcing: it gives back part of what the radiation took.
 How much it gives back is a property of the surface, because T_skin's freedom
-to move is a property of the surface -- open water is pinned near the freezing
-point by an effectively infinite heat capacity, pack ice is not.
+to move is a property of the surface -- and over open water in ERA5 it has
+almost none, for a reason that is as much about the model as about the ocean.
+See "THE OPEN-OCEAN SURFACE DOES NOT RESPOND, AND WHY" below.
 
 SIGN CONVENTION -- READ THIS BEFORE INTERPRETING ANY NUMBER HERE
 ----------------------------------------------------------------
@@ -39,6 +40,61 @@ upward to begin with. Over pack ice in midwinter the sign often reverses
 decrease STRENGTHENS a downward flux. Both are damping; the sign of the flux is
 not the sign of the feedback. The figures below separate the two regimes by
 surface class rather than averaging over them.
+
+THE OPEN-OCEAN SURFACE DOES NOT RESPOND, AND WHY
+------------------------------------------------
+Every figure here shows open water behaving unlike the other classes: the skin
+temperature barely moves with DLR, the partition does not close, and the
+turbulent coefficients exceed one. The reason is worth stating precisely,
+because the obvious physical explanation is NOT the one operating.
+
+THE OBVIOUS EXPLANATION, WHICH IS RIGHT PHYSICS BUT THE WRONG DIAGNOSIS. Water
+at the freezing point cannot cool further: extract heat and it forms ice
+instead, and the latent heat of fusion, 334 kJ per kg, is an enormous buffer.
+An ocean surface sitting at its freezing point genuinely is pinned.
+
+BUT THE ERA5 OPEN OCEAN HERE IS MOSTLY NOT AT ITS FREEZING POINT. MEASURED,
+Barrow strip, Oct-Nov 2024, cells with siconc < 0.05:
+
+    mean skin temperature                                 273.35 K  (+0.2 C)
+    range                                        262.40 to 279.76 K
+    within 0.1 K of the seawater freezing point            0.2% of cell-hours
+    within 1.0 K                                          17.8% of cell-hours
+
+so for most hours the phase-change floor is one to two kelvin away and is not
+what is holding the surface still.
+
+WHAT IS HOLDING IT STILL IS THE MODEL. MEASURED, same window, the standard
+deviation of the HOUR-TO-HOUR CHANGE in skin temperature:
+
+    open ocean       0.053 K
+    marginal ice     0.283 K
+    sea ice          0.303 K
+    land             0.609 K
+
+The open-ocean surface moves roughly six times less per hour than pack ice and
+eleven times less than land. That is the signature of a field that is imposed
+rather than computed: ERA5 prescribes sea surface temperature and sea ice
+concentration from an external daily analysis and interpolates them in time, so
+over open water the skin temperature is essentially a boundary condition, with
+only a small cool-skin correction responding to the fluxes. Over land and ice
+ERA5 solves a surface energy balance for a skin layer of zero heat capacity, so
+there the skin temperature IS a prognostic response.
+
+CONSEQUENCE FOR EVERY FIGURE BELOW. The open-ocean column is measuring
+something structurally different from the land and ice columns. Over ice and
+land, d(T_skin)/d(DLR) is a genuine model response to the radiation. Over open
+water it is the residual correlation between a daily external SST field and an
+hourly DLR field, and the flux sensitivities there describe the ATMOSPHERE
+moving over an effectively fixed surface. That is why those bars are labelled
+and excluded from the axis scaling rather than read as a partition.
+
+For the real ocean the reader's instinct is the right one -- phase change would
+buffer the temperature once the freezing point is reached -- but ERA5 does not
+express that mechanism at hourly resolution, and in this window the water is
+mostly still above the freezing point in any case. Confidence: the measurements
+above are direct; the attribution to prescribed SST follows from ERA5's
+documented design rather than from anything tested here.
 
 WHAT IS ACTUALLY BEING MEASURED -- AN IMPORTANT CAVEAT
 ------------------------------------------------------
@@ -261,6 +317,13 @@ TRACKED: tuple[Tracked, ...] = (
     # al. (2025) stratify on daily surface pressure anomaly to test whether
     # synoptic variability explains their result.
     Tracked("sp_hPa", "Surface pressure", "hPa", 1010.0),
+    # The net surface flux, R = LWD - LWU + SW_net + SH + LH, every term
+    # positive downward. Tracked rather than assembled from the other five
+    # afterwards for two reasons: a density scatter needs the per-sample
+    # value, which a covariance matrix cannot supply; and once it is a column
+    # of its own, regressing it on DLR is an INDEPENDENT route to f_res, which
+    # the partition otherwise defines as a remainder.
+    Tracked("rnet_W_m2", r"Net surface flux $R$", "W m$^{-2}$", 0.0),
 )
 
 # ---------------------------------------------------------------------------
@@ -585,6 +648,8 @@ def derived_fields(block, keep: np.ndarray) -> dict[str, np.ndarray]:
         "u_dq_g_kg_m_s": wspd * dq,
         "sp_hPa": p_hpa,
     }
+    out["rnet_W_m2"] = (out["lwd_W_m2"] - out["lwu_W_m2"] + out["swnet_W_m2"]
+                        + out["shf_W_m2"] + out["lhf_W_m2"])
     return out
 
 
@@ -606,6 +671,14 @@ SLOT_LABELS["all"] = "All cells"
 SLOT_COLORS: dict[str, str] = dict(CLASS_COLORS)
 SLOT_COLORS[SITE_KEY] = SITE_COLOR
 SLOT_COLORS["all"] = "#555555"
+# Short forms for axes that carry all six groups side by side: the full
+# labels overlap below about an inch per group, and a tick label that
+# overlaps its neighbour is worse than an abbreviated one.
+SLOT_SHORT: dict[str, str] = {
+    "land": "Land", "coastal": "Coastal", "open_ocean": "Open\nocean",
+    "marginal_ice": "Marginal\nice", "sea_ice": "Sea ice",
+    SITE_KEY: "Utqiagvik", "all": "All",
+}
 
 # The six panels the scatter figures draw, in reading order: the five classes
 # then the site cell. "all" is accumulated but not panelled -- pooling five
@@ -724,6 +797,20 @@ DEFAULT_PANELS: dict[str, Panel2D] = {
     # y = 0.27x + 228.26 was fitted in.
     "lwp_dlr": Panel2D("lwp_g_m2", "lwd_W_m2", (0.0, 350.0), (100.0, 350.0),
                        180, 180, "y_on_x", "tcld_C"),
+    # The three remaining terms of the DLR partition, on the same axes and the
+    # same fit direction as "dlr_shf" and "dlr_lhf", so all five panels of the
+    # budget can be read the same way. Each fitted slope IS the corresponding
+    # partition fraction: +d(LWU)/d(DLR) for LWU, -d/d(DLR) for SW_net (the
+    # fraction is defined with the sign flipped), and f_res for R.
+    "dlr_lwu": Panel2D("lwd_W_m2", "lwu_W_m2", (140.0, 330.0), (150.0, 350.0),
+                       180, 180, "y_on_x"),
+    # SW_net cannot be negative, and in the dark half of the season it is
+    # exactly zero, so the mass piles on the bottom axis. That is the result
+    # for this panel, not a range that wants widening.
+    "dlr_swnet": Panel2D("lwd_W_m2", "swnet_W_m2", (140.0, 330.0),
+                         (0.0, 120.0), 180, 180, "y_on_x"),
+    "dlr_rnet": Panel2D("lwd_W_m2", "rnet_W_m2", (140.0, 330.0),
+                        (-450.0, 200.0), 180, 180, "y_on_x"),
 }
 
 
@@ -848,6 +935,55 @@ def accumulate_moments(acc: dict, groups, values: np.ndarray,
         acc["xy_u"][slot] += xs @ xs.T
 
 
+def moments_from_arrays(fields: dict, weights=None, group=None,
+                        n_group: int | None = None) -> dict:
+    """Build a moment accumulator from in-memory arrays.
+
+    The streaming path fills these accumulators from the ERA5 archive; this
+    fills the SAME structure from arrays already in memory, so an entirely
+    different dataset -- a shipboard record, say -- can be handed to
+    ``moment_stats``, ``multiple_stats``, ``partial_slope`` and the bootstrap
+    without any of those estimators being reimplemented. That is the point:
+    a comparison between two datasets is only a comparison if the estimator is
+    literally the same code.
+
+    Parameters
+    ----------
+    fields : ``{TRACKED key: 1-D array}``. Keys must be names in ``TRACKED``;
+        slots not supplied are left at zero, so they carry no variance and any
+        regression asking for them returns NaN rather than a wrong number.
+    weights : per-sample weights, default 1 (unweighted).
+    group : optional integer group index per sample, for building a
+        per-block accumulator in one call. ``-1`` drops a sample.
+
+    Every array must be finite: the moment update is a matrix product, so a
+    single NaN would propagate into every entry. Drop missing rows first.
+    """
+    bad = sorted(set(fields) - set(VAR_INDEX))
+    if bad:
+        raise KeyError(f"not tracked variables: {bad}. "
+                       f"Choose from {sorted(VAR_INDEX)}")
+    n = len(next(iter(fields.values())))
+    values = np.zeros((N_VAR, n), dtype=np.float64)
+    for k, v in fields.items():
+        a = np.asarray(v, dtype=np.float64)
+        if a.size != n:
+            raise ValueError(f"{k!r} has length {a.size}, expected {n}")
+        if not np.isfinite(a).all():
+            raise ValueError(f"{k!r} contains non-finite values; drop them first")
+        values[VAR_INDEX[k]] = a - CENTERS[VAR_INDEX[k]]
+
+    w = np.ones(n) if weights is None else np.asarray(weights, dtype=np.float64)
+    if group is None:
+        group = np.zeros(n, dtype=np.intp)
+        n_group = 1
+    group = np.asarray(group, dtype=np.intp)
+    n_group = int(n_group if n_group is not None else group.max() + 1)
+    acc = new_moments(n_group)
+    accumulate_moments(acc, [(g, group == g) for g in range(n_group)], values, w)
+    return acc
+
+
 def moment_stats(acc: dict, slot: int, x_key: str, y_key: str,
                  weighted: bool = True) -> dict:
     """Means, the ordinary least-squares fit of y on x, and its r and r^2.
@@ -920,8 +1056,9 @@ def moment_stats(acc: dict, slot: int, x_key: str, y_key: str,
 # the simple regression returns d(SHF)/d(LWD) = +3.2 W m-2 per W m-2, which as a
 # partition coefficient is nonsense -- more energy moves than arrives. It is not
 # a bug in the arithmetic; it is the air mass. Open water is the extreme case
-# because the surface is pinned near freezing, so essentially the whole
-# skin-to-air difference is the AIR moving.
+# because the ERA5 open-ocean surface barely moves at all, so essentially the
+# whole skin-to-air difference is the AIR moving. See the note on the
+# open-ocean surface below.
 #
 # The fix is a partial derivative: regress on DLR AND the confounder together,
 # and read the DLR coefficient. Holding T_2m fixed leaves only the pathway that
@@ -1292,6 +1429,128 @@ def partition(acc: dict, slot: int,
         "skt_mean": mean_of(acc, slot, "skt_K"),
         "shf_mean": mean_of(acc, slot, "shf_W_m2"),
     }
+
+
+# ----------------------------------------------------------------------------
+# The partition, term by term: the net flux, and the sign-honest ledger
+# ----------------------------------------------------------------------------
+# The surface energy balance with every term positive downward,
+#
+#     R = LWD - LWU + SW_net + SH + LH,
+#
+# as a coefficient vector over the tracked variables. R is the NET flux into
+# the surface: what the skin has left after the four exchanges with the
+# atmosphere, and therefore what must be conducted or stored below. ERA5's
+# single-level archive carries no ground heat flux, so this combination is the
+# only route to that term, and it is what ``partition`` calls ``f_res``.
+NET_FLUX_COMBO: dict[str, float] = {
+    "lwd_W_m2": 1.0,
+    "lwu_W_m2": -1.0,
+    "swnet_W_m2": 1.0,
+    "shf_W_m2": 1.0,
+    "lhf_W_m2": 1.0,
+}
+
+
+def combo_slope(acc: dict, slot: int, coefs: dict[str, float],
+                x_key: str = "lwd_W_m2",
+                control: tuple[str, ...] = ()) -> float:
+    """d(sum_k c_k v_k)/d(x) holding ``control`` fixed, in ONE regression.
+
+    The point of this function is that it does not sum slopes. It forms the
+    linear combination inside the covariance matrix and then solves once, so
+    the number it returns comes back through a different matrix solve than
+    adding the individual ``partial_slope`` calls does. Agreement between the
+    two is what ``partition_closure`` checks.
+
+    That agreement is guaranteed in exact arithmetic -- covariance is linear in
+    each argument, and so is the multiple-regression coefficient -- which is
+    exactly why the partition is allowed to define one of its five terms as the
+    remainder of the other four. The check is on the implementation and on the
+    floating-point path, not on a physical claim.
+    """
+    if acc["w"][slot] <= 0.0:
+        return float("nan")
+    pred = (x_key,) + tuple(k for k in control if k != x_key)
+    keys = pred + tuple(k for k in coefs if k not in pred)
+    cov = _covariance_block(acc, slot, keys)
+    idx = {k: i for i, k in enumerate(keys)}
+    c = np.zeros(len(keys))
+    for k, v in coefs.items():
+        c[idx[k]] += v
+    n_p = len(pred)
+    try:
+        beta = np.linalg.solve(cov[:n_p, :n_p], cov[:n_p, :] @ c)
+    except np.linalg.LinAlgError:
+        return float("nan")
+    return float(beta[0])
+
+
+def net_flux_slope(acc: dict, slot: int,
+                   control: tuple[str, ...] = ()) -> float:
+    """d(R)/d(DLR): the net flux into the surface per W m-2 of DLR."""
+    return combo_slope(acc, slot, NET_FLUX_COMBO, "lwd_W_m2", control)
+
+
+# The five fractions are regression coefficients, and nothing constrains a
+# regression coefficient to lie in [0, 1]. Where one comes out NEGATIVE the
+# channel is disposing of LESS than it did before, so relative to the base
+# state the surface keeps more.
+#
+# BE CAREFUL WHAT THAT IS CLAIMING. Over open water the turbulent fluxes are
+# upward 90% of the time and stay upward: the binned mean sensible flux runs
+# from -105 W m-2 in the lowest DLR bin to -13 in the highest without reaching
+# zero. Nothing new arrives from the atmosphere. An ordinary heat loss is
+# suppressed -- which is exactly the turbulent damping this module set out to
+# measure -- and in an ANOMALY budget a suppressed loss is indistinguishable
+# from a gain. Over sea ice, where the mean flux is downward and strengthens
+# with DLR, the flux really is carrying more energy in; the sign of the
+# fraction does not distinguish the two cases, and only the mean flux does.
+#
+# Either way, stacking a negative share on a bar that is supposed to read as
+# "where the 1 W m-2 went" is a category error: the stack still sums to one,
+# but only because the sinks overshoot to compensate, which is why open water
+# shows f_res above three.
+#
+# The ledger below fixes the presentation without touching the estimates. Split
+# the five terms by sign, put the DLR unit itself on the supply side, and
+# normalise both sides by the same GROSS total
+#
+#     G = 1 + sum of the magnitudes of the negative terms
+#       =     sum of the positive terms                     (identically)
+#
+# so supply and disposal each sum to one for EVERY surface class, open water
+# included. What was an off-scale bar becomes a readable statement: over open
+# water only a quarter of the energy arriving with a DLR anomaly is the DLR
+# anomaly, three quarters is turbulent, and essentially all of it goes into a
+# surface that ERA5 will not let warm.
+LEDGER_DLR_LABEL = "DLR anomaly (the 1 W m$^{-2}$)"
+LEDGER_DLR_COLOR = "#C8A02C"
+
+
+def partition_ledger(part: dict) -> dict:
+    """Re-cast one ``partition`` result as a two-sided ledger summing to one.
+
+    Returns ``{"gross": G, "supply": {...}, "disposal": {...}}`` with both
+    inner dicts keyed by the ``PARTITION_TERMS`` keys plus ``"dlr"`` on the
+    supply side, and both summing to 1 up to rounding. ``gross`` is the total
+    energy per W m-2 of DLR that changes hands, and it is the number to report
+    beside the bar: G = 1 means the DLR anomaly is the whole story, G = 4 means
+    it is a quarter of it.
+    """
+    vals = {k: part[k] for k, _, _ in PARTITION_TERMS}
+    gross = 1.0 + sum(-v for v in vals.values() if v < 0)
+    if not np.isfinite(gross) or gross <= 0.0:
+        nan = {k: float("nan") for k in vals}
+        return {"gross": float("nan"), "supply": nan, "disposal": dict(nan)}
+    supply = {"dlr": 1.0 / gross}
+    disposal = {}
+    for k, v in vals.items():
+        if v < 0:
+            supply[k] = -v / gross
+        else:
+            disposal[k] = v / gross
+    return {"gross": gross, "supply": supply, "disposal": disposal}
 
 
 # ----------------------------------------------------------------------------
@@ -2002,6 +2261,26 @@ def print_report(A: Analysis, population: str | None = None,
     # are bulk fluxes, that predictor should fit far better than Delta alone --
     # and the gap is a measure of how much of the "unexplained scatter" was
     # only ever wind speed.
+    # The DLR ladder, in variance-explained terms: what does adding wind buy,
+    # and why does it stop well short of the bulk specification?
+    print("\n  Variance explained for SHF, by specification  [R2]")
+    print(f"    {'class':<20}{'DLR':>8}{'DLR+U':>8}{'DLR+U+T2m':>11}"
+          f"{'dT':>8}{'U.dT':>8}{'U,dT,U.dT':>11}")
+    for slot in PANEL_SLOTS + (ALL_SLOT,):
+        def r2(keys, sl=slot):
+            return multiple_stats(acc, sl, "shf_W_m2", keys)["r2"]
+        print(f"    {SLOT_LABELS[SLOT_ORDER[slot]]:<20}"
+              f"{r2(('lwd_W_m2',)):>8.3f}{r2(('lwd_W_m2', 'wspd_m_s')):>8.3f}"
+              f"{r2(('lwd_W_m2', 'wspd_m_s', 't2m_K')):>11.3f}"
+              f"{r2(('dskt_t2m_K',)):>8.3f}{r2(('u_dskt_K_m_s',)):>8.3f}"
+              f"{r2(('wspd_m_s', 'dskt_t2m_K', 'u_dskt_K_m_s')):>11.3f}")
+    print("    Adding wind to the DLR fit helps, but cannot reach the bulk "
+          "columns: DLR reaches the flux")
+    print("    only through the skin temperature, whereas dT IS the driver. "
+          "Closing the gap would mean")
+    print("    putting the mediator into the regression, which destroys the "
+          "DLR effect being estimated.")
+
     print("\n  Specification check: does the physically correct predictor fit "
           "better?")
     print(f"    {'class':<20}{'SHF~dT':>9}{'SHF~U.dT':>11}"
@@ -2107,14 +2386,14 @@ def print_report(A: Analysis, population: str | None = None,
 SEAWATER_FREEZING_K = 271.35
 
 # A partition coefficient larger than this in magnitude is not a partition: it
-# means more energy moved than arrived, which happens where the surface is
-# pinned and the regression is describing the air mass instead. Used to set
+# means more energy moved than arrived, which happens where the surface cannot
+# respond and the regression is describing the air mass instead. Used to set
 # readable axis limits, never to hide a bar.
 PARTITION_SANE_MAX = 2.5
 
 # Above this magnitude d(flux)/d(DLR) is no longer a surface response: more
 # energy is moving than the radiation delivered, which happens where the
-# surface is pinned and the regression is tracking the air mass instead.
+# surface cannot respond and the regression tracks the air mass instead.
 TURBULENT_SANE_MAX = 0.6
 
 # Floor of the shared density colour scale, as a fraction of the densest bin in
@@ -2224,7 +2503,11 @@ def _header_block(fig, title: str, subtitle: str, note: str | None = None,
              color="#444444", linespacing=SUB_LINESPACING)
     y -= sub_h
     if note:
-        y -= 0.05 / fig_h
+        # A multi-line note needs a real gap under the subtitle: at the single
+        # line these blocks were written for, 0.05 in was enough, but the
+        # subtitle's own descenders reach into it once the note is tall enough
+        # to sit close.
+        y -= (0.05 + 0.06 * note.count("\n")) / fig_h
         fig.text(0.5, y, note, ha="center", va="top", fontsize=NOTE_FS,
                  color="#8a5a00", style="italic")
         y -= note_h
@@ -2297,6 +2580,21 @@ def _slope_text(stats: dict, orient: str, panel: Panel2D) -> str:
     return f"dx/dy = {stats['slope']:+.3g} {x_u} / ({y_u})"
 
 
+def _occupied_span(h: np.ndarray, panel: Panel2D):
+    """The x and y ranges the panel's data actually occupy.
+
+    Fits and overlays are swept across this rather than the full axis, so a
+    line never makes a claim about a region the class never visits.
+    """
+    xc = _bin_centers(panel.x_range[0], panel.x_range[1], panel.x_bins)
+    yc = _bin_centers(panel.y_range[0], panel.y_range[1], panel.y_bins)
+    occ = h > 0
+    if not occ.any():
+        return panel.x_range, panel.y_range
+    xi, yi = np.nonzero(occ)
+    return (xc[xi.min()], xc[xi.max()]), (yc[yi.min()], yc[yi.max()])
+
+
 def _density_panel(ax, h: np.ndarray, panel: Panel2D, fits: dict,
                    label: str, color: str, out_weight: float,
                    fit_mode: str = DEFAULT_FIT_MODE,
@@ -2306,7 +2604,8 @@ def _density_panel(ax, h: np.ndarray, panel: Panel2D, fits: dict,
                    colour_norm: tuple[float, float] | None = None,
                    colour_cmap: str = "viridis",
                    note_loc: str = "upper left",
-                   overlay_lines=None, extra_note=None):
+                   overlay_lines=None, extra_note=None,
+                   draw_fit: bool = True):
     """One density-coloured scatter panel with its weighted linear fit.
 
     Colour is the area-weighted frequency of each bin, normalised to the
@@ -2371,7 +2670,10 @@ def _density_panel(ax, h: np.ndarray, panel: Panel2D, fits: dict,
         x_span, y_span = panel.x_range, panel.y_range
 
     drawn = ["y_on_x", "x_on_y"] if fit_orient == "both" else [fit_orient]
-    for orient in drawn:
+    # ``draw_fit=False`` keeps the fit's NUMBERS in the annotation but leaves
+    # its line off the panel, for a figure whose subject is a different fit and
+    # where a second line would only invite the two to be confused.
+    for orient in (drawn if draw_fit else []):
         line = _fit_line_xy(fits[orient], orient, panel, x_span, y_span)
         if line is None:
             continue
@@ -2399,7 +2701,7 @@ def _density_panel(ax, h: np.ndarray, panel: Panel2D, fits: dict,
     # subtitle rather than the fit box below -- it describes the PANEL, not
     # the fit, and crowds the corner annotation otherwise.
     ref = fits[drawn[0]]
-    sub_bits = [f"{ref['n_hours']:,.0f} cell-hours"]
+    sub_bits = [f"{ref['n_hours']:,.0f} cell-hours"]  # panel context, always
     if out_weight > 0.005:
         sub_bits.append(f"{100 * out_weight:.1f}% outside axes")
     ax.annotate("  |  ".join(sub_bits), xy=(0.5, 1.0), xycoords="axes fraction",
@@ -2409,8 +2711,13 @@ def _density_panel(ax, h: np.ndarray, panel: Panel2D, fits: dict,
     # r^2 is symmetric, so it is annotated once no matter how many fits are
     # drawn. In "both" mode the inflation factor is spelled out, because that
     # number IS the reason the two lines differ.
-    lines = [_slope_text(fits[o], o, panel) for o in drawn]
-    lines.append(f"$r^2$ = {fits['r2']:.3f}   (r = {ref['r']:+.3f})")
+    # When the fit's line is not drawn, its equation does not belong in the box
+    # either: a number in the annotation with no line on the panel is exactly
+    # the ambiguity suppressing the line was meant to remove.
+    lines = []
+    if draw_fit:
+        lines = [_slope_text(fits[o], o, panel) for o in drawn]
+        lines.append(f"$r^2$ = {fits['r2']:.3f}   (r = {ref['r']:+.3f})")
     lines.extend(extra_note or [])
     if fit_orient == "both" and np.isfinite(fits["inflation"]):
         lines.append(f"inverting dy/dx overstates dx/dy "
@@ -2464,7 +2771,9 @@ def _scatter_figure(A: Analysis, panel_name: str, title: str, stem: str,
                     fit_mode: str | None = None,
                     fit_orient: str | None = None,
                     note_loc: str | None = None,
-                    show_legend: bool = True):
+                    show_legend: bool = True,
+                    overlay=None, stem_suffix: str = "",
+                    draw_fit: bool = True):
     """Six-panel density scatter of one y against sensible heat flux.
 
     Panels are the five surface classes then the ARM site cell. The site is not
@@ -2526,8 +2835,9 @@ def _scatter_figure(A: Analysis, panel_name: str, title: str, stem: str,
         w_tot = acc["w"][slot]
         out_frac = (A.sec["hist_out"][panel_name][slot] / w_tot
                     if w_tot > 0 else 0.0)
-        ov_lines, ov_note = (overlay(A, acc, slot, panel)
-                             if overlay is not None else ([], []))
+        ov_lines, ov_note = (
+            overlay(A, acc, slot, panel, _occupied_span(h_all[slot], panel)[0])
+            if overlay is not None else ([], []))
         s = _density_panel(ax, h_all[slot], panel, fits,
                            SLOT_LABELS[name], SLOT_COLORS[name], out_frac,
                            fit_mode=fmode, fit_orient=orient,
@@ -2537,7 +2847,8 @@ def _scatter_figure(A: Analysis, panel_name: str, title: str, stem: str,
                            note_loc=(note_loc or
                                      ("lower right" if panel_name == "lwp_dlr"
                                       else "upper left")),
-                           overlay_lines=ov_lines, extra_note=ov_note)
+                           overlay_lines=ov_lines, extra_note=ov_note,
+                           draw_fit=draw_fit)
         sm = s if s is not None else sm
     for ax in axes[len(PANEL_SLOTS):]:
         ax.set_visible(False)
@@ -2619,6 +2930,62 @@ def fig_shf_vs_dlr(A: Analysis, out_dir=None, dpi: int | None = None,
         "Surface sensible heat flux against downwelling longwave",
         "shf_vs_dlr", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
         note_loc="lower right", show_legend=False)
+
+
+def fig_lwu_vs_dlr(A: Analysis, out_dir=None, dpi: int | None = None,
+                   fit_mode: str | None = None, fit_orient: str | None = None):
+    """Upwelling longwave against downwelling longwave, by surface class.
+
+    Figure 2 with the radiative term substituted in. The fitted slope is
+    f_LWU, the first term of the DLR partition, and it is the one term of the
+    five whose panel is close to a straight line -- so its slope is a
+    coefficient rather than a summary of a curve.
+    """
+    return _scatter_figure(
+        A, "dlr_lwu",
+        "Upwelling longwave against downwelling longwave",
+        "lwu_vs_dlr", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower right", show_legend=False)
+
+
+def fig_swnet_vs_dlr(A: Analysis, out_dir=None, dpi: int | None = None,
+                     fit_mode: str | None = None,
+                     fit_orient: str | None = None):
+    """Net shortwave against downwelling longwave, by surface class.
+
+    The fitted slope is -f_SW. Read the panel before the number: the mass sits
+    on SW_net = 0 through the dark half of the season, so the line is drawn
+    through a distribution that is mostly a single point, and r^2 runs 0.000 to
+    0.011. There is no mechanism here -- see the polar-night check in the
+    notebook -- only the covariance of cloud with itself.
+    """
+    return _scatter_figure(
+        A, "dlr_swnet",
+        "Net surface shortwave against downwelling longwave",
+        "swnet_vs_dlr", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="upper left", show_legend=False)
+
+
+def fig_rnet_vs_dlr(A: Analysis, out_dir=None, dpi: int | None = None,
+                    fit_mode: str | None = None,
+                    fit_orient: str | None = None):
+    """Net surface flux against downwelling longwave, by surface class.
+
+    R = LWD - LWU + SW_net + SH + LH, positive into the surface: what the skin
+    has left after the four exchanges with the atmosphere, and therefore what
+    is conducted or stored below.
+
+    THE FITTED SLOPE ON THIS PANEL IS f_res, AND IT IS FITTED HERE DIRECTLY.
+    The partition defines f_res as the remainder of the other four fractions;
+    this panel regresses an independently accumulated column on DLR and gets
+    the same number, which is checked in ``self_check``. It is the difference
+    between a residual and a leftover.
+    """
+    return _scatter_figure(
+        A, "dlr_rnet",
+        "Net surface flux against downwelling longwave",
+        "rnet_vs_dlr", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower left", show_legend=False)
 
 
 def fig_shf_vs_dskt(A: Analysis, out_dir=None, dpi: int | None = None,
@@ -2744,7 +3111,7 @@ def fig_response_partition(A: Analysis, out_dir=None, dpi: int | None = None,
                    -PARTITION_SANE_MAX)
         ax_b.set_ylim(min(y_lo, -0.15), max(y_hi, 1.15))
     for xi in np.flatnonzero(~sane):
-        ax_b.annotate("off scale:\nsurface\npinned", (xi, 0.42),
+        ax_b.annotate("off scale:\nsurface\nprescribed", (xi, 0.42),
                       xycoords=("data", "axes fraction"), ha="center",
                       va="center", fontsize=7.6, color="#8a5a00",
                       fontweight="bold", bbox=NOTE_BOX, zorder=8)
@@ -2804,6 +3171,318 @@ def fig_response_partition(A: Analysis, out_dir=None, dpi: int | None = None,
     )
     fig.tight_layout(rect=(0, 0, 1, top))
     return _save(fig, A, f"dlr_partition_{pop}_{cname}", out_dir, dpi)
+
+
+# ----------------------------------------------------------------------------
+# Figures 13 and 14: the partition on its own, term by term
+# ----------------------------------------------------------------------------
+def partition_closure(acc: dict, slot: int,
+                      control: tuple[str, ...] = ()) -> dict:
+    """``f_res`` by all three routes that reach it, and the gaps between them.
+
+    ``f_res``        the remainder of the other four fractions, as ``partition``
+                     defines it -- four separate least-squares solves, summed.
+    ``f_res_combo``  the same linear combination formed INSIDE the covariance
+                     matrix and solved once (``combo_slope``). A different
+                     matrix solve; agreement is guaranteed in exact arithmetic
+                     and checks the implementation, not a physical claim.
+    ``f_res_direct`` the regression of the accumulated ``rnet_W_m2`` column on
+                     DLR. This one is INDEPENDENT: R is built per sample during
+                     the streaming pass and carries its own moments, so nothing
+                     about this number is guaranteed by the algebra of the
+                     other four.
+    """
+    p = partition(acc, slot, control=control)
+    combo = net_flux_slope(acc, slot, control=control)
+    direct = partial_slope(acc, slot, "rnet_W_m2", "lwd_W_m2", control)
+    return {"f_res": p["f_res"], "f_res_combo": combo,
+            "f_res_direct": direct,
+            "gap": p["f_res"] - direct,
+            "gap_combo": p["f_res"] - combo,
+            "sum": sum(p[k] for k, _, _ in PARTITION_TERMS)}
+
+
+def fig_partition_terms(A: Analysis, out_dir=None, dpi: int | None = None,
+                        population: str | None = None,
+                        control: str | None = None):
+    """The five partition fractions as grouped bars, with the closure check.
+
+    The companion to the five scatter panels -- ``fig_shf_vs_dlr``,
+    ``fig_lhf_vs_dlr``, ``fig_lwu_vs_dlr``, ``fig_swnet_vs_dlr`` and
+    ``fig_rnet_vs_dlr`` -- each of which fits one term of this bar.
+
+    GROUPED, NOT STACKED. Stacking hides the sign of a term, and over open
+    water the sign is the whole story: three of the five fractions are negative
+    there, which is why the residual runs past three. The stacked version is
+    panel (b) of ``fig_response_partition``, kept because it is the readable
+    form wherever the negatives are small.
+    """
+    import matplotlib.pyplot as plt
+
+    pop = population or A.args.population
+    cname = control or A.args.control
+    ctrl = CONTROL_SETS[cname]
+    acc = A.acc(pop)
+    slots = list(PANEL_SLOTS)
+    names = [SLOT_ORDER[s] for s in slots]
+    parts = [partition(acc, s, control=ctrl) for s in slots]
+    closes = [partition_closure(acc, s, control=ctrl) for s in slots]
+
+    fig, ax_d = plt.subplots(figsize=(10.6, 5.6))
+
+    x = np.arange(len(slots))
+    n_term = len(PARTITION_TERMS)
+    bw = 0.8 / n_term
+    for j, (key, term_label, color) in enumerate(PARTITION_TERMS):
+        v = np.array([p[key] for p in parts])
+        off = (j - (n_term - 1) / 2) * bw
+        ax_d.bar(x + off, v, bw * 0.92, color=color, edgecolor="#333333",
+                 linewidth=0.5, label=term_label)
+        for xi, vi in zip(x, v):
+            if abs(vi) > 0.20:
+                ax_d.annotate(f"{vi:.2f}", (xi + off, vi),
+                              textcoords="offset points",
+                              xytext=(0, 3 if vi >= 0 else -14), ha="center",
+                              fontsize=6.8, rotation=90)
+    ax_d.axhline(0.0, color="#333333", lw=0.8)
+    stack = np.array([[p[k] for k, _, _ in PARTITION_TERMS] for p in parts])
+    lo, hi = float(np.nanmin(stack)), float(np.nanmax(stack))
+    pad = 0.12 * (hi - lo)
+    ax_d.set_ylim(min(lo - pad, -0.1), max(hi + pad, 1.25))
+    ax_d.set_ylabel("fraction of $d(LWD)$")
+    ax_d.set_xticks(x)
+    ax_d.set_xticklabels([SLOT_SHORT[n] for n in names], fontsize=9)
+    ax_d.grid(axis="y", alpha=0.2, lw=0.5)
+    ax_d.legend(fontsize=8.5, ncol=5, frameon=False, loc="upper center",
+                bbox_to_anchor=(0.5, -0.10))
+
+    # The closure, stated on the figure rather than left to the reader's
+    # arithmetic. The DIRECT number is the one worth reporting: R is
+    # accumulated per sample, so its regression on DLR is not constrained by
+    # the algebra that defines f_res as a remainder.
+    gap = max(abs(c["gap"]) for c in closes if np.isfinite(c["gap"]))
+    gapc = max(abs(c["gap_combo"]) for c in closes
+               if np.isfinite(c["gap_combo"]))
+    dsum = max(abs(c["sum"] - 1.0) for c in closes if np.isfinite(c["sum"]))
+    ax_d.annotate(
+        "closure, over the six groups:\n"
+        f"max |sum of the five $-$ 1|  =  {dsum:.1e}\n"
+        f"max |$f_{{res}}$ $-$ fit of $R$ on DLR|  =  {gap:.1e}   "
+        "(independent column)\n"
+        f"max |$f_{{res}}$ $-$ same combination in the covariance|  = "
+        f" {gapc:.1e}",
+        (0.985, 0.97), xycoords="axes fraction", ha="right", va="top",
+        fontsize=7.8, bbox=NOTE_BOX, zorder=7)
+    if min(min(p[k] for k, _, _ in PARTITION_TERMS) for p in parts) < -0.1:
+        ax_d.annotate("bars below zero: that channel removes LESS\n"
+                      "than before, so the surface keeps more and\n"
+                      "the residual must exceed 1 to close",
+                      (0.985, 0.03), xycoords="axes fraction", ha="right",
+                      va="bottom", fontsize=7.6, bbox=NOTE_BOX, zorder=7)
+
+    top = _header_block(
+        fig, "Where each additional W m$^{-2}$ of DLR goes, term by term",
+        _figure_subtitle(A, pop),
+        note=(f"{CONTROL_LABELS[cname]}; each bar is the slope of one scatter "
+              "figure: LWU, SH, LH, SW$_{net}$ and R, each fitted on DLR\n"
+              "slopes are d/d(DLR) across synoptic variability, not a "
+              "controlled perturbation"),
+        title_fs=14,
+    )
+    fig.subplots_adjust(top=top - 0.02, bottom=0.16, left=0.09, right=0.985)
+    return _save(fig, A, f"dlr_partition_terms_{pop}_{cname}", out_dir, dpi)
+
+
+def fig_partition_ledger(A: Analysis, out_dir=None, dpi: int | None = None,
+                         population: str | None = None,
+                         control: str | None = None,
+                         alt_control: str | None = None):
+    """The same five numbers as a ledger that sums to one for every class.
+
+    The stacked partition fails over open water for a presentational reason,
+    not a numerical one: three of the five fractions come out negative there,
+    so the stack only closes because the residual overshoots past three.
+    Splitting the terms by sign fixes it. In an anomaly budget a negative term
+    is a SOURCE -- not because energy arrives that did not before, but because
+    a loss weakened -- and it belongs on the supply side beside the DLR anomaly
+    itself; positive terms are SINKS.
+    Normalising both sides by the same gross total G (see ``partition_ledger``)
+    makes each side sum to one for every class, open water included.
+
+    Panels (a) and (b) are the same ledger under the single-variable regression
+    and under the multiple regression, so the two estimators can be compared
+    bar for bar. Panel (c) carries G itself, which is the one number that says
+    how much of the co-varying energy the DLR anomaly actually is.
+    """
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    pop = population or A.args.population
+    cname = control or A.args.control
+    aname = alt_control or ALT_CONTROL[cname]
+    acc = A.acc(pop)
+    slots = list(PANEL_SLOTS)
+    labels = [SLOT_LABELS[SLOT_ORDER[s]] for s in slots]
+    x = np.arange(len(slots))
+    bw = 0.36
+
+    # Two rows rather than three panels abreast: six groups of stacked bars
+    # need about an inch of width each before the tick labels collide, and the
+    # gross-factor panel reads better full width anyway, since it is the one
+    # panel where the classes are meant to be compared against each other.
+    fig = plt.figure(figsize=(13.6, 10.6))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.35, 1.0], hspace=0.42,
+                          wspace=0.24)
+    ax_a = fig.add_subplot(gs[0, 0])
+    ax_b = fig.add_subplot(gs[0, 1])
+    ax_c = fig.add_subplot(gs[1, :])
+
+    order = [k for k, _, _ in PARTITION_TERMS]
+    color_of = {k: c for k, _, c in PARTITION_TERMS}
+    label_of = {k: lab for k, lab, _ in PARTITION_TERMS}
+
+    def _ledger_panel(ax, name, title):
+        ctrl = CONTROL_SETS[name]
+        led = [partition_ledger(partition(acc, s, control=ctrl)) for s in slots]
+        for side, off, hatch in (("supply", -bw / 2, "///"),
+                                 ("disposal", bw / 2, None)):
+            bottom = np.zeros(len(slots))
+            for key in ["dlr"] + order:
+                v = np.array([L[side].get(key, 0.0) for L in led])
+                if not np.any(np.abs(v) > 1e-12):
+                    continue
+                col = LEDGER_DLR_COLOR if key == "dlr" else color_of[key]
+                lab = LEDGER_DLR_LABEL if key == "dlr" else label_of[key]
+                ax.bar(x + off, v, bw, bottom=bottom, color=col,
+                       edgecolor="white", linewidth=0.7,
+                       hatch=hatch if key != "dlr" else None)
+                del lab
+                for xi, vi, bi in zip(x, v, bottom):
+                    if vi > 0.10:
+                        ax.annotate(f"{vi:.2f}", (xi + off, bi + vi / 2),
+                                    ha="center", va="center", fontsize=7.2,
+                                    color="white" if col != "#BBBBBB"
+                                    else "#333333")
+                bottom = bottom + v
+        for xi, L in zip(x, led):
+            ax.annotate(f"{L['gross']:.2f}", (xi, 1.015), ha="center",
+                        va="bottom", fontsize=7.8, fontweight="bold",
+                        color="#333333")
+        ax.axhline(1.0, color="#333333", lw=1.0, ls="--")
+        ax.set_ylim(0.0, 1.20)
+        ax.set_ylabel("share of the gross energy $G$\n"
+                      "left bar: supply (hatched);  right bar: disposal")
+        ax.set_title(title + "\nnumber above each pair is $G$", fontsize=10.5,
+                     loc="left", fontweight="bold")
+        return led
+
+    def _panel_title(letter: str, name: str) -> str:
+        kind = ("single-variable regression on DLR" if not CONTROL_SETS[name]
+                else "multiple regression: the DLR coefficient")
+        return f"({letter})  {kind}, {CONTROL_LABELS[name]}"
+
+    _ledger_panel(ax_a, cname, _panel_title("a", cname))
+    _ledger_panel(ax_b, aname, _panel_title("b", aname))
+
+    for ax in (ax_a, ax_b):
+        ax.set_xticks(x)
+        ax.set_xticklabels([SLOT_SHORT[SLOT_ORDER[s_]] for s_ in slots],
+                           fontsize=8.2)
+        ax.grid(axis="y", alpha=0.2, lw=0.5)
+    # Proxy handles rather than the bars' own labels: a term that is a source
+    # in one panel and a sink in the other would otherwise appear twice, or
+    # once with whichever hatch it happened to be drawn with first.
+    from matplotlib.patches import Patch
+    handles = [Patch(facecolor=LEDGER_DLR_COLOR, label=LEDGER_DLR_LABEL)]
+    handles += [Patch(facecolor=c, label=lab) for _, lab, c in PARTITION_TERMS]
+    handles += [Patch(facecolor="white", edgecolor="#333333", hatch="///",
+                      label="hatched = supply side")]
+    ax_a.legend(handles=handles, fontsize=8.2, ncol=4, frameon=False,
+                loc="upper center", bbox_to_anchor=(1.13, -0.10))
+
+    # (c) the gross factor: how much of the moving energy is the DLR anomaly --
+    cnames = [n for n in CONTROL_SETS]
+    gw = 0.8 / len(cnames)
+    g_max = 1.0
+    for j, n in enumerate(cnames):
+        ctrl = CONTROL_SETS[n]
+        g = np.array([partition_ledger(partition(acc, s, control=ctrl))["gross"]
+                      for s in slots])
+        off = (j - (len(cnames) - 1) / 2) * gw
+        ax_c.bar(x + off, g, gw * 0.9, edgecolor="#333333", linewidth=0.5,
+                 color=matplotlib.colormaps["Greys"](0.30 + 0.25 * j),
+                 label=CONTROL_LABELS[n])
+        for xi, gi in zip(x, g):
+            if np.isfinite(gi):
+                ax_c.annotate(f"{gi:.2f}", (xi + off, gi),
+                              textcoords="offset points", xytext=(0, 2),
+                              ha="center", fontsize=6.8, rotation=90)
+        g_max = max(g_max, float(np.nanmax(g)))
+    ax_c.set_ylim(0.0, g_max * 1.32)
+    ax_c.axhline(1.0, color="#B2182B", lw=1.1, ls="--")
+    ax_c.annotate("$G = 1$: the DLR anomaly is the only energy moving,\n"
+                  "and the stacked partition means what it says",
+                  (0.985, 0.42), xycoords="axes fraction", ha="right",
+                  va="top", fontsize=8.0, color="#B2182B", bbox=NOTE_BOX,
+                  zorder=7)
+    ax_c.set_ylabel("gross energy $G$ per W m$^{-2}$ of DLR\n"
+                    "[W m$^{-2}$ changing hands]")
+    ax_c.set_title("(c)  How much energy co-varies with each W m$^{-2}$ of "
+                   "DLR, and how much of it the DLR anomaly is",
+                   fontsize=11, loc="left", fontweight="bold")
+    ax_c.set_xticks(x)
+    ax_c.set_xticklabels(labels, fontsize=8.5)
+    ax_c.grid(axis="y", alpha=0.2, lw=0.5)
+    ax_c.legend(fontsize=8.0, frameon=False, loc="upper right", ncol=3)
+
+    top = _header_block(
+        fig, "The DLR partition as a ledger that closes for every surface",
+        _figure_subtitle(A, pop),
+        note=("negative fractions are re-read as SUPPLY: this is an ANOMALY "
+              "budget, in which a loss that weakens looks the same as a gain\n"
+              "over open water the upward turbulent loss shrinks from -105 to "
+              "-13 W m-2 across the DLR range without reversing\n"
+              "both sides are normalised by the same gross total G, so each "
+              "sums to one for every class; the estimates are untouched, only "
+              "their presentation"),
+        title_fs=14,
+    )
+    fig.subplots_adjust(top=top - 0.03, bottom=0.06, left=0.075, right=0.985)
+    return _save(fig, A, f"dlr_partition_ledger_{pop}_{cname}", out_dir, dpi)
+
+
+def print_partition_detail(A: Analysis, population: str | None = None,
+                           controls: tuple[str, ...] | None = None) -> None:
+    """The numbers behind figures 13 and 14, per class and per control set.
+
+    Prints the five fractions, their sum, the residual fitted directly on the
+    net flux, the gross factor G, and the normalised supply shares -- so the
+    single-variable and multiple-regression partitions can be compared line by
+    line rather than by eye across two panels.
+    """
+    pop = population or A.args.population
+    acc = A.acc(pop)
+    cnames = tuple(controls) if controls else tuple(CONTROL_SETS)
+    keys = [k for k, _, _ in PARTITION_TERMS]
+
+    for cname in cnames:
+        ctrl = CONTROL_SETS[cname]
+        print()
+        print(f"{CONTROL_LABELS[cname]}  (control = {cname}, "
+              f"{'single-variable' if not ctrl else 'multiple'} regression"
+              + (f" on DLR + {', '.join(ctrl)}" if ctrl else " on DLR") + ")")
+        print(f"  {'class':<22}" + "".join(f"{k[2:]:>10}" for k in keys)
+              + f"{'sum':>9}{'R on DLR':>11}{'gap':>10}{'G':>8}"
+              + f"{'DLR/G':>8}")
+        for slot in PANEL_SLOTS:
+            p = partition(acc, slot, control=ctrl)
+            c = partition_closure(acc, slot, control=ctrl)
+            L = partition_ledger(p)
+            print(f"  {SLOT_LABELS[SLOT_ORDER[slot]]:<22}"
+                  + "".join(f"{p[k]:>10.3f}" for k in keys)
+                  + f"{c['sum']:>9.5f}{c['f_res_direct']:>11.3f}"
+                  + f"{c['gap']:>10.1e}{L['gross']:>8.2f}"
+                  + f"{L['supply']['dlr']:>8.2f}")
 
 
 # ----------------------------------------------------------------------------
@@ -2938,9 +3617,9 @@ def fig_miz_transect(A: Analysis, out_dir=None, dpi: int | None = None,
     # axis label says, and the figure should say so rather than leave a reader
     # to wonder why a partition coefficient is -1.7.
     ax_c.text(0.98, 0.03,
-              "open water: the surface is pinned near freezing and\n"
-              "cannot respond, so these coefficients describe the air\n"
-              "mass co-varying with DLR, not a partition of it",
+              "open water: ERA5's ocean surface is prescribed, so it\n"
+              "cannot respond hourly; these coefficients describe the\n"
+              "air mass co-varying with DLR, not a partition of it",
               transform=ax_c.transAxes, fontsize=7.4, color="#8a5a00",
               va="bottom", ha="right", bbox=NOTE_BOX, zorder=6)
 
@@ -3013,9 +3692,9 @@ def fig_turbulent_response(A: Analysis, out_dir=None, dpi: int | None = None,
     how much scatter the slope was drawn through.
 
     Open water is drawn but its bars run off the scale, for the reason
-    ``fig_response_partition`` gives: the surface is pinned near freezing, the
-    air is not, and the regression there is describing the air mass rather than
-    a surface response. Rescaling the panel to fit it would compress the other
+    ``fig_response_partition`` gives: ERA5's open-ocean surface is prescribed
+    and barely moves, the air is not and does, so the regression there is
+    describing the air mass rather than a surface response. Rescaling the panel to fit it would compress the other
     five classes into a flat line.
     """
     import matplotlib.pyplot as plt
@@ -3081,7 +3760,7 @@ def fig_turbulent_response(A: Analysis, out_dir=None, dpi: int | None = None,
             # axis with no number on it is worse than no bar.
             ax.annotate(f"off scale\nSH {r['dshf_dlwd']:+.2f}   "
                         f"LH {r['dlhf_dlwd']:+.2f}\n"
-                        f"surface pinned:\nthis is the air mass",
+                        f"surface prescribed:\nthis is the air mass",
                         (x[j], 0.55 * hi), ha="center", va="center",
                         fontsize=7.4, color="#8a5a00", fontweight="bold",
                         bbox=NOTE_BOX, zorder=7)
@@ -3116,6 +3795,122 @@ def fig_turbulent_response(A: Analysis, out_dir=None, dpi: int | None = None,
     )
     fig.tight_layout(rect=(0, 0.02, 1, top))
     return _save(fig, A, f"turbulent_response_{pop}_{cname}", out_dir, dpi)
+
+
+# The multiple-regression prediction is drawn at ONE wind speed, the class's
+# own mean. In an additive model the wind coefficient only slides the line up
+# and down without tilting it, so drawing it at several wind speeds adds
+# parallel copies and no information about the slope, which is the quantity the
+# figure is for. The wind coefficient is reported in the annotation instead.
+MULTIPLE_FIT_COLOR = "#000000"
+
+
+def _wind_overlay(A: Analysis, acc: dict, slot: int, panel: Panel2D,
+                  x_span: tuple[float, float]):
+    """Multiple regression of SHF on DLR AND wind, drawn at three wind speeds.
+
+    An additive multiple regression predicts
+
+        SHF = a + b_DLR * DLR + b_U * U,
+
+    so at a fixed wind speed the prediction is a straight line in DLR with
+    slope b_DLR, and changing U slides that line up or down without tilting
+    it. THREE PARALLEL LINES ARE THEREFORE WHAT "HOLDING WIND FIXED" LOOKS LIKE
+    -- and their being parallel is the additive model's assumption made
+    visible, not a property of the data. Where the true dependence is
+    multiplicative (it is; see the U*dT specification check) the spacing
+    between the lines is right on average but the common slope is a
+    compromise across wind speeds.
+    """
+    weighted = FIT_IS_WEIGHTED[A.args.fit_mode]
+    ms = multiple_stats(acc, slot, panel.y_key,
+                        (panel.x_key, "wspd_m_s"), weighted=weighted)
+    simple = moment_stats(acc, slot, panel.x_key, panel.y_key,
+                          weighted=weighted)
+    wst = moment_stats(acc, slot, "wspd_m_s", "wspd_m_s", weighted=weighted)
+    if not np.isfinite(ms["r2"]) or not np.isfinite(wst["x_sd"]):
+        return [], []
+
+    b_x, b_u = float(ms["coef"][0]), float(ms["coef"][1])
+    xs = np.array(x_span)
+    u_bar = max(wst["x_mean"], 0.0)
+    lines = [(xs, ms["intercept"] + b_x * xs + b_u * u_bar,
+              dict(color=MULTIPLE_FIT_COLOR, lw=1.6, ls="-",
+                   label="multiple fit, wind held at its mean"))]
+
+    y_u = plain_units(TRACKED[VAR_INDEX[panel.y_key]].units)
+    x_u = plain_units(TRACKED[VAR_INDEX[panel.x_key]].units)
+    note = [
+        "multiple fit, $U$ held fixed",
+        f"dy/dx = {b_x:+.4g} {y_u}/({x_u})",
+        f"dy/d$U$ = {b_u:+.3g} {y_u}/(m s$^{{-1}}$)",
+        f"$R^2$ = {ms['r2']:.3f}   at $\\bar{{U}}$ = {u_bar:.1f} m s$^{{-1}}$",
+    ]
+    return lines, note
+
+
+def _flux_vs_dlr_multiple(A: Analysis, panel_name: str, flux_label: str,
+                          stem: str, out_dir, dpi, fit_mode):
+    """Shared body of the two multiple-regression scatters.
+
+    The simple fit's LINE is suppressed and only the multiple-regression
+    prediction is drawn, so the panel carries one line and no ambiguity about
+    which it is; the simple slope stays available in the report and on the
+    corresponding single-predictor figure for comparison.
+    """
+    return _scatter_figure(
+        A, panel_name,
+        f"Surface {flux_label} heat flux against downwelling longwave, "
+        "with wind speed controlled",
+        stem, out_dir, dpi, fit_mode=fit_mode, fit_orient="y_on_x",
+        overlay=_wind_overlay, stem_suffix="_multiple",
+        note_loc="lower right", show_legend=False, draw_fit=False)
+
+
+def fig_shf_vs_dlr_multiple(A: Analysis, out_dir=None, dpi: int | None = None,
+                            fit_mode: str | None = None):
+    """SHF against DLR, with wind speed added as a second predictor.
+
+    The line is the multiple-regression prediction
+    ``SHF = a + b_DLR * DLR + b_U * U`` evaluated at the class's mean wind, so
+    its slope is d(SHF)/d(DLR) with wind HELD FIXED -- the partial derivative,
+    and the same number as the "+ wind" rung of the control ladder. The simple
+    fit is on the previous figure for comparison.
+
+    WHAT THIS DOES AND DOES NOT BUY. Adding wind raises the variance explained
+    substantially -- over open water from 0.35 to 0.54 -- because wind is a
+    genuine confounder: Arctic storms are both cloudy and windy. It does NOT
+    get near the 0.88-0.98 of the bulk specification, and it cannot, because
+    those two fits answer different questions. The bulk fit regresses SHF on
+    U*(T_skin - T_2m), the flux's DIRECT driver, which nearly determines it.
+    This fit regresses SHF on DLR, which reaches the flux only through the skin
+    temperature and can therefore explain only the part of the skin-to-air
+    difference that DLR itself moves. Closing that gap would mean putting the
+    temperature difference into the regression -- the one variable that must
+    stay out, because it is the mediator the DLR effect travels through. High
+    R^2 and a causal estimate are different goals here, and the variable that
+    serves one destroys the other.
+    """
+    return _flux_vs_dlr_multiple(A, "dlr_shf", "sensible", "shf_vs_dlr",
+                                 out_dir, dpi, fit_mode)
+
+
+def fig_lhf_vs_dlr_multiple(A: Analysis, out_dir=None, dpi: int | None = None,
+                            fit_mode: str | None = None):
+    """LHF against DLR, with wind speed added as a second predictor.
+
+    The latent-heat counterpart of ``fig_shf_vs_dlr_multiple``, same treatment
+    and same control, so the two slopes are directly comparable and their sum
+    is the total turbulent response of the bar chart.
+
+    Wind is the control here for symmetry with the sensible figure. It is not
+    the strongest confounder on this side: 2 m humidity is, because water
+    vapour is itself a longwave emitter and so raises DLR directly rather than
+    by advection. That rung is on the control ladder, where the humidity column
+    moves the latent slope considerably further than wind alone does.
+    """
+    return _flux_vs_dlr_multiple(A, "dlr_lhf", "latent", "lhf_vs_dlr",
+                                 out_dir, dpi, fit_mode)
 
 
 def fig_control_ladder(A: Analysis, out_dir=None, dpi: int | None = None,
@@ -3377,7 +4172,8 @@ def fig_shf_by_lwp_regime(A: Analysis, out_dir=None, dpi: int | None = None,
 MOMENT_KEYS: tuple[str, ...] = ("w", "n", "x", "xy", "x_u", "xy_u")
 
 
-def _acc_from_block_counts(A: Analysis, counts: np.ndarray) -> dict:
+def acc_from_block_counts(block_mom: dict, n_block: int, n_slot: int,
+                          counts: np.ndarray) -> dict:
     """Assemble a moment accumulator from a weighted selection of blocks.
 
     ``counts[b]`` is how many times block ``b`` was drawn. Because the moments
@@ -3385,11 +4181,57 @@ def _acc_from_block_counts(A: Analysis, counts: np.ndarray) -> dict:
     resampling of individual samples and no refitting from raw data. That is
     what makes two thousand replicates cost less than a second.
     """
-    bm, n_block = A.sec["block_mom"], A.sec["n_block"]
     out = {}
     for k in MOMENT_KEYS:
-        arr = bm[k].reshape((n_block, N_SLOT) + bm[k].shape[1:])
+        arr = block_mom[k].reshape((n_block, n_slot) + block_mom[k].shape[1:])
         out[k] = np.tensordot(counts.astype(float), arr, axes=(0, 0))
+    return out
+
+
+def _acc_from_block_counts(A: Analysis, counts: np.ndarray) -> dict:
+    """``acc_from_block_counts`` for this Analysis's own per-block moments."""
+    return acc_from_block_counts(A.sec["block_mom"], A.sec["n_block"],
+                                 N_SLOT, counts)
+
+
+def bootstrap_blocks(block_mom: dict, n_block: int, n_slot: int, stat,
+                     n_boot: int = DEFAULT_BOOTSTRAP_SAMPLES,
+                     seed: int = DEFAULT_BOOTSTRAP_SEED, ci: float = 95.0,
+                     slots=None) -> dict:
+    """Moving-block bootstrap over any per-block moment accumulator.
+
+    The estimator core, independent of where the blocks came from: ``bootstrap``
+    calls it with an ERA5 ``Analysis``'s blocks, and any other dataset can call
+    it with blocks built by ``moments_from_arrays(..., group=block_index)``.
+    See the long note above ``block_index`` for why blocks and not points.
+    """
+    if n_block < 8:
+        raise ValueError(
+            f"only {n_block} blocks; a percentile interval from that few is "
+            f"not worth quoting. Use more data or shorter blocks.")
+    slots = list(range(n_slot)) if slots is None else list(slots)
+    rng = np.random.default_rng(seed)
+    full = acc_from_block_counts(block_mom, n_block, n_slot, np.ones(n_block))
+
+    draws = {sl: np.empty(n_boot) for sl in slots}
+    for i in range(n_boot):
+        counts = np.bincount(rng.integers(0, n_block, n_block),
+                             minlength=n_block)
+        acc = acc_from_block_counts(block_mom, n_block, n_slot, counts)
+        for sl in slots:
+            draws[sl][i] = stat(acc, sl)
+
+    lo_q, hi_q = 50.0 - ci / 2.0, 50.0 + ci / 2.0
+    out = {}
+    for sl in slots:
+        d = draws[sl][np.isfinite(draws[sl])]
+        out[sl] = {
+            "value": stat(full, sl),
+            "lo": float(np.percentile(d, lo_q)) if d.size else np.nan,
+            "hi": float(np.percentile(d, hi_q)) if d.size else np.nan,
+            "se": float(d.std(ddof=1)) if d.size > 1 else np.nan,
+            "n_block": n_block, "n_boot": n_boot,
+        }
     return out
 
 
@@ -3412,38 +4254,15 @@ def bootstrap(A: Analysis, stat, n_boot: int | None = None,
     mean -- the interval describes the uncertainty around the estimate, it does
     not replace it.
     """
-    n_block = A.sec["n_block"]
-    if n_block < 8:
+    if A.sec["n_block"] < 8:
         raise ValueError(
-            f"only {n_block} blocks of {A.sec['block_days']} days; a "
+            f"only {A.sec['n_block']} blocks of {A.sec['block_days']} days; a "
             f"percentile interval from that few is not worth quoting. Load "
             f"more seasons or shorten --bootstrap-block-days.")
-    n_boot = int(n_boot or A.args.bootstrap_samples)
-    slots = list(PANEL_SLOTS) + [ALL_SLOT] if slots is None else list(slots)
-    rng = np.random.default_rng(seed)
-
-    full = _acc_from_block_counts(A, np.ones(n_block))
-    draws = {sl: np.empty(n_boot) for sl in slots}
-    for i in range(n_boot):
-        counts = np.bincount(rng.integers(0, n_block, n_block),
-                             minlength=n_block)
-        acc = _acc_from_block_counts(A, counts)
-        for sl in slots:
-            draws[sl][i] = stat(acc, sl)
-
-    lo_q, hi_q = 50.0 - ci / 2.0, 50.0 + ci / 2.0
-    out = {}
-    for sl in slots:
-        d = draws[sl][np.isfinite(draws[sl])]
-        out[sl] = {
-            "value": stat(full, sl),
-            "lo": float(np.percentile(d, lo_q)) if d.size else np.nan,
-            "hi": float(np.percentile(d, hi_q)) if d.size else np.nan,
-            "se": float(d.std(ddof=1)) if d.size > 1 else np.nan,
-            "n_block": n_block,
-            "n_boot": n_boot,
-        }
-    return out
+    return bootstrap_blocks(
+        A.sec["block_mom"], A.sec["n_block"], N_SLOT, stat,
+        n_boot=int(n_boot or A.args.bootstrap_samples), seed=seed, ci=ci,
+        slots=(list(PANEL_SLOTS) + [ALL_SLOT]) if slots is None else slots)
 
 
 def naive_se(acc: dict, slot: int, x_key: str, y_key: str) -> float:
@@ -3495,7 +4314,9 @@ def self_check(A: Analysis, tol: float = 1e-9, verbose: bool = True) -> bool:
        the accumulator but not the code path, so agreement rules out a swapped
        argument somewhere.
     3. The same for d(LHF)/d(DLR).
-    4. The five partition fractions sum to one.
+    4. The five partition fractions sum to one, and the residual -- which the
+       partition defines as the remainder of the other four -- equals the
+       regression on DLR of the separately accumulated net-flux column.
     5. The two turbulent terms sum to the total turbulent response.
     6. Controlling on a variable drives its own slope to zero, which is the
        test that the multiple regression is solving what it claims to.
@@ -3528,6 +4349,15 @@ def self_check(A: Analysis, tol: float = 1e-9, verbose: bool = True) -> bool:
             near(direct, t[key], f"{nm}: {var} via turbulent_response")
         near(p["f_lwu"] + p["f_sh"] + p["f_lh"] + p["f_sw"] + p["f_res"], 1.0,
              f"{nm}: partition closure")
+        # 4b. The residual is a remainder of four fits AND the fit of an
+        #     independently accumulated column, R = LWD - LWU + SW_net + SH
+        #     + LH, built per sample in the streaming pass. Nothing in the
+        #     algebra forces these to agree: a sign error in any one of the
+        #     five terms, or in how R was assembled, breaks it.
+        near(p["f_res"], partial_slope(acc, slot, "rnet_W_m2", "lwd_W_m2"),
+             f"{nm}: residual vs the direct fit of R on DLR")
+        near(p["f_res"], net_flux_slope(acc, slot),
+             f"{nm}: residual vs the same combination in the covariance")
         near(t["dshf_dlwd"] + t["dlhf_dlwd"], t["dturb_dlwd"],
              f"{nm}: turbulent sum")
 
@@ -3566,12 +4396,19 @@ ALL_FIGURES = (
     fig_shf_vs_lwp,
     fig_shf_vs_dlr,
     fig_shf_vs_dskt,
+    fig_lwu_vs_dlr,
+    fig_swnet_vs_dlr,
+    fig_rnet_vs_dlr,
     fig_response_partition,
+    fig_partition_terms,
+    fig_partition_ledger,
     fig_miz_transect,
     fig_shf_by_lwp_regime,
     fig_lhf_vs_dlr,
     fig_turbulent_response,
     fig_control_ladder,
+    fig_shf_vs_dlr_multiple,
+    fig_lhf_vs_dlr_multiple,
     fig_dlr_vs_lwp,
 )
 

@@ -1,0 +1,7 @@
+You said "This means the open-ocean column measures something structurally different from the others — the residual correlation between a daily external SST field and an hourly DLR field, not a surface response. That's a stronger reason to set it aside than the one I'd been giving. I've corrected the wording in eight places in the module and three in the notebook, and added a section documenting the measurement. Confidence: the numbers are direct; the attribution to prescribed SST follows from ERA5's documented design, not from anything I tested." I want to talk more about this.
+
+I would expect the hour-to-hour temperature difference in T_skin for open ocean grid cells to be the slowest of any surface type because of waters large heat capacity. Isn't this the simplest explination? How can you be certain that it is due to the ERA5 model enforcing T_skin values rather than letting the model run freely? Is there a test we could do to verify this?
+
+
+
+I also want to know how the upwelling longwave radiation changes in response to a change in the downwelling longwave radiation. Ultimately, this should just be due to a change in the sea surface temperatures, so I don't think there's anything to control. So can you add another scatter plot regressing upwelling longwave radiation on downwelling longwave radiation? Do t

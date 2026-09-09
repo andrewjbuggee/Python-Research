@@ -107,3 +107,70 @@ def read_qcrad(
         ds[name].attrs.setdefault("units", "W/m^2")
         ds[name].attrs["long_name"] = long_name
     return ds
+
+
+def read_tower_winds(
+    start_date: str,
+    end_date: str,
+    apply_qc_flags: bool = True,
+    verbose: bool = False,
+) -> xr.Dataset:
+    """Read 1-min 40-m tower meteorology (nsatwrC1.b1) for a date range.
+
+    This is the wind source for the Taylor frozen-turbulence cloud-scale
+    estimate. Unlike every other reader in this module the fields are
+    two-dimensional -- (time, height) -- because the tower reports all four of
+    its levels in one variable rather than under per-level names.
+
+    Returns
+    -------
+    Dataset over (time, height) with:
+        wspd_arith_m_s  1-min arithmetic-mean wind speed [m/s]
+        wspd_vec_m_s    1-min vector-mean wind speed [m/s]
+        wdir_deg        1-min vector-mean wind direction [deg from N]
+        temp_c          air temperature [degC]
+        rh_pct          relative humidity [%]
+    with `height` = 2, 10, 20, 40 m AGL (config.TOWER_HEIGHTS_M).
+
+    Notes
+    -----
+    Which wind speed to use depends on the question. `wspd_arith_m_s` is the
+    mean SPEED over the minute; `wspd_vec_m_s` is the magnitude of the mean
+    VELOCITY, i.e. net displacement per unit time, and is therefore the
+    quantity Taylor's hypothesis wants when converting a duration into a
+    distance. The two coincide unless the wind direction swings within the
+    averaging interval, which at NSA in winter is uncommon.
+
+    The 10-m level is the same measurement nsametC1.b1 reports as its single
+    wind level (same ingest, same `input_source`), so read_met() is a
+    cross-check on this reader, not an independent sample.
+    """
+    ds = read_timeseries(
+        "twr", start_date, end_date, apply_qc_flags=apply_qc_flags, verbose=verbose
+    )
+    for name, long_name in [
+        ("wspd_arith_m_s", "wind speed, 1-min arithmetic mean"),
+        ("wspd_vec_m_s", "wind speed, 1-min vector mean"),
+    ]:
+        ds[name].attrs.setdefault("units", "m/s")
+        ds[name].attrs["long_name"] = long_name
+    ds["wdir_deg"].attrs.setdefault("units", "degree")
+    ds["temp_c"].attrs.setdefault("units", "degC")
+    ds["height"].attrs.setdefault("units", "m")
+    ds["height"].attrs["long_name"] = "measurement height above ground level"
+    return ds
+
+
+def tower_level(ds: xr.Dataset, height_m: float) -> xr.Dataset:
+    """Select one tower level by its height in metres, e.g. tower_level(ds, 40).
+
+    Raises KeyError listing the available heights rather than returning the
+    nearest one -- silently sliding from 40 m to 20 m would change the answer
+    without changing the plot label.
+    """
+    available = [float(h) for h in ds["height"].values]
+    if float(height_m) not in available:
+        raise KeyError(
+            f"No tower level at {height_m} m. Available heights [m]: {available}"
+        )
+    return ds.sel(height=height_m)
