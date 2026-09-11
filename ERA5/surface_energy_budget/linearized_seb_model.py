@@ -411,21 +411,51 @@ class Layer(NamedTuple):
 # modelled ice surface temperature (Batrak and Muller 2019).
 ICE_ERA5 = Layer(2.03, 1.88e6, 1.5, "ERA5 sea ice, 1.5 m")
 
-# Arctic snow. Conductivity 0.31 W m-1 K-1 is the seasonal-snow value of Sturm
-# et al. (1997) used for Arctic sea ice; Miller et al. (2017) measure 0.47 at
-# Summit, where the pack is denser (413 kg m-3), so 0.31 is the sea-ice end of
-# the range rather than a universal value. Volumetric heat capacity from
-# rho = 300 kg m-3 and c = 2100 J kg-1 K-1.
+# Arctic snow. UNVERIFIED AGAINST THE PRIMARY SOURCE -- flagged rather than
+# quietly used. The conductivity 0.31 W m-1 K-1 is attributed here to the
+# seasonal-snow dataset of Sturm et al. (1997, J. Glaciol. 43(143), 26-41),
+# whose existence and quadratic k_eff(rho) fit (R^2 = 0.79) are confirmed, but
+# whose regression coefficients could not be read from an accessible copy. A
+# commonly quoted form of that fit returns roughly 0.13 W m-1 K-1 at
+# rho = 300 kg m-3, which is less than half the value below, so ONE OF THE TWO
+# IS WRONG and this layer should not be relied on until the paper is checked.
+# It is used only by the optional "sea_ice_snow" column, which exists to size
+# the missing-snow error and feeds no default figure or table.
 SNOW_ARCTIC = Layer(0.31, 0.63e6, 0.30, "30 cm Arctic snow")
 
-# Frozen soil, for the land and coastal classes. Layer depths are the IFS soil
-# discretisation (0.07 / 0.21 / 0.72 / 1.89 m, IFS Cy41r2 Part IV Table 8.6),
-# collapsed to one 2.89 m slab because nothing here resolves the profile.
-# Properties are for frozen, moist tundra soil: conductivity ~2.2 W m-1 K-1 and
-# volumetric heat capacity ~2.0e6 J m-3 K-1 are mid-range values from the
-# Peters-Lidard/Johansen scheme the IFS uses; treat the land numbers as
-# indicative, not measured -- lam_SH over land has r^2 = 0.13 anyway.
-SOIL_FROZEN = Layer(2.2, 2.0e6, 2.89, "frozen soil, 2.89 m")
+# Soil, for the land and coastal classes, with ERA5's OWN numbers rather than
+# textbook frozen-soil ones. Layer depths are the IFS soil discretisation
+# (0.07 / 0.21 / 0.72 / 1.89 m, IFS Cy41r2 Part IV Table 8.7), collapsed to one
+# 2.89 m slab because nothing here resolves the profile.
+#
+# CORRECTED. An earlier version of this module used k = 2.2 W m-1 K-1 and
+# rho c = 2.0e6, reasoning from the properties of real frozen soil. Both are
+# wrong for ERA5. The IFS fixes the volumetric soil heat capacity at
+# 2.19e6 J m-3 K-1 (Cy41r2 Part IV Section 8.5.1, text below eq. 8.61), and
+# gets the conductivity from Peters-Lidard et al. (1998),
+#
+#     lambda   = Ke (lambda_sat - lambda_dry) + lambda_dry            (8.62)
+#     lambda_sat = lambda_sm^(1 - theta_sat) lambda_w^theta_sat       (8.63)
+#     Ke       = log10(max(0.1, theta / theta_sat)) + 1               (8.64)
+#
+# with lambda_dry = 0.190, lambda_sm = 3.44 and lambda_w = 0.57 W m-1 K-1. At
+# theta_sat = 0.44 that gives lambda_sat = 1.56, so ERA5's soil conductivity
+# CANNOT EXCEED about 1.6 W m-1 K-1 -- the old 2.2 was above the scheme's own
+# ceiling. Crucially, Section 8.5.2 (ii) states that the change in conductivity
+# due to soil ice is NOT included, so a frozen tundra cell does not get the
+# high conductivity of ice: reasoning from real frozen soil was the mistake.
+#
+# The value below takes theta/theta_sat = 0.7, typical of wet tundra, giving
+# Ke = 0.85 and lambda = 1.35. THE PLAUSIBLE RANGE IS WIDE -- lambda spans 0.19
+# (dry) to 1.56 (saturated), which is a factor of three in lambda and about
+# 2.5 in lam_G -- so the land and coastal lam_G carries far more uncertainty
+# than the ice one, and ``SOIL_RANGE`` below is provided to size it.
+SOIL_IFS = Layer(1.35, 2.19e6, 2.89, "IFS soil, 2.89 m")
+SOIL_FROZEN = SOIL_IFS          # backwards-compatible alias
+
+# The two ends of the IFS soil-conductivity range, for sizing the land error.
+SOIL_DRY = Layer(0.190, 2.19e6, 2.89, "IFS soil, dry (Ke = 0)")
+SOIL_SAT = Layer(1.560, 2.19e6, 2.89, "IFS soil, saturated (Ke = 1)")
 
 COLUMNS: dict[str, tuple[Layer, ...]] = {
     # What ERA5 actually has under a sea-ice tile.
@@ -433,7 +463,9 @@ COLUMNS: dict[str, tuple[Layer, ...]] = {
     # What is really there. Included to size the missing-snow error, not
     # because ERA5's lam_G should be computed from it.
     "sea_ice_snow": (SNOW_ARCTIC, ICE_ERA5),
-    "frozen_soil": (SOIL_FROZEN,),
+    "frozen_soil": (SOIL_IFS,),
+    "soil_dry": (SOIL_DRY,),
+    "soil_saturated": (SOIL_SAT,),
 }
 
 # OPEN WATER HAS NO CONDUCTING COLUMN IN THIS SENSE. ERA5 prescribes the sea
@@ -1667,6 +1699,16 @@ ALL_FIGURES = (
 LWP_BIN_EDGES_G_M2: tuple[float, ...] = (
     2.0, 2.8, 3.8, 5.3, 7.2, 10.0, 13.8, 19.0, 26.0, 36.0, 50.0, 69.0,
     95.0, 131.0, 181.0, 250.0,
+    # THE TAIL IS NOT OPTIONAL, and the reason is leverage rather than
+    # population. Only 1.3% of land cell-hours carry LWP above 250 g m-2, but
+    # rebuilding the pooled d(SHF)/d(DLR) from bins that stopped there came out
+    # 32% LOW over land -- those hours sit about 50 W m-2 above the mean DLR
+    # and high in SHF at the same time, and least squares weights a point by
+    # its squared distance from the mean. Carrying the tail to 750 g m-2 closes
+    # the rebuild to 0.1% for every class. The bins are mostly too thin to
+    # draw, and ``min_hours`` drops them from the figure; they are here so the
+    # decomposition closes against the pooled regression, not to be plotted.
+    350.0, 500.0, 750.0,
 )
 # FIFTEEN BINS, geometric, ratio 1.38. Ten and twenty were both tried on the
 # full record: doubling the bin count moves f_turb by at most 0.009 (land) and
@@ -2013,7 +2055,9 @@ def turbulent_fraction_by_lwp(LW: LwpLambdas, slot: int | str,
     ``f_regress``  the co-adjusted lower bound: -(d SHF/d DLR + d LHF/d DLR)
                    fitted within the same bin. Negative where the air mass is
                    driving both, which a skin response cannot produce.
-    ``lam_sh/lh/lw/g`` the coefficients the line was built from.
+    ``lam_sh/lh/lw/g`` the coefficients the line was built from, and
+    ``lam_sw``, which is identically zero -- see the comment at its
+    assignment, and Section 13a of the notebook.
     ``sh_r2/lh_r2`` how well the bulk formula fits inside the bin.
     ``n_hours``    cell-hours in the bin; ``kept`` the fraction surviving the
                    pointwise guards; ``out_frac`` the fraction of the pointwise
@@ -2041,7 +2085,7 @@ def turbulent_fraction_by_lwp(LW: LwpLambdas, slot: int | str,
            ("f_lambda", "f_p25", "f_p50", "f_p75", "f_regress", "lam_sh",
             "lam_lh", "lam_lw", "sh_r2", "lh_r2", "n_hours", "kept",
             "out_frac", "T_skin_K", "alpha", "dtskin_dlwd", "lam_sh_bulk",
-            "c_h", "bulk_r2", "wspd_m_s", "f_lwu_regress")}
+            "c_h", "bulk_r2", "wspd_m_s", "f_lwu_regress", "lam_sw")}
     out["lam_g"] = np.full(n_bin, lam_g_v)
     out["slot_name"] = name
 
@@ -2064,10 +2108,30 @@ def turbulent_fraction_by_lwp(LW: LwpLambdas, slot: int | str,
         lam_lh = -lh["slope"] * float(dq_sat_dT(np.array(T_skin),
                                                 np.array(p_hPa))) * 1000.0
         lam_lw = 4.0 * eps * SIGMA_SB * T_skin**3
+        # THERE IS NO lam_SW, AND THAT IS ERA5'S OWN STATEMENT rather than an
+        # omission. The shortwave term of the skin balance is
+        # (1 - f_Rs,i)(1 - alpha_i) R_s (IFS Cy41r2 eq. 8.22), in which the
+        # albedo alpha_i is an INPUT to the solve, not a function of T_sk, so
+        # its derivative with respect to skin temperature is exactly zero.
+        #
+        # Nor is that an artefact of the numerics. Snow albedo is prognostic
+        # and evolves on its own clock (eq. 8.39): a linear decay at
+        # tau_a = 0.008 per day when not melting -- 0.1 of albedo in 12.5 days,
+        # with NO temperature dependence at all -- and an exponential relaxation
+        # toward alpha_min = 0.5 with a 4-day e-folding time when melting. Over
+        # sea ice the albedo is not even prognostic: it is interpolated monthly
+        # from Ebert and Curry (1993), a function of date alone (Table 2.8).
+        # Either way the albedo cannot respond within the 12-hour perturbation
+        # this figure is drawn for.
+        #
+        # So lam_SW belongs in the denominator as a zero, and is carried
+        # explicitly so that a reader can see it was considered.
+        lam_sw = 0.0
         turb = (1.0 - alpha) * (lam_sh + lam_lh)
-        denom = lam_lw + turb + lam_g_v
+        denom = lam_lw + lam_sw + turb + lam_g_v
         out["lam_sh"][b], out["lam_lh"][b] = lam_sh, lam_lh
         out["lam_lw"][b], out["T_skin_K"][b] = lam_lw, T_skin
+        out["lam_sw"][b] = lam_sw
         out["sh_r2"][b], out["lh_r2"][b] = sh["r2"], lh["r2"]
         if denom > 0.0:
             out["f_lambda"][b] = turb / denom
@@ -2308,6 +2372,400 @@ def fig_turbulent_fraction_vs_lwp(LW: LwpLambdas, out_dir=None,
         return fig
     from pathlib import Path
     path = Path(out_dir) / f"{LW.args.region}_{stem}.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi or LW.args.dpi, bbox_inches="tight")
+    print(f"  -> {path}")
+    return fig
+
+
+# ----------------------------------------------------------------------------
+# The same question answered from the regression side, on a [0, 1] scale
+# ----------------------------------------------------------------------------
+# Panel (b) of the six-panel figure plots -(dSHF/dDLR + dLHF/dDLR), which is a
+# slope, not a fraction: over open water it reaches -3.5 and cannot be compared
+# with the model fraction beside it. The five budget responses can be put on a
+# common [0, 1] scale instead, which makes the bracket readable.
+#
+# Per (class, LWP bin), regress every surface term on DLR:
+#
+#     f_LWU = +d(LWU)/d(DLR)          f_SH  = -d(SHF)/d(DLR)
+#     f_LH  = -d(LHF)/d(DLR)          f_SW  = -d(SW_net)/d(DLR)
+#     f_res = +d(R)/d(DLR),   R = LWD - LWU + SW_net + SH + LH
+#
+# These sum to one exactly (Section 4a of the notebook), but individually they
+# are unbounded, and over open water three of them are negative. Normalising by
+# the sum of MAGNITUDES,
+#
+#     turbulent share = (|f_SH| + |f_LH|) / (|f_LWU| + |f_SH| + |f_LH|
+#                                            + |f_SW| + |f_res|),
+#
+# gives a number on [0, 1] for every class.
+#
+# READ IT AS THE RIGHT QUESTION. This is "of all the energy that changes hands
+# when DLR is 1 W m-2 higher, what fraction moves through the turbulent
+# channels" -- NOT "what fraction of the perturbation is damped by turbulence".
+# A channel that DELIVERS energy alongside the anomaly counts exactly like one
+# that removes it, because the absolute value throws the sign away. Over open
+# water, where the turbulent terms are sources rather than sinks, that
+# distinction is the whole story, so the sign of f_SH and f_LH is reported
+# alongside.
+def budget_fractions_by_lwp(LW: LwpLambdas, slot: int | str) -> dict:
+    """The five DLR-response fractions per LWP bin, and the turbulent share.
+
+    Every fraction is a regression on DLR inside one (class, LWP) bin, so all
+    of the atmospheric co-variation is inside them -- this is the alpha = 1
+    end of the bracket, the same estimator ``turbulent_flux_response.py``
+    reports, only conditioned on LWP and rescaled onto [0, 1].
+    """
+    si = _slot_index(slot)
+    n_bin = len(LW.edges) - 1
+    keys = ("f_lwu", "f_sh", "f_lh", "f_sw", "f_res", "share", "sum",
+            "n_hours", "turb_signed")
+    out = {k: np.full(n_bin, np.nan) for k in keys}
+    out["slot_name"] = SLOT_ORDER[si]
+    for b in range(n_bin):
+        g = si * n_bin + b
+        out["n_hours"][b] = float(LW.mom["n"][g]) * tfr.HOURS_PER_STEP
+        if LW.mom["w"][g] <= 0.0:
+            continue
+        sl = lambda k: tfr.slope_of(LW.mom, g, k, "lwd_W_m2")
+        f_lwu, f_sh = sl("lwu_W_m2"), -sl("shf_W_m2")
+        f_lh, f_sw = -sl("lhf_W_m2"), -sl("swnet_W_m2")
+        f_res = sl("rnet_W_m2")
+        gross = abs(f_lwu) + abs(f_sh) + abs(f_lh) + abs(f_sw) + abs(f_res)
+        out["f_lwu"][b], out["f_sh"][b], out["f_lh"][b] = f_lwu, f_sh, f_lh
+        out["f_sw"][b], out["f_res"][b] = f_sw, f_res
+        out["sum"][b] = f_lwu + f_sh + f_lh + f_sw + f_res
+        if gross > 0.0:
+            out["share"][b] = (abs(f_sh) + abs(f_lh)) / gross
+        # Positive where the turbulent channels REMOVE energy from the surface,
+        # negative where they deliver it. The share above cannot say which.
+        out["turb_signed"][b] = f_sh + f_lh
+    return out
+
+
+def fig_turbulent_fraction_vs_lwp_simple(LW: LwpLambdas, out_dir=None,
+                                         dpi: int | None = None,
+                                         slots: tuple[str, ...] = CLASS_ORDER,
+                                         min_hours: float = 5000.0,
+                                         lwp_max: float = 250.0,
+                                         label_fs: float = 12.0):
+    """A three-panel version of the LWP figure, sized for a slide.
+
+    The six-panel figure is a working document. This is the same result with
+    everything diagnostic removed: no interquartile shading, no second forcing
+    period, no pointwise median, no sample counts.
+
+    (a) The linearised skin-balance answer at alpha = 0 -- the atmosphere held
+        fixed. UPPER bound.
+    (b) The same question from the regression, rescaled onto [0, 1] by
+        ``budget_fractions_by_lwp``. All the atmospheric co-variation is inside
+        it. LOWER bound.
+    (c) alpha, the fraction of the skin warming that the 2 m air also does,
+        which is what separates the two.
+    """
+    import matplotlib.pyplot as plt
+
+    edges = LW.edges
+    centres = np.sqrt(edges[:-1] * edges[1:])
+    # THE TAIL BINS ARE NOT DRAWN. Bins above `lwp_max` exist so the
+    # decomposition closes against the pooled regression (Section 13); they
+    # hold a few thousand cell-hours apiece and their slopes wander. Stopping
+    # the axis is more honest than drawing a line through them.
+    in_range = centres <= lwp_max
+    fig, axes = plt.subplots(1, 3, figsize=(15.4, 5.2))
+    ax_a, ax_b, ax_c = axes
+    off_scale = []
+
+    for name in slots:
+        col = tfr.SLOT_COLORS[name]
+        r = turbulent_fraction_by_lwp(LW, name)
+        q = budget_fractions_by_lwp(LW, name)
+        ok = (r["n_hours"] >= min_hours) & in_range
+        if not ok.any():
+            continue
+        x = centres[ok]
+        if np.nanmax(r["alpha"][ok]) > 1.5:
+            off_scale.append(SLOT_LABELS[name])
+        if name in PINNED_SLOTS:
+            # ERA5 prescribes the SST, so lam_G over open water is not the
+            # conductance of a column and the model cannot pin the fraction.
+            # Drawn as the interval it is: from the clamped limit of zero up to
+            # the nominal sea-ice-column value.
+            ax_a.fill_between(x, 0.0, r["f_lambda"][ok], color=col, alpha=0.16,
+                              linewidth=0, hatch="///", edgecolor=col,
+                              label=SLOT_LABELS[name] + " (SST fixed)")
+        else:
+            ax_a.plot(x, r["f_lambda"][ok], marker="o", ms=5, lw=2.4,
+                      color=col, label=SLOT_LABELS[name])
+        ax_b.plot(x, q["share"][ok], marker="o", ms=5, lw=2.4, color=col)
+        ax_c.plot(x, r["alpha"][ok], marker="o", ms=5, lw=2.4, color=col)
+
+    ax_a.set_ylim(0.0, 0.70)
+    ax_a.set_ylabel("fraction taken up by SH + LH", fontsize=label_fs)
+    ax_a.set_title("(a)  Atmosphere held fixed\nupper bound",
+                   fontsize=label_fs + 1.5, loc="left", fontweight="bold")
+
+    ax_b.set_ylim(0.0, 0.70)
+    ax_b.set_ylabel("turbulent share of all energy moved", fontsize=label_fs)
+    ax_b.set_title("(b)  Atmosphere co-varying\nlower bound",
+                   fontsize=label_fs + 1.5, loc="left", fontweight="bold")
+
+    ax_c.axhline(1.0, color="#B2182B", lw=1.6, ls="--")
+    ax_c.set_ylim(0.85, 1.55)
+    if off_scale:
+        ax_c.annotate(", ".join(off_scale) + ":\n rises past the axis",
+                      (0.97, 0.95), xycoords="axes fraction", ha="right",
+                      va="top", fontsize=label_fs - 2.5, color="#444444")
+    ax_c.set_ylabel(r"$\alpha = (dT_{2m}/d\mathrm{DLR})\ /\ "
+                    r"(dT_{skin}/d\mathrm{DLR})$", fontsize=label_fs)
+    ax_c.set_title("(c)  Why they differ\n" + r"$\alpha=1$: air tracks the skin",
+                   fontsize=label_fs + 1.5, loc="left", fontweight="bold")
+
+    for ax in axes:
+        ax.set_xscale("log")
+        ax.set_xlabel("liquid water path   [g m$^{-2}$]", fontsize=label_fs)
+        ax.grid(alpha=0.25, lw=0.6, which="major")
+        ax.tick_params(labelsize=label_fs - 1.5)
+
+    handles, labels = ax_a.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=len(labels),
+               frameon=False, fontsize=label_fs, bbox_to_anchor=(0.5, -0.02))
+    fig.suptitle("Fraction of a 1 W m$^{-2}$ DLR perturbation taken up by "
+                 "turbulence, at fixed cloud liquid water path",
+                 fontsize=label_fs + 3.5, y=0.995)
+    # Both panels account for net shortwave; they do it differently, and a
+    # reader is entitled to see which without opening the code.
+    fig.text(0.5, 0.925,
+             "net shortwave: in (a) $\lambda_{SW} = 0$ exactly — ERA5's albedo "
+             "does not respond to skin temperature (IFS eq. 8.22, 8.39);  "
+             "in (b) $f_{SW}$ is inside the normalisation",
+             ha="center", fontsize=label_fs - 1.5, color="#555555")
+    fig.subplots_adjust(top=0.76, bottom=0.20, left=0.055, right=0.99,
+                        wspace=0.26)
+    if out_dir is None:
+        return fig
+    from pathlib import Path
+    path = Path(out_dir) / f"{LW.args.region}_turbulent_fraction_simple.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi or LW.args.dpi, bbox_inches="tight")
+    print(f"  -> {path}")
+    return fig
+
+
+# ----------------------------------------------------------------------------
+# Where the energy goes, term by term, as a function of cloud
+# ----------------------------------------------------------------------------
+# The five terms of the DLR response, in the order they are stacked, with the
+# colours ``turbulent_flux_response.PARTITION_TERMS`` already uses so the two
+# modules' figures can be read side by side.
+#
+# NET SHORTWAVE IS KEPT, and that is a deliberate choice against dropping it.
+# The Oct-Mar window is mostly dark, so f_SW looks ignorable -- but in the
+# sunlit shoulders it reaches |f_SW| / sum|f| of about 9% over land and 5% over
+# open water, which is larger than the latent term in several bins. Dropping it
+# would silently renormalise those bars.
+FLOW_TERMS: tuple[tuple[str, str, str], ...] = (
+    ("f_lwu", "Upwelling LW", "#B2182B"),
+    ("f_sh", "Sensible heat", "#4C72B0"),
+    ("f_lh", "Latent heat", "#55A868"),
+    ("f_sw", "Net shortwave", "#DD8452"),
+    ("f_res", "Subsurface / storage $G$", "#BBBBBB"),
+)
+
+
+def _flow_panels(n_slot: int):
+    """A 2x3 grid for five classes, leaving the sixth cell for the legend."""
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(2, 3, figsize=(15.0, 8.4))
+    flat = axes.ravel()
+    for ax in flat[n_slot:]:
+        ax.set_axis_off()
+    return fig, flat
+
+
+def _flow_data(LW: LwpLambdas, name: str, min_hours: float, lwp_max: float):
+    """Per-bin signed fractions, their absolute shares, and the gross total."""
+    q = budget_fractions_by_lwp(LW, name)
+    centres = np.sqrt(LW.edges[:-1] * LW.edges[1:])
+    ok = (q["n_hours"] >= min_hours) & (centres <= lwp_max)
+    signed = np.array([q[k] for k, _, _ in FLOW_TERMS])          # (5, n_bin)
+    gross = np.nansum(np.abs(signed), axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        share = np.abs(signed) / gross                            # sums to 1
+        frac = signed / gross                                     # keeps sign
+    return ok, centres, signed, gross, share, frac, q
+
+
+def fig_energy_partition_bars(LW: LwpLambdas, out_dir=None,
+                              dpi: int | None = None,
+                              slots: tuple[str, ...] = CLASS_ORDER,
+                              min_hours: float = 5000.0,
+                              lwp_max: float = 250.0,
+                              label_fs: float = 10.5):
+    """Stacked bars: the share of moving energy each term carries, per LWP bin.
+
+    One panel per surface class. Every bar sums to one by construction, because
+    each term is normalised by the sum of the five magnitudes,
+
+        share_k = |f_k| / sum_j |f_j|,
+
+    with the f_j the DLR regressions of Section 13a. This is "of all the energy
+    that changes hands when DLR is 1 W m-2 higher, how is it split", and it
+    answers that cleanly.
+
+    WHAT IT CANNOT SHOW, by construction: whether a term is a sink or a source,
+    since the absolute value discards the sign; and how much energy is moving
+    at all, since every bar is rescaled to the same height. Over open water
+    both matter -- the turbulent terms there are sources, and the gross energy
+    is several times larger than over land. ``fig_energy_partition_flow`` keeps
+    both.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, axes = _flow_panels(len(slots))
+    for ax, name in zip(axes, slots):
+        ok, centres, signed, gross, share, frac, q = _flow_data(
+            LW, name, min_hours, lwp_max)
+        idx = np.flatnonzero(ok)
+        x = np.arange(len(idx))
+        bottom = np.zeros(len(idx))
+        for j, (key, lab, col) in enumerate(FLOW_TERMS):
+            v = share[j, idx]
+            ax.bar(x, v, 0.86, bottom=bottom, color=col, edgecolor="white",
+                   linewidth=0.5, label=lab if ax is axes[0] else None)
+            bottom = bottom + v
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{LW.edges[b]:g}" for b in idx],
+                           rotation=90, fontsize=label_fs - 2.5)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_title(tfr.SLOT_LABELS[name], fontsize=label_fs + 1.5,
+                     loc="left", fontweight="bold",
+                     color=tfr.SLOT_COLORS[name])
+        ax.set_xlabel("LWP bin, lower edge   [g m$^{-2}$]", fontsize=label_fs)
+        ax.set_ylabel("share of moving energy", fontsize=label_fs)
+        ax.tick_params(labelsize=label_fs - 1.5)
+        ax.grid(axis="y", alpha=0.2, lw=0.5)
+
+    h, l = axes[0].get_legend_handles_labels()
+    axes[len(slots)].legend(h, l, loc="center", frameon=False,
+                            fontsize=label_fs + 1.5, title="term",
+                            title_fontsize=label_fs + 1.5)
+    fig.suptitle("How a 1 W m$^{-2}$ DLR perturbation splits between surface "
+                 "terms, by cloud liquid water path",
+                 fontsize=label_fs + 5, y=0.985)
+    fig.text(0.5, 0.945, "shares of |response|, normalised to sum to one; "
+             "regressions on DLR within each (class, LWP) bin",
+             ha="center", fontsize=label_fs, color="#555555")
+    fig.subplots_adjust(top=0.885, bottom=0.09, left=0.055, right=0.985,
+                        hspace=0.42, wspace=0.26)
+    if out_dir is None:
+        return fig
+    from pathlib import Path
+    path = Path(out_dir) / f"{LW.args.region}_energy_partition_bars.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi or LW.args.dpi, bbox_inches="tight")
+    print(f"  -> {path}")
+    return fig
+
+
+def fig_energy_partition_flow(LW: LwpLambdas, out_dir=None,
+                              dpi: int | None = None,
+                              slots: tuple[str, ...] = CLASS_ORDER,
+                              min_hours: float = 5000.0,
+                              lwp_max: float = 250.0,
+                              label_fs: float = 10.5):
+    """The same split, drawn to keep the two things the bars throw away.
+
+    Each panel is a DIVERGING stacked area against LWP on a log axis:
+
+      * above the line, terms that REMOVE energy from the surface as DLR rises;
+      * below the line, terms that DELIVER it.
+
+    The total vertical extent is still one, so any bar in
+    ``fig_energy_partition_bars`` can be matched to a slice here -- but the
+    sign is now visible, and over open water it is the whole result: the
+    turbulent terms sit BELOW the line, meaning a DLR anomaly arrives together
+    with extra turbulent heating rather than being damped by it.
+
+    The black line on the right-hand axis is the gross energy
+    ``sum_j |f_j|``, in W m-2 per W m-2 of DLR: how much energy changes hands
+    per unit of forcing. It is near one over land, where the DLR anomaly is
+    essentially the whole story, and several times larger over open water,
+    where it is a minority of it. Normalised bars cannot show this, because
+    they rescale every column to the same height.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, axes = _flow_panels(len(slots))
+    # ONE right-hand scale for every panel. Letting each auto-scale would make
+    # the gross-energy curves look alike when the whole point is that open
+    # water moves several times more energy per unit of DLR than land does.
+    g_max = 1.0
+    for name in slots:
+        ok, _, _, gross, _, _, _ = _flow_data(LW, name, min_hours, lwp_max)
+        if ok.any():
+            g_max = max(g_max, float(np.nanmax(gross[ok])))
+    for ax, name in zip(axes, slots):
+        ok, centres, signed, gross, share, frac, q = _flow_data(
+            LW, name, min_hours, lwp_max)
+        idx = np.flatnonzero(ok)
+        x = centres[idx]
+        up = np.zeros(len(idx))
+        dn = np.zeros(len(idx))
+        for j, (key, lab, col) in enumerate(FLOW_TERMS):
+            v = frac[j, idx]
+            pos = np.where(v > 0, v, 0.0)
+            neg = np.where(v < 0, v, 0.0)
+            if np.any(pos):
+                ax.fill_between(x, up, up + pos, color=col, linewidth=0.4,
+                                edgecolor="white",
+                                label=lab if ax is axes[0] else None)
+                up = up + pos
+            if np.any(neg):
+                ax.fill_between(x, dn, dn + neg, color=col, linewidth=0.4,
+                                edgecolor="white", alpha=0.85,
+                                label=(lab if (ax is axes[0]
+                                               and not np.any(pos)) else None))
+                dn = dn + neg
+        ax.axhline(0.0, color="#222222", lw=1.2)
+        ax.set_xscale("log")
+        ax.set_ylim(-1.05, 1.05)
+        ax.set_ylabel("share of moving energy\n"
+                      "(+ removes,  − delivers)", fontsize=label_fs)
+        ax.set_xlabel("liquid water path   [g m$^{-2}$]", fontsize=label_fs)
+        ax.set_title(tfr.SLOT_LABELS[name], fontsize=label_fs + 1.5,
+                     loc="left", fontweight="bold",
+                     color=tfr.SLOT_COLORS[name])
+        ax.tick_params(labelsize=label_fs - 1.5)
+        ax.grid(alpha=0.18, lw=0.5, which="major")
+
+        ax2 = ax.twinx()
+        ax2.plot(x, gross[idx], color="#222222", lw=1.8, ls="--")
+        ax2.set_ylim(0.0, g_max * 1.1)
+        ax2.set_ylabel("gross energy moved\n[W m$^{-2}$ per W m$^{-2}$]",
+                       fontsize=label_fs - 1.5, color="#222222")
+        ax2.tick_params(labelsize=label_fs - 2.5, colors="#333333")
+        ax2.axhline(1.0, color="#888888", lw=0.8, ls=":")
+
+    h, l = axes[0].get_legend_handles_labels()
+    from matplotlib.lines import Line2D
+    h = list(h) + [Line2D([0], [0], color="#222222", lw=1.8, ls="--")]
+    l = list(l) + ["gross energy (right axis)"]
+    axes[len(slots)].legend(h, l, loc="center", frameon=False,
+                            fontsize=label_fs + 1.5, title="term",
+                            title_fontsize=label_fs + 1.5)
+    fig.suptitle("Where a 1 W m$^{-2}$ DLR perturbation goes, with sign and "
+                 "magnitude kept", fontsize=label_fs + 5, y=0.985)
+    fig.text(0.5, 0.945, "above the line: the term removes energy from the "
+             "surface;  below: it delivers energy alongside the anomaly",
+             ha="center", fontsize=label_fs, color="#555555")
+    fig.subplots_adjust(top=0.885, bottom=0.09, left=0.055, right=0.945,
+                        hspace=0.42, wspace=0.52)
+    if out_dir is None:
+        return fig
+    from pathlib import Path
+    path = Path(out_dir) / f"{LW.args.region}_energy_partition_flow.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=dpi or LW.args.dpi, bbox_inches="tight")
     print(f"  -> {path}")

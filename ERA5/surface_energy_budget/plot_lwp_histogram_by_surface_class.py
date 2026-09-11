@@ -250,6 +250,7 @@ from seb_analysis_common import (
 )
 from surface_classification import (
     CLASS_CODES,
+    CLASS_COLORS,
     CLASS_LABELS,
     CLASS_ORDER,
     DEFAULT_BLOCK_HOURS,
@@ -1569,8 +1570,25 @@ def panel_order(site_code: int) -> list[tuple[int, str, bool]]:
 NOTE_COL_WIDTH = 0.62
 
 # Style of the side note box, shared by every figure here so the pages match.
-NOTE_BOX = dict(boxstyle="round,pad=0.6", facecolor="#f5f5f2",
+NOTE_FONTSIZE = 8.8
+NOTE_LINESPACING = 1.6
+NOTE_BOX_PAD = 0.6                      # boxstyle pad, in units of the font size
+NOTE_BOX = dict(boxstyle=f"round,pad={NOTE_BOX_PAD}", facecolor="#f5f5f2",
                 edgecolor="#bfbfbf", linewidth=0.8)
+
+# Breathing room left under the note when the figure is grown to fit it, and the
+# cap on how many times that growth is retried. Four is far more than the two
+# passes it takes to converge in practice; it exists so a pathological note can
+# never spin.
+NOTE_FIT_PAD_IN = 0.08
+NOTE_FIT_TOL_IN = 0.02
+NOTE_FIT_MAX_ITER = 6
+
+# Fallback only, for a backend that will not hand over a renderer: the note
+# height from font metrics alone. MEASURED against the rendered box, this
+# over-estimates by 5-9% over 5-30 lines, which is the right direction for a
+# fallback -- it grows the figure slightly too much rather than too little.
+NOTE_HEADROOM_IN = 0.65
 
 
 # Median lines: one per drawn phase, told apart by dash pattern rather than by
@@ -1661,18 +1679,149 @@ def suptitle_over_panels(fig, text: str, n_c: int, **kw) -> None:
     fig.suptitle(text, x=0.5 * n_c / (n_c + NOTE_COL_WIDTH), **kw)
 
 
-def draw_notes(ax_note, lines, title: str | None = None) -> None:
-    """Render the side note.
+def note_height_in(text: str) -> float:
+    """Height the rendered note needs, in inches, from the font metrics alone.
+
+    Computed rather than measured so it is available BEFORE a draw, which is
+    what lets :func:`draw_notes` resize the figure without rendering it twice.
+    Line count times font size times line spacing, plus the box padding at top
+    and bottom (boxstyle pad is in units of the font size).
+    """
+    n_lines = text.count("\n") + 1
+    return ((n_lines * NOTE_FONTSIZE * NOTE_LINESPACING
+             + 2 * NOTE_BOX_PAD * NOTE_FONTSIZE) / 72.0)
+
+
+def fit_note_in_figure(ax_note, t) -> None:
+    """Grow the figure until the note fits inside its own axes.
+
+    Measured rather than predicted. What has to fit is the note box inside
+    ``ax_note``, and the space available to it is the row height LESS whatever
+    constrained_layout gave the suptitle and the outer padding -- neither of
+    which is known before a draw. So: draw, measure the shortfall, grow by
+    exactly that, repeat. The note's height in inches is fixed while the axes
+    only grows, so this converges; two passes is the usual cost.
+
+    CALL THE SUPTITLE FIRST. The measurement is only as good as the layout it
+    reads, and a suptitle added afterwards takes its height back out of the same
+    rows -- leaving the note clipped by precisely that much.
+    """
+    fig = ax_note.get_figure()
+    h0 = fig.get_size_inches()[1]        # never shrink below what the caller asked for
+    if fig._suptitle is None:
+        # The suptitle takes its space out of the same rows the note sits in,
+        # so measuring before it exists would under-report the shortfall and
+        # leave the note clipped by exactly the title's height. Every figure in
+        # this module calls suptitle_over_panels() first; this catches a new one
+        # that does not, instead of silently mis-fitting.
+        warnings.warn("draw_notes() ran before the suptitle was set; the note "
+                      "may be clipped. Call suptitle_over_panels() first.",
+                      RuntimeWarning, stacklevel=3)
+    for _ in range(NOTE_FIT_MAX_ITER):
+        try:
+            with warnings.catch_warnings():
+                # A figure that is still too small can make constrained_layout
+                # give up and say so. That is the state this loop exists to
+                # correct, and it is gone by the next iteration, so the warning
+                # is noise here -- it would fire on the intermediate draw and
+                # not on the figure the caller actually gets.
+                warnings.filterwarnings(
+                    "ignore", message=".*constrained_layout not applied.*",
+                    category=UserWarning)
+                fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+        except AttributeError:
+            # No renderer to ask. Fall back to the font-metric estimate, which
+            # errs high, and take it in one step.
+            w_in, h_in = fig.get_size_inches()
+            needed = note_height_in(t.get_text()) + NOTE_HEADROOM_IN
+            if needed > h_in:
+                fig.set_size_inches(w_in, needed, forward=False)
+            return
+        box = t.get_bbox_patch() or t
+        # Positive: the note hangs below the axes by this much. Negative: slack.
+        short_in = ((ax_note.get_window_extent(renderer).y0
+                     - box.get_window_extent(renderer).y0) / fig.dpi)
+        w_in, h_in = fig.get_size_inches()
+        adjust = short_in + NOTE_FIT_PAD_IN
+        # Shrinking back matters because the FIRST measurement is taken while
+        # the note is still overflowing -- and therefore while constrained
+        # layout is squeezing the very axes being measured. The shortfall reads
+        # too large, the figure overshoots, and without this the figure ends up
+        # 0.3-0.7 in taller than the note needs. Never below the caller's own
+        # height, so a note that always fitted cannot make the figure smaller.
+        if abs(adjust) <= NOTE_FIT_TOL_IN:
+            return
+        new_h = max(h0, h_in + adjust)
+        if abs(new_h - h_in) <= NOTE_FIT_TOL_IN:
+            return
+        fig.set_size_inches(w_in, new_h, forward=False)
+
+    # Ran out of iterations. Whatever the last adjustment was, the figure must
+    # not be left clipping, so make one unconditional growth pass.
+    _grow_note_clear(ax_note, t)
+
+
+def _grow_note_clear(ax_note, t) -> None:
+    """Last-resort growth: guarantee the note is not clipped, at any height."""
+    fig = ax_note.get_figure()
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=".*constrained_layout not applied.*",
+                category=UserWarning)
+            fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+    except AttributeError:
+        return
+    box = t.get_bbox_patch() or t
+    short_in = ((ax_note.get_window_extent(renderer).y0
+                 - box.get_window_extent(renderer).y0) / fig.dpi)
+    if short_in > 0:
+        w_in, h_in = fig.get_size_inches()
+        fig.set_size_inches(w_in, h_in + short_in + NOTE_FIT_PAD_IN,
+                            forward=False)
+
+
+def draw_notes(ax_note, lines, title: str | None = None):
+    """Render the side note, growing the figure if the note will not fit.
 
     ``None`` entries are dropped, so a caller can build the list with optional
     rows inline. An empty STRING is kept and becomes a blank line -- that is how
     the note is grouped into blocks, so the two must not be conflated.
+
+    THE RESIZE IS NOT COSMETIC, and it is the fix for a real failure. The note
+    is one text artist anchored to the TOP of ``ax_note``, so a note taller than
+    that axes has a tight bbox hanging below the bottom of its grid row.
+    constrained_layout honours tight bboxes, so it responds by shrinking the
+    row -- and the row holds the DATA PANEL too. The panel collapses toward the
+    top of the canvas while the note sits apparently fine beside it, which reads
+    as "the figure did not render" rather than as "the note is two lines too
+    long".
+
+    MEASURED, one 7.6 x 5.2 in panel plus the notes column, panel height as a
+    fraction of the row:
+
+        note lines      22      26      30
+        plain         0.85    0.71    0.43
+        with twiny    0.79    0.56    0.27
+
+    A twin axis roughly doubles the loss, because it adds its own margin demand
+    to the same row. That combination -- 26 lines AND a twiny -- is what left
+    the duration figure at 0.33 of its row, drawn as a sliver at the top of an
+    otherwise empty canvas.
+
+    ``bbox_inches="tight"`` hides all of this on save, because it crops the
+    canvas back to the artists; the collapse is visible only in the figure's
+    own geometry, which is what a notebook displays inline.
     """
     body = "\n".join(ln for ln in lines if ln is not None)
     text = f"{title}\n{body}" if title else body
-    ax_note.text(0.0, 1.0, text, transform=ax_note.transAxes,
-                 va="top", ha="left", fontsize=8.8, linespacing=1.6,
-                 bbox=NOTE_BOX)
+    t = ax_note.text(0.0, 1.0, text, transform=ax_note.transAxes,
+                     va="top", ha="left", fontsize=NOTE_FONTSIZE,
+                     linespacing=NOTE_LINESPACING, bbox=NOTE_BOX)
+    fit_note_in_figure(ax_note, t)
+    return t
 
 
 def make_figure(col: dict, scale: str, edges_g: np.ndarray, region: str,
@@ -2186,6 +2335,685 @@ def fig_sweep_season(A: Analysis, out_dir=None, dpi: int | None = None,
         print(f"  -> {path}")
     return fig
 
+
+# ----------------------------------------------------------------------------
+# Liquid-CONTAINING hours vs the LWP threshold
+# ----------------------------------------------------------------------------
+# "Liquid-containing" is liquid-only PLUS mixed-phase: every overcast cell-hour
+# that carries any liquid the threshold admits. It is the union of two of the
+# three drawn categories, so it is immune to the reclassification argument in
+# the notebook -- a scene moving from mixed to liquid-only, or back, does not
+# change this number at all. Only a scene losing its liquid entirely does, which
+# is what makes this the cleanest single curve to quote against --min-lwp.
+SWEEP_LIQUID_CONTAINING: tuple[str, ...] = ("liquid", "mixed")
+
+# Colour for the single-series (ARM site) figure. The by-class figure uses
+# CLASS_COLORS so it matches the surface-class time-series figures exactly.
+LIQUID_HOURS_COLOR = PHASE_COLORS["liquid"]
+
+
+def sweep_liquid_containing_hours(A: Analysis) -> dict:
+    """Average hours per season per grid cell that held a liquid-bearing cloud.
+
+    Returns a dict with
+
+    ``lwp``        (thr,)              the threshold axis, g m-2
+    ``hours``      (thr, cls, season)  hours in EACH season, per grid cell
+    ``mean``       (thr, cls)          mean of that over the seasons
+    ``season_hours`` (season,)         each season's own window length
+
+    The class axis is indexed by :func:`sweep_class_slot`, the same as
+    ``sweep["season_fraction"]``.
+
+    Computed per season and averaged afterwards, NOT as the stored mean
+    fraction times a mean window length. ``season_fraction`` has already
+    collapsed the season axis, and a common-year Oct-Mar season is 182 days
+    against a leap year's 183 -- so the stored form cannot pair each season's
+    fraction with its own window, and it cannot report a spread. Both come out
+    of ``A.sec``, which still carries the full (thr, season, month, class,
+    phase) accumulator, so this needs no reload.
+
+    The weights are the same cell weights the rest of the module uses
+    (cos-latitude by default), which makes the per-class number an
+    area-weighted average over the cells of that class -- a "typical grid cell
+    of this class". The ARM site slot is a single cell, so weighting is
+    irrelevant there.
+    """
+    sec = A.sec
+    if not sec["w_sweep"].size:
+        raise ValueError(
+            "no --min-lwp sweep was accumulated. It exists only in "
+            "phase_mode='fraction'. Re-run prepare(phase_mode='fraction').")
+
+    keep = list(A.keep_idx)
+    ws = sec["w_sweep"][:, keep]                      # (thr, s, month, cls, ph)
+    wss = sec["w_sweep_site"][:, keep]                # (thr, s, month, ph)
+    all_cls = ws.sum(axis=3, keepdims=True)           # exact: the six partition
+    ws_full = np.concatenate([ws, wss[:, :, :, None, :], all_cls], axis=3)
+
+    # Numerator: pool the months, then add the two liquid-bearing phases.
+    pi = [SWEEP_PHASES.index(p) for p in SWEEP_LIQUID_CONTAINING]
+    num = ws_full.sum(axis=2)[..., pi].sum(axis=-1)   # (thr, s, cls)
+
+    # Denominator: valid cell-hours, which do NOT depend on the threshold --
+    # they are a property of the grid and the classification, not of --min-lwp.
+    den_cls = sec["w_valid_month"][keep]              # (s, month, class7)
+    order = [CLASS_CODES[n] for n in CLASS_ORDER]
+    den = np.concatenate([
+        den_cls[:, :, order],                                     # 5 classes
+        den_cls[:, :, order].sum(axis=2, keepdims=True) * 0.0,    # unclassified
+        den_cls[:, :, [sec["site_code"], sec["all_code"]]],       # site, all
+    ], axis=2).sum(axis=1)                            # (s, cls)
+    den[:, SWEEP_UNCLASSIFIED_SLOT] = np.maximum(
+        den_cls[:, :, sec["all_code"]].sum(axis=1)
+        - den_cls[:, :, order].sum(axis=(1, 2)), 0.0)
+
+    season_h = season_window_hours(A.layout, keep)    # (s,) each season's own
+    with np.errstate(invalid="ignore", divide="ignore"):
+        frac = np.where(den[None] > 0,
+                        num / np.where(den[None] > 0, den[None], 1.0),
+                        np.nan)                       # (thr, s, cls)
+    hours = frac * season_h[None, :, None]            # (thr, s, cls)
+    hours = np.moveaxis(hours, 1, 2)                  # (thr, cls, s)
+    return {
+        "lwp": sec["sweep_lwp"],
+        "spacing": sec["sweep_spacing"],
+        "hours": hours,
+        "mean": nanmean_quiet(hours, axis=2),         # (thr, cls)
+        "season_hours": season_h,
+    }
+
+
+def liquid_hours_note_lines(A: Analysis, extra: str) -> list[str]:
+    """Side note shared by the two liquid-containing-hours figures."""
+    col, args = A.col, A.args
+    pk = col["phase_kw"]
+    lwp = col["sweep"]["lwp"]
+    return [
+        f"Season {args.season_start[0]:02d}-{args.season_start[1]:02d} to "
+        f"{args.season_end[0]:02d}-{args.season_end[1]:02d}",
+        f"  ({window_label(col['season_hours'])} per season)",
+        "",
+        f"Cloudy: tcc $\\geq$ {args.min_cloud_fraction:g}",
+        "CWP = LWP + IWP",
+        f"Liquid only: LWP/CWP $\\geq$ {pk['liquid_fraction_min']:g}",
+        f"Ice only: IWP/CWP $\\geq$ {pk['ice_fraction_min']:g}",
+        "Liquid-containing: neither,",
+        "  i.e. liquid only + mixed",
+        "",
+        f"IWP floor held at {pk['min_iwp_g']:g} g m$^{{-2}}$",
+        "x axis sweeps the LWP floor,",
+        f"  {lwp[0]:g} to {lwp[-1]:g} g m$^{{-2}}$",
+        f"  ({lwp.size} {col['sweep']['spacing']}ly spaced points)",
+        "",
+        wrap_note("Every point was classified in the same pass over the "
+                  "archive, so the curve is built from identical cell-hours.",
+                  34),
+        "",
+        wrap_note(extra, 34),
+    ]
+
+
+def fig_sweep_liquid_hours_site(A: Analysis, out_dir=None,
+                                dpi: int | None = None,
+                                surface_class: str = SITE_KEY,
+                                min_max: bool = True):
+    """Liquid-containing hours per season, ONE grid cell, against the LWP floor.
+
+    Defaults to the ARM site cell (Utqiagvik). Each season's liquid-only and
+    mixed-phase hours are summed, then the seasons are averaged; with
+    ``min_max`` the band is the min-max across those seasons, which is the
+    honest measure of how much of the y value is threshold and how much is
+    year-to-year variability.
+    """
+    import matplotlib.pyplot as plt
+
+    lh = sweep_liquid_containing_hours(A)
+    args = A.args
+    slot, series_label = sweep_class_slot(surface_class)
+    lwp, y = lh["lwp"], lh["mean"][:, slot]
+    per_season = lh["hours"][:, slot, :]              # (thr, season)
+
+    fig, axes, ax_note = panel_grid_with_notes(1, 1, 7.6, 5.0)
+    ax = axes[0]
+    if min_max and per_season.shape[1] > 1:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            lo = np.nanmin(per_season, axis=1)
+            hi = np.nanmax(per_season, axis=1)
+        ax.fill_between(lwp, lo, hi, color=LIQUID_HOURS_COLOR, alpha=0.18,
+                        linewidth=0,
+                        label=f"min-max across {per_season.shape[1]} seasons")
+    ax.plot(lwp, y, color=LIQUID_HOURS_COLOR, lw=2.4, marker="o", markersize=4,
+            label=f"Liquid-containing:  {y[0]:,.0f} h "
+                  f"$\\rightarrow$ {y[-1]:,.0f} h")
+    _sweep_axes(ax, lwp, lh["spacing"])
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("minimum LWP [g m$^{-2}$]", fontsize=11)
+    ax.set_ylabel("Liquid-containing cloud hours\nper season, per grid cell",
+                  fontsize=11)
+    ax.legend(fontsize=9.5, framealpha=0.9, loc="best")
+
+    suptitle_over_panels(
+        fig,
+        f"Liquid-containing cloud hours vs the minimum LWP threshold — "
+        f"{args.region}, {series_label}\n"
+        f"liquid-only + mixed-phase, summed per season then averaged over "
+        f"{len(A.used)} seasons",
+        1, fontsize=12.5)
+    draw_notes(ax_note, liquid_hours_note_lines(
+        A, "ONE grid cell. Each season's own window length times that "
+           "season's liquid-containing share, then averaged."))
+
+    if out_dir is not None:
+        path = (Path(out_dir) / f"{args.region}_sweep_liquid_hours_"
+                                f"{surface_class}_{A.tag}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi or args.dpi, bbox_inches="tight")
+        print(f"  -> {path}")
+    return fig
+
+
+def fig_sweep_liquid_hours_by_class(A: Analysis, out_dir=None,
+                                    dpi: int | None = None,
+                                    include_site: bool = True,
+                                    include_all: bool = False):
+    """The same curve, one line per surface class, plus the ARM site cell.
+
+    Colours are :data:`surface_classification.CLASS_COLORS`, and the site is
+    black dashed, so this figure reads against the surface-class time series
+    without a translation step.
+
+    Each line is the average over the cells of that class (area-weighted, as
+    everywhere else in the module) of the per-cell liquid-containing hours,
+    averaged over the seasons -- i.e. "a typical grid cell of this class". A
+    class holding less than ``--min-class-area`` of the domain gets its area
+    printed in the legend, because a typical cell of a two-cell class is not a
+    meaningful object.
+    """
+    import matplotlib.pyplot as plt
+
+    lh = sweep_liquid_containing_hours(A)
+    col, args = A.col, A.args
+    lwp = lh["lwp"]
+
+    series = [(name, CLASS_LABELS[name], CLASS_COLORS[name], "-", 2.2)
+              for name in CLASS_ORDER]
+    if include_all:
+        series.append(("all", "All cells", "#444444", ":", 2.0))
+    if include_site:
+        series.append((SITE_KEY, SITE_LABEL, SITE_COLOR, "--", 1.9))
+
+    fig, axes, ax_note = panel_grid_with_notes(1, 1, 7.6, 5.0)
+    ax = axes[0]
+    for name, label, color, ls, lw in series:
+        slot, _ = sweep_class_slot(name)
+        y = lh["mean"][:, slot]
+        tail = ""
+        if name in CLASS_CODES:
+            share = col["area_pct"][CLASS_CODES[name]]
+            if share < args.min_class_area:
+                tail = f"  [{share:.2f}% of domain]"
+        ax.plot(lwp, y, color=color, lw=lw, ls=ls, marker="o", markersize=3.4,
+                solid_capstyle="round",
+                label=f"{label}:  {y[0]:,.0f} $\\rightarrow$ {y[-1]:,.0f} h"
+                      f"{tail}")
+    _sweep_axes(ax, lwp, lh["spacing"])
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("minimum LWP [g m$^{-2}$]", fontsize=11)
+    ax.set_ylabel("Liquid-containing cloud hours\nper season, per grid cell",
+                  fontsize=11)
+    ax.legend(fontsize=8.8, framealpha=0.9, loc="best")
+
+    suptitle_over_panels(
+        fig,
+        f"Liquid-containing cloud hours vs the minimum LWP threshold — "
+        f"{args.region}, by surface class\n"
+        f"liquid-only + mixed-phase, summed per season then averaged over "
+        f"{len(A.used)} seasons",
+        1, fontsize=12.5)
+    draw_notes(ax_note, liquid_hours_note_lines(
+        A, "Averaged over the cells of the class: a TYPICAL cell of that "
+           "class, not a class total."))
+
+    if out_dir is not None:
+        path = (Path(out_dir) / f"{args.region}_sweep_liquid_hours_by_class_"
+                                f"{A.tag}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi or args.dpi, bbox_inches="tight")
+        print(f"  -> {path}")
+    return fig
+
+
+def print_liquid_hours_table(A: Analysis) -> None:
+    """The two figures' numbers as text: hours at each end of the sweep."""
+    lh = sweep_liquid_containing_hours(A)
+    lwp = lh["lwp"]
+    print(f"\n  Liquid-containing cloud hours per season per grid cell "
+          f"(liquid-only + mixed), mean over {len(A.used)} seasons:")
+    print(f"    {'series':<24}{f'{lwp[0]:g} g/m2':>12}"
+          f"{f'{lwp[-1]:g} g/m2':>12}{'change':>10}")
+    rows = [(CLASS_LABELS[n], n) for n in CLASS_ORDER]
+    rows += [(SITE_LABEL, SITE_KEY), ("All cells", "all")]
+    for label, name in rows:
+        slot, _ = sweep_class_slot(name)
+        y = lh["mean"][:, slot]
+        print(f"    {label:<24}{y[0]:>12,.0f}{y[-1]:>12,.0f}"
+              f"{100.0 * (y[-1] - y[0]) / y[0]:>9.1f}%")
+
+# ----------------------------------------------------------------------------
+# Minimum CLOUD DURATION, the ARM pipeline's other knob
+# ----------------------------------------------------------------------------
+# The ARM thermodynamic-cloud-phase product at Utqiagvik samples every 30 s, so
+# a cloud can be timed: a run of consecutive liquid-bearing samples bounded by
+# clear sky is an EVENT with a duration, and the pipeline can be told to ignore
+# events shorter than some minimum. Raising that minimum removes short-lived
+# cloud, and the liquid-containing hours fall.
+#
+# ERA5 samples every hour. THE MINIMUM RESOLVABLE DURATION IS THEREFORE ONE
+# HOUR, which is already the full width of a 0-60 minute observational axis.
+# The two sweeps do not overlap: ERA5 can only extend such a curve to the RIGHT
+# of the observational one, and it cannot say anything at all about whether an
+# hour ERA5 calls liquid-bearing was cloudy for 60 minutes or for 6. Every hour
+# with LWP above the floor is credited with a full hour here -- that is an
+# assumption of the archive's sampling, not a measurement, and it is the reason
+# ERA5 and the ARM retrieval are not directly comparable at short durations.
+#
+# The 90 s clear-sky tolerance in the observational pipeline has no faithful
+# ERA5 analogue either: the smallest gap ERA5 can express is a whole hour, forty
+# times longer. ``gap_h`` exists so the choice is explicit rather than hidden,
+# but the honest default is 0 -- no bridging.
+DEFAULT_MAX_DURATION_H = 24
+DURATION_COLOR = "#1f77b4"      # the observational figure's blue
+
+# Hours in one ERA5 time step. Named so the run-length arithmetic below reads
+# as hours rather than as indices; see HOURS_PER_STEP at the top of the module.
+DURATION_STEP_H = HOURS_PER_STEP
+
+
+def site_liquid_containing_series(A: Analysis, force: bool = False) -> dict:
+    """Hour-by-hour liquid-containing flag for the single ARM-site cell.
+
+    Returns
+
+    ``times``     (n,) datetime64, the in-window steps, in order
+    ``liquid``    (n,) bool, cloudy AND (liquid-only or mixed-phase)
+    ``s_of``      (n,) int, index into ``A.used`` of the season each step is in
+    ``step_ok``   (n-1,) bool, is step i+1 exactly one hour after step i
+
+    This is a SECOND pass over the archive, because run lengths cannot be
+    recovered from the accumulator: ``build_histograms`` folds every step into
+    (season, month, class, phase) bins, and a run of six liquid hours is
+    indistinguishable there from six isolated ones. Only one cell is read, so
+    the pass is cheap; the result is cached on ``A`` and reused.
+
+    The phase thresholds are the NOMINAL ones (``--min-lwp`` / ``--min-iwp``),
+    not a sweep value -- duration is being varied here, not the LWP floor.
+    """
+    cached = getattr(A, "_site_series", None)
+    if cached is not None and not force:
+        return cached
+
+    args, ds, pk = A.args, A.ds, A.col["phase_kw"]
+    if pk["mode"] != "fraction":
+        raise ValueError(
+            "the duration sweep is defined for phase_mode='fraction', where "
+            "liquid-containing is 'liquid only + mixed phase' under one LWP "
+            "floor. Re-run prepare(phase_mode='fraction').")
+    if parse_utc_hours(getattr(args, "utc_hours", None)):
+        raise ValueError(
+            "--utc-hours leaves gaps in the hourly record, so consecutive "
+            "steps are no longer consecutive HOURS and a run length is not a "
+            "duration. Re-run prepare() without it.")
+
+    layout = A.layout
+    dos, s_idx, in_window = layout["dos"], layout["s_idx"], layout["in_window"]
+    wanted = np.zeros(len(layout["seasons"]), dtype=bool)
+    wanted[list(A.keep_idx)] = True
+    use_step = in_window & (s_idx >= 0) & wanted[np.clip(s_idx, 0, None)]
+
+    site_mask, site_lat, site_lon = site_cell_mask(ds)
+    read_vars = list(REQUIRED_VARS)
+    liquid_var = getattr(args, "liquid_var", DEFAULT_LIQUID_VAR)
+    if liquid_var not in read_vars:
+        read_vars.append(liquid_var)
+    if args.no_precip:
+        read_vars += [v for v in PRECIP_SOURCE_VARS[args.precip_var]
+                      if v not in read_vars]
+
+    times_all = np.asarray(ds["valid_time"].values)
+    liq_parts, time_parts, s_parts = [], [], []
+    for i0, block in iter_time_blocks(ds, read_vars, args.block_hours,
+                                      keep_mask=use_step):
+        n_t = block.sizes["valid_time"]
+        sl = slice(i0, i0 + n_t)
+        keep = use_step[sl]
+        if not keep.any():
+            continue
+        # One cell out of the block, AFTER the same masking the main pass uses,
+        # so the two cannot drift apart in what counts as cloudy.
+        tclw_g = block[liquid_var].values[keep][:, site_mask][:, 0] * 1000.0
+        tciw_g = block["tciw"].values[keep][:, site_mask][:, 0] * 1000.0
+        tcc = block["tcc"].values[keep][:, site_mask][:, 0]
+        raining = precip_mask(block, keep, args)[:, site_mask][:, 0]
+
+        valid = np.isfinite(tcc) & np.isfinite(tclw_g) & np.isfinite(tciw_g)
+        cloudy = valid & (tcc >= args.min_cloud_fraction) & ~raining
+        f = fraction_phase_masks(
+            tclw_g, tciw_g, pk["liquid_fraction_min"], pk["ice_fraction_min"],
+            pk["min_lwp_g"], pk["min_iwp_g"],
+        )
+        liq_parts.append(cloudy & (f["liquid"] | f["mixed"]))
+        time_parts.append(times_all[sl][keep])
+        s_parts.append(s_idx[sl][keep])
+
+    times = np.concatenate(time_parts)
+    liquid = np.concatenate(liq_parts)
+    s_abs = np.concatenate(s_parts)
+    order = np.argsort(times, kind="stable")
+    times, liquid, s_abs = times[order], liquid[order], s_abs[order]
+
+    # Season index remapped onto A.used, so the caller never has to know about
+    # the seasons prepare() skipped.
+    remap = {int(s): i for i, s in enumerate(A.keep_idx)}
+    s_of = np.array([remap[int(s)] for s in s_abs], dtype=np.intp)
+
+    step_h = (np.diff(times).astype("timedelta64[s]").astype(np.float64)
+              / 3600.0)
+    step_ok = np.isclose(step_h, DURATION_STEP_H) & (s_of[1:] == s_of[:-1])
+
+    out = {
+        "times": times, "liquid": liquid, "s_of": s_of, "step_ok": step_ok,
+        "site_lat": site_lat, "site_lon": site_lon,
+        # Steps inside a season that are NOT one hour after their predecessor:
+        # holes in the archive. Every one of them truncates whatever run it
+        # falls in, so a gappy season under-reports long events.
+        "n_holes": int(np.count_nonzero(
+            (s_of[1:] == s_of[:-1]) & ~np.isclose(step_h, DURATION_STEP_H))),
+    }
+    A._site_series = out
+    return out
+
+
+def liquid_events(liquid: np.ndarray, step_ok: np.ndarray,
+                  gap_h: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+    """Split a boolean hourly series into events.
+
+    Returns ``(duration_h, liquid_h)``, one entry per event: how long the event
+    lasted end to end, and how many of those hours were actually liquid-
+    bearing. The two differ only when ``gap_h > 0`` bridges a short non-liquid
+    break, and keeping them apart is what makes the bridge honest -- a bridged
+    hour extends the event's DURATION, so it can help the event clear the
+    threshold, but it is not counted as an hour of liquid cloud.
+
+    A run is broken by any step that is not exactly one hour after its
+    predecessor (``step_ok``), so a hole in the archive and a season boundary
+    both end an event rather than silently joining across it.
+    """
+    n = liquid.size
+    if n == 0:
+        return np.empty(0), np.empty(0)
+    cont = np.zeros(n, dtype=bool)                 # cont[i]: i-1 joins to i
+    cont[1:] = liquid[1:] & liquid[:-1] & step_ok
+    starts = np.flatnonzero(liquid & ~cont)
+    ends = np.flatnonzero(liquid & ~np.append(cont[1:], False))
+    if starts.size == 0:
+        return np.empty(0), np.empty(0)
+    run_h = (ends - starts + 1) * DURATION_STEP_H
+
+    if gap_h <= 0:
+        return run_h, run_h.copy()
+
+    # Merge neighbouring runs separated by a bridgeable gap. A gap is
+    # bridgeable only if it is short enough AND unbroken in time -- a hole in
+    # the archive is not a "clear sky gap", it is an absence of information.
+    unbroken = np.concatenate([[0], np.cumsum(~step_ok)])   # over step index
+    dur, liq_h = [], []
+    cur_start, cur_liq = starts[0], run_h[0]
+    for j in range(1, starts.size):
+        gap = (starts[j] - ends[j - 1] - 1) * DURATION_STEP_H
+        # unbroken[i] counts broken transitions BEFORE index i, so the
+        # difference over [ends[j-1], starts[j]] is the number of holes inside
+        # the gap itself -- including the transition INTO starts[j], which an
+        # end-exclusive slice would miss.
+        contiguous = unbroken[starts[j]] == unbroken[ends[j - 1]]
+        if gap <= gap_h and contiguous:
+            cur_liq += run_h[j]
+        else:
+            dur.append((ends[j - 1] - cur_start + 1) * DURATION_STEP_H)
+            liq_h.append(cur_liq)
+            cur_start, cur_liq = starts[j], run_h[j]
+    dur.append((ends[-1] - cur_start + 1) * DURATION_STEP_H)
+    liq_h.append(cur_liq)
+    return np.asarray(dur, dtype=float), np.asarray(liq_h, dtype=float)
+
+
+def sweep_liquid_duration_hours(A: Analysis,
+                                max_duration_h: int = DEFAULT_MAX_DURATION_H,
+                                gap_h: float = 0.0) -> dict:
+    """Liquid-containing hours at the ARM site vs a minimum-duration filter.
+
+    Mirrors the ARM pipeline's duration filter: an event shorter than the
+    threshold is discarded ENTIRELY, so the hours it held are removed from the
+    total, exactly as a 3-minute cloud is dropped by a 10-minute filter.
+
+    Returns
+
+    ``duration``  (thr,)          the threshold axis, in HOURS, starting at 1
+    ``hours``     (thr, season)   surviving liquid hours in each season
+    ``mean``      (thr,)          mean of that over the seasons
+    ``n_events``  (thr, season)   how many events survive
+
+    The threshold axis is integer hours because ERA5 is hourly; a 30-minute
+    threshold is not a finer question ERA5 answers badly, it is a question the
+    archive cannot represent at all.
+    """
+    ser = site_liquid_containing_series(A)
+    thr = np.arange(1, int(max_duration_h) + 1, dtype=float) * DURATION_STEP_H
+    n_s = len(A.keep_idx)
+    hours = np.zeros((thr.size, n_s))
+    n_ev = np.zeros((thr.size, n_s), dtype=np.int64)
+
+    for s in range(n_s):
+        m = ser["s_of"] == s
+        idx = np.flatnonzero(m)
+        # step_ok is defined BETWEEN steps, so slice it on the interior pairs
+        # of this season's block; the season boundary is already False in it.
+        sub_ok = ser["step_ok"][idx[:-1]] if idx.size > 1 else np.empty(0, bool)
+        dur, liq_h = liquid_events(ser["liquid"][m], sub_ok, gap_h)
+        for k, t in enumerate(thr):
+            keep = dur >= t
+            hours[k, s] = float(liq_h[keep].sum())
+            n_ev[k, s] = int(keep.sum())
+
+    return {
+        "duration": thr,
+        "hours": hours,
+        "mean": nanmean_quiet(hours, axis=1),
+        "n_events": n_ev,
+        "gap_h": float(gap_h),
+        "n_holes": ser["n_holes"],
+        "site_lat": ser["site_lat"], "site_lon": ser["site_lon"],
+    }
+
+
+def season_span_label(used) -> str:
+    """'2022/23-2025/26' for a list of season START years.
+
+    The end year is taken modulo 100 AFTER incrementing, so 1999 renders as
+    1999/00 rather than 1999/100.
+    """
+    def one(y: int) -> str:
+        return f"{int(y)}/{(int(y) + 1) % 100:02d}"
+    return one(used[0]) if len(used) == 1 else f"{one(used[0])}-{one(used[-1])}"
+
+
+def duration_ticks(thr: np.ndarray) -> np.ndarray:
+    """Ticks for the duration axis that always include its left end.
+
+    The axis starts at 1 h -- ERA5's shortest resolvable event -- and a default
+    locator puts its first tick at 5, which hides exactly the number a reader
+    needs to see.
+    """
+    lo, hi = float(thr[0]), float(thr[-1])
+    step = max(1.0, round((hi - lo) / 6.0))
+    ticks = np.arange(lo, hi + 1e-9, step)
+    if ticks[-1] < hi - 1e-9:
+        ticks = np.append(ticks, hi)
+    return ticks
+
+def fig_sweep_liquid_hours_duration(A: Analysis, out_dir=None,
+                                    dpi: int | None = None,
+                                    max_duration_h: int = DEFAULT_MAX_DURATION_H,
+                                    gap_h: float = 0.0,
+                                    with_lwp_axis: bool = True,
+                                    min_max: bool = True):
+    """Liquid-containing hours at the Barrow cell against BOTH quality knobs.
+
+    The duration curve (blue, upper axis) is the ERA5 analogue of the ARM
+    pipeline's minimum-cloud-duration filter. With ``with_lwp_axis`` the LWP
+    sweep from :func:`fig_sweep_liquid_hours_site` is drawn on the same panel
+    against the lower axis, which is the observational figure's layout: two
+    quality thresholds, one y axis, so the cost of each is read off the same
+    scale.
+
+    THE TWO AXES ARE NOT COMPARABLE TO THE OBSERVATIONAL ONES IN RANGE. ERA5's
+    duration axis starts at 1 h, where the ARM one ends; see the note at
+    DEFAULT_MAX_DURATION_H.
+    """
+    import matplotlib.pyplot as plt
+
+    dur = sweep_liquid_duration_hours(A, max_duration_h, gap_h)
+    args, pk = A.args, A.col["phase_kw"]
+    y = dur["mean"]
+    per_season = dur["hours"]
+
+    fig, axes, ax_note = panel_grid_with_notes(1, 1, 7.6, 5.2)
+    ax = axes[0]
+
+    # The no-cutoff reference: every liquid hour, however short-lived. This is
+    # the number every other point on the figure is a reduction of.
+    ax.axhline(y[0], color=DURATION_COLOR, ls="--", lw=1.2, alpha=0.7)
+    ax.annotate(f"{y[0]:,.0f} h  (1 h steps, no duration cutoff)",
+                xy=(0.985, y[0]), xycoords=("axes fraction", "data"),
+                ha="right", va="bottom", fontsize=9, color=DURATION_COLOR)
+
+    ax_top = ax.twiny() if with_lwp_axis else ax
+    if with_lwp_axis:
+        # Duration on the TOP axis and LWP on the bottom, matching the
+        # observational figure's assignment of the two knobs to the two axes.
+        lh = sweep_liquid_containing_hours(A)
+        slot, _ = sweep_class_slot(SITE_KEY)
+        lwp, y_lwp = lh["lwp"], lh["mean"][:, slot]
+        ax.plot(lwp, y_lwp, color="black", lw=1.8, marker="o", markersize=5,
+                markerfacecolor="none", markeredgewidth=1.3,
+                label="LWP threshold (lower axis)")
+        ax.set_xlim(lwp[0], lwp[-1])
+        ax.set_xlabel("Minimum LWP threshold  [g m$^{-2}$]", fontsize=11)
+        ax_top.set_xlim(dur["duration"][0], dur["duration"][-1])
+        ax_top.set_xlabel("Minimum cloud duration threshold  (hours)",
+                          fontsize=11, color=DURATION_COLOR, labelpad=8)
+        # Tick the LEFT END explicitly. It is 1 h, not 0, and that is the whole
+        # point of the figure -- an automatic locator starts at 5 and hides it.
+        ax_top.set_xticks(duration_ticks(dur["duration"]))
+        ax_top.tick_params(axis="x", colors=DURATION_COLOR, labelsize=9.5)
+        for sp in ("top",):
+            ax_top.spines[sp].set_color(DURATION_COLOR)
+    else:
+        ax.set_xlim(dur["duration"][0], dur["duration"][-1])
+        ax.set_xticks(duration_ticks(dur["duration"]))
+        ax.set_xlabel("Minimum cloud duration threshold  (hours)", fontsize=11)
+
+    if min_max and per_season.shape[1] > 1:
+        ax_top.fill_between(dur["duration"], per_season.min(axis=1),
+                            per_season.max(axis=1), color=DURATION_COLOR,
+                            alpha=0.12, linewidth=0, zorder=1,
+                            label=f"min-max across {per_season.shape[1]} seasons")
+    ax_top.plot(dur["duration"], y, color=DURATION_COLOR, lw=2.0, marker="s",
+                markersize=5, markerfacecolor="none", markeredgewidth=1.4,
+                label="Cloud duration threshold"
+                      + (" (upper axis)" if with_lwp_axis else ""), zorder=3)
+
+    ax.set_ylim(0, max(y.max(), y[0]) * 1.18)
+    ax.set_ylabel("Liquid-containing cloud hours\nper season, per grid cell",
+                  fontsize=11)
+    ax.grid(True, alpha=0.25, linewidth=0.5)
+    ax.set_axisbelow(True)
+    ax.tick_params(labelsize=9.5)
+    handles = ax.get_legend_handles_labels()
+    if with_lwp_axis:
+        h2 = ax_top.get_legend_handles_labels()
+        handles = (handles[0] + h2[0], handles[1] + h2[1])
+    ax.legend(*handles, fontsize=9.5, framealpha=0.9, loc="lower left")
+
+    suptitle_over_panels(
+        fig,
+        f"Cost of a quality threshold: liquid-containing cloud hours at "
+        f"{args.region}\nERA5, {len(A.used)} cold seasons "
+        f"({season_span_label(A.used)}), "
+        f"{args.season_start[0]:02d}-{args.season_start[1]:02d} to "
+        f"{args.season_end[0]:02d}-{args.season_end[1]:02d}",
+        1, fontsize=12.5)
+    draw_notes(ax_note, duration_note_lines(A, dur))
+
+    if out_dir is not None:
+        kind = "duration_and_lwp" if with_lwp_axis else "duration"
+        path = (Path(out_dir) / f"{args.region}_sweep_liquid_hours_{kind}_"
+                                f"{A.tag}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi or args.dpi, bbox_inches="tight")
+        print(f"  -> {path}")
+    return fig
+
+
+def duration_note_lines(A: Analysis, dur: dict) -> list[str]:
+    """Side note for the duration figure."""
+    args, pk = A.args, A.col["phase_kw"]
+    return [
+        f"Season {args.season_start[0]:02d}-{args.season_start[1]:02d} to "
+        f"{args.season_end[0]:02d}-{args.season_end[1]:02d}",
+        f"  ({window_label(A.col['season_hours'])} per season)",
+        f"ARM cell {dur['site_lat']:.2f} N, {dur['site_lon']:.2f} E",
+        "",
+        f"Cloudy: tcc $\\geq$ {args.min_cloud_fraction:g}",
+        f"Floors: LWP {pk['min_lwp_g']:g}, IWP "
+        f"{pk['min_iwp_g']:g} g m$^{{-2}}$",
+        f"Liquid only: LWP/CWP $\\geq$ {pk['liquid_fraction_min']:g}",
+        "Liquid-containing: + mixed",
+        "",
+        wrap_note("An EVENT is a run of consecutive liquid-containing hours. "
+                  "One below the threshold is dropped whole, hours and all.",
+                  34),
+        "",
+        wrap_note(f"Clear-sky gap bridged: {dur['gap_h']:g} h. ERA5's smallest "
+                  f"gap is 1 h, so the ARM pipeline's 90 s tolerance has no "
+                  f"analogue.", 34),
+        "",
+        wrap_note("ERA5 is HOURLY: every hour above the floor counts as a full "
+                  "hour, and nothing below 1 h resolves. The observational "
+                  "0-60 min axis lies entirely LEFT of this one.", 34),
+        (wrap_note(f"\n!! {dur['n_holes']} in-season gaps in the record; each "
+                   f"truncates the event it falls in.", 34)
+         if dur["n_holes"] else None),
+    ]
+
+
+def print_liquid_duration_table(A: Analysis,
+                                max_duration_h: int = DEFAULT_MAX_DURATION_H,
+                                gap_h: float = 0.0) -> None:
+    """The duration figure's numbers, with the event counts behind them."""
+    dur = sweep_liquid_duration_hours(A, max_duration_h, gap_h)
+    y = dur["mean"]
+    print(f"\n  Liquid-containing cloud hours per season at the ARM site cell, "
+          f"mean over {len(A.used)} seasons,")
+    print(f"  LWP floor {A.col['phase_kw']['min_lwp_g']:g} g m-2, "
+          f"gap bridged {gap_h:g} h:")
+    print(f"    {'min duration':>13}{'hours':>10}{'% of 1 h':>10}"
+          f"{'events/season':>15}{'mean event':>12}")
+    for k, t in enumerate(dur["duration"]):
+        ne = dur["n_events"][k].mean()
+        print(f"    {t:>10.0f} h {y[k]:>10,.0f}{100 * y[k] / y[0]:>9.1f}%"
+              f"{ne:>15,.0f}{(y[k] / ne if ne else np.nan):>11.1f} h")
 
 def sweep_note_lines(col: dict, args, denom: str) -> list[str]:
     """Side-note text for the sweep figures.
