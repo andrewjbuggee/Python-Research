@@ -79,9 +79,18 @@ def moist_adiabatic_lapse_rate(T_K, P_Pa):
 
 
 def gamma_ad_kg_per_m4(T_K, P_Pa):
-    """Adiabatic LWC lapse rate Γ_ad in kg/m³/m  (Wood 2005, eq. 4).
+    """Adiabatic LWC lapse rate Γ_ad in kg/m³/m at a single local state (T, P).
 
     Γ_ad = ρ_air · (c_p / L_v) · (Γ_d − Γ_m)
+
+    Follows from conservation of moist static energy along a saturated
+    adiabat, c_p dT + g dz + L_v dq* = 0, so the condensate produced per
+    metre of ascent is dq_l/dz = (c_p / L_v)(Γ_d − Γ_m). Γ_m is the local
+    moist-adiabatic lapse rate of Randall (2009, "The Moist Adiabatic
+    Lapse Rate", eq. 36), a state function of (T, P) — not a finite
+    difference across a layer. Standard form; see e.g. Albrecht et al.
+    (1990, GRL 17, 89) or Brenguier (1991, JAS 48, 264). Wood (2005) uses
+    Γ_ad but does not give a formula for it.
     """
     rho_air = P_Pa / (R_D * T_K)
     gamma_d = G_GRAV / C_P
@@ -89,14 +98,15 @@ def gamma_ad_kg_per_m4(T_K, P_Pa):
     return rho_air * C_P / L_V * (gamma_d - gamma_m)
 
 
-def cloud_base_T_P_from_era5(era5_T_surface_to_toa: np.ndarray,
-                              era5_P_hPa_surface_to_toa: np.ndarray,
-                              z_base_km: float) -> tuple[float, float]:
-    """Hypsometric integration of the ERA5 column to get T and P at cloud base.
+def era5_T_P_at_heights(era5_T_surface_to_toa: np.ndarray,
+                        era5_P_hPa_surface_to_toa: np.ndarray,
+                        z_km: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Hypsometric integration of the ERA5 column to get T [K] and P [Pa]
+    at the requested heights z_km.
 
     Assumes the ERA5 arrays are ordered surface → TOA (P descending). Sets
     z = 0 at the lowest ERA5 level (closest to surface) and integrates the
-    hypsometric equation upward, then interpolates at z = z_base_km · 1000.
+    hypsometric equation upward, then interpolates T and P at each z.
     """
     P_Pa = era5_P_hPa_surface_to_toa * 100.0
     T    = era5_T_surface_to_toa
@@ -105,20 +115,23 @@ def cloud_base_T_P_from_era5(era5_T_surface_to_toa: np.ndarray,
     for i in range(1, n):
         T_avg = 0.5 * (T[i - 1] + T[i])
         z[i]  = z[i - 1] + (R_D * T_avg / G_GRAV) * np.log(P_Pa[i - 1] / P_Pa[i])
-    z_base_m = z_base_km * 1000.0
-    return float(np.interp(z_base_m, z, T)), float(np.interp(z_base_m, z, P_Pa))
+    z_m = np.asarray(z_km, dtype=np.float64) * 1000.0
+    return np.interp(z_m, z, T), np.interp(z_m, z, P_Pa)
 
 
 def wood_adiabaticity(lwc_top_to_base_g_m3: np.ndarray,
                        z_top_to_base_km: np.ndarray,
                        era5_T: np.ndarray, era5_P_hPa: np.ndarray) -> float:
-    """LWP_observed / LWP_adiabatic  per Wood (2005).
+    """LWP_observed / LWP_adiabatic  per Wood (2005, JAS 62, 3011; sec. 3b).
 
     LWP_obs = 1000 · ∫ LWC dz   (LWC g/m³, z km, → g/m²)
     LWP_ad  = ½ · Γ_ad · h²     (h = z_top − z_base in m, Γ_ad in kg/m⁴ → g/m²)
 
-    Γ_ad is evaluated at cloud-base T,P from the ERA5 column. Returns NaN
-    when the cloud has degenerate thickness or yields Γ_ad ≤ 0.
+    Following Wood, a single Γ_ad is used per cloud, evaluated at the mean
+    in-cloud temperature and pressure: T and P are taken from the ERA5
+    column (hypsometric integration) at every level of the cloud profile
+    and averaged over the cloud depth. Returns NaN when the cloud has
+    degenerate thickness or yields Γ_ad ≤ 0.
     """
     z_top_km  = float(z_top_to_base_km[0])
     z_base_km = float(z_top_to_base_km[-1])
@@ -129,8 +142,12 @@ def wood_adiabaticity(lwc_top_to_base_g_m3: np.ndarray,
     lwp_obs_g = 1000.0 * abs(np.trapezoid(lwc_top_to_base_g_m3,
                                           z_top_to_base_km))   # g/m²
 
-    T_base, P_base = cloud_base_T_P_from_era5(era5_T, era5_P_hPa, z_base_km)
-    gamma_ad = gamma_ad_kg_per_m4(T_base, P_base)               # kg/m⁴
+    # Mean in-cloud T and P: sample the ERA5 column at every profile level
+    # (top → base) and take the trapezoid-weighted mean over cloud depth.
+    T_lev, P_lev = era5_T_P_at_heights(era5_T, era5_P_hPa, z_top_to_base_km)
+    T_mean = abs(np.trapezoid(T_lev, z_top_to_base_km)) / (h_m / 1000.0)
+    P_mean = abs(np.trapezoid(P_lev, z_top_to_base_km)) / (h_m / 1000.0)
+    gamma_ad = gamma_ad_kg_per_m4(T_mean, P_mean)               # kg/m⁴
     if gamma_ad <= 0:
         return float('nan')
     lwp_ad_g = 0.5 * gamma_ad * (h_m ** 2) * 1000.0             # g/m²
