@@ -1,0 +1,131 @@
+# DOE ARM Utqiagvik liquid-containing cloud hours retained vs threshold
+# ==========================================================================
+#
+# Written by barrow_liquidContaining_cloud_susceptibility_fromGenies_data.ipynb
+# from Genie Lorenzo Pearson's exports, source = 'data'.
+# 11 cold seasons, 2014/15 - 2024/25, Oct 1 - Mar 31.
+#
+# knob = 'lwp'      : minimum LWP threshold, g m-2, no duration cutoff.
+#                     retained_pct is relative to the LWP > 0 g m-2 value
+#                     (1449.6 h/season). Sub-zero thresholds are
+#                     the MWR noise floor and exceed 100% by construction.
+# knob = 'duration' : minimum cloud duration threshold, minutes, with the
+#                     90 s clear-sky gap bridging of Genie's pipeline.
+#                     retained_pct is relative to the no-cutoff value
+#                     (1558.9 h/season).
+#
+# The two baselines differ because the duration analysis bridges 90 s gaps
+# and the LWP sweep does not; each curve is normalised to ITS OWN baseline.
+#
+knob,threshold_unit,threshold,hours_per_season,retained_pct
+lwp,g m-2,-10.0000,1542.2068,106.3863
+lwp,g m-2,-9.0000,1540.5735,106.2736
+lwp,g m-2,-8.0000,1538.4818,106.1293
+lwp,g m-2,-7.0000,1535.5932,105.9300
+lwp,g m-2,-6.0000,1531.5636,105.6521
+lwp,g m-2,-5.0000,1525.8894,105.2606
+lwp,g m-2,-4.0000,1517.8780,104.7080
+lwp,g m-2,-3.0000,1506.9000,103.9507
+lwp,g m-2,-2.0000,1492.3720,102.9485
+lwp,g m-2,-1.0000,1473.4758,101.6450
+lwp,g m-2,0.0000,1449.6295,100.0000
+lwp,g m-2,1.0000,1413.6220,97.5161
+lwp,g m-2,2.0000,1375.0818,94.8575
+lwp,g m-2,3.0000,1335.8970,92.1544
+lwp,g m-2,4.0000,1297.5652,89.5101
+lwp,g m-2,5.0000,1260.3833,86.9452
+lwp,g m-2,6.0000,1224.9280,84.4994
+lwp,g m-2,7.0000,1191.7205,82.2086
+lwp,g m-2,8.0000,1160.6258,80.0636
+lwp,g m-2,9.0000,1131.3250,78.0424
+lwp,g m-2,10.0000,1104.1606,76.1685
+lwp,g m-2,11.0000,1078.9455,74.4290
+lwp,g m-2,12.0000,1054.8553,72.7672
+lwp,g m-2,13.0000,1032.3591,71.2154
+lwp,g m-2,14.0000,1010.6568,69.7183
+lwp,g m-2,15.0000,990.2515,68.3107
+lwp,g m-2,16.0000,970.7152,66.9630
+lwp,g m-2,17.0000,951.8318,65.6603
+lwp,g m-2,18.0000,933.9735,64.4284
+lwp,g m-2,19.0000,916.5083,63.2236
+lwp,g m-2,20.0000,899.5538,62.0540
+duration,min,0.0000,1558.9235,100.0000
+duration,min,5.0000,1247.9629,80.0529
+duration,min,10.0000,1027.4068,65.9049
+duration,min,15.0000,882.6432,56.6188
+duration,min,20.0000,775.1750,49.7250
+duration,min,25.0000,692.0962,44.3958
+duration,min,30.0000,627.8394,40.2739
+duration,min,35.0000,574.4114,36.8467
+duration,min,40.0000,525.8106,33.7291
+duration,min,45.0000,483.0879,30.9886
+duration,min,50.0000,444.2144,28.4949
+duration,min,55.0000,415.0697,26.6254
+duration,min,60.0000,384.6682,24.6752
+duration,min,65.0000,357.0144,22.9013
+duration,min,70.0000,334.2530,21.4413
+duration,min,75.0000,312.4985,20.0458
+duration,min,80.0000,296.2652,19.0045
+duration,min,85.0000,280.8364,18.0148
+duration,min,90.0000,264.4576,16.9641
+duration,min,95.0000,249.8894,16.0296
+duration,min,100.0000,236.6045,15.1774
+duration,min,105.0000,222.6545,14.2826
+duration,min,110.0000,212.0848,13.6046
+duration,min,115.0000,199.6523,12.8071
+duration,min,120.0000,185.8447,11.9213
+duration,min,125.0000,174.7288,11.2083
+duration,min,130.0000,166.0697,10.6528
+duration,min,135.0000,157.4614,10.1006
+duration,min,140.0000,147.9068,9.4878
+duration,min,145.0000,142.0811,9.1140
+duration,min,150.0000,135.5841,8.6973
+duration,min,155.0000,127.5091,8.1793
+duration,min,160.0000,119.8886,7.6905
+duration,min,165.0000,115.4636,7.4066
+duration,min,170.0000,109.8924,7.0493
+duration,min,175.0000,106.2386,6.8149
+duration,min,180.0000,98.9856,6.3496
+duration,min,185.0000,93.4674,5.9956
+duration,min,190.0000,87.5159,5.6139
+duration,min,195.0000,82.8583,5.3151
+duration,min,200.0000,80.7689,5.1811
+duration,min,205.0000,77.4000,4.9650
+duration,min,210.0000,71.7417,4.6020
+duration,min,215.0000,67.8848,4.3546
+duration,min,220.0000,65.5780,4.2066
+duration,min,225.0000,62.5591,4.0130
+duration,min,230.0000,60.4962,3.8806
+duration,min,235.0000,57.3409,3.6782
+duration,min,240.0000,52.6659,3.3784
+duration,min,245.0000,50.8333,3.2608
+duration,min,250.0000,47.8379,3.0686
+duration,min,255.0000,45.1530,2.8964
+duration,min,260.0000,43.5902,2.7962
+duration,min,265.0000,42.0000,2.6942
+duration,min,270.0000,41.1879,2.6421
+duration,min,275.0000,38.3023,2.4570
+duration,min,280.0000,35.7886,2.2957
+duration,min,285.0000,34.5015,2.2132
+duration,min,290.0000,32.3273,2.0737
+duration,min,295.0000,31.4417,2.0169
+duration,min,300.0000,30.0909,1.9302
+duration,min,305.0000,28.7129,1.8418
+duration,min,310.0000,26.3803,1.6922
+duration,min,315.0000,24.4879,1.5708
+duration,min,320.0000,23.0417,1.4780
+duration,min,325.0000,20.1152,1.2903
+duration,min,330.0000,18.6258,1.1948
+duration,min,335.0000,15.6114,1.0014
+duration,min,340.0000,15.0970,0.9684
+duration,min,345.0000,13.5500,0.8692
+duration,min,350.0000,13.0250,0.8355
+duration,min,355.0000,12.4894,0.8012
+duration,min,360.0000,11.4061,0.7317
+duration,min,365.0000,9.7530,0.6256
+duration,min,370.0000,9.1939,0.5898
+duration,min,375.0000,6.3803,0.4093
+duration,min,380.0000,3.5197,0.2258
+duration,min,385.0000,1.7864,0.1146
+duration,min,390.0000,1.7864,0.1146
+duration,min,395.0000,0.6008,0.0385

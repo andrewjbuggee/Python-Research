@@ -355,7 +355,17 @@ def _warn_no_files(
 
 
 def local_files(key: str) -> List[Path]:
-    """All locally downloaded files for a pipeline key, across product eras."""
+    """All locally downloaded files for a pipeline key, across product eras.
+
+    Files are sorted by name WITHIN each ARM datastream, and the datastreams
+    are kept in the spec's declared order (preferred first: QCRAD c2 before
+    c1, ARSCL bnd c1 before c0). readers.read_timeseries relies on this: it
+    concatenates in list order, sorts by time with a stable sort, and keeps
+    the FIRST of any duplicate timestamps, so a period covered by two data
+    levels resolves to the preferred one. A global sort of the full paths
+    would instead put ".c1/" ahead of ".c2/" and silently invert that
+    preference wherever the levels overlap.
+    """
     if "." in key:
         arm_names: Iterable[str] = (key,)
     else:
@@ -365,6 +375,10 @@ def local_files(key: str) -> List[Path]:
         d = config.raw_dir_for(arm_name)
         if d.is_dir():
             # ARM ships .nc (newer) and .cdf (older) netCDF files.
-            paths.extend(sorted(d.glob(f"{arm_name}.*.nc")))
-            paths.extend(sorted(d.glob(f"{arm_name}.*.cdf")))
-    return sorted(paths)
+            paths.extend(
+                sorted(
+                    list(d.glob(f"{arm_name}.*.nc")) + list(d.glob(f"{arm_name}.*.cdf")),
+                    key=lambda p: p.name,
+                )
+            )
+    return paths

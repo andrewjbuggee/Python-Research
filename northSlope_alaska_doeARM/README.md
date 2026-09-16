@@ -69,7 +69,7 @@ radiation-environment set. Use `--datastreams sonde mwr ceil kazr` /
 |------------|--------------------------------------|-------------------------------------|---------------------------------|---------------------|------|
 | sonde      | `nsasondewnpnC1.b1`                  | Vaisala radiosonde, 0-4 launch/day  | T, Td, RH, p, wind vs. altitude | 5-8 m vertical      | hartig26-core |
 | kazr       | `nsakazrcorgeC1.c1` (~2011-2014), `nsakazrcorgeC1.c0` (~2014-2019), `nsakazrcfrcorgeC1.c0` (~2019-2023) | Ka-band (35 GHz) zenith Doppler cloud radar, general mode | reflectivity, SNR | 4-5 s, 30 m | hartig26-core |
-| mwr        | `nsamwrret1liljclouC1.c2`            | Microwave radiometer + MWRRET v1 retrieval (Turner et al. 2007) | best-estimate LWP, PWV | 20-30 s | hartig26-core |
+| mwr        | `nsamwrret1liljclouC1.c2` **and** `.c1` (c2 preferred where both exist) | Microwave radiometer + MWRRET v1 retrieval (Turner et al. 2007) | best-estimate LWP, PWV | 20-30 s | hartig26-core |
 | ceil       | `nsaceilC1.b1`                       | Vaisala CL31 ceilometer             | first cloud base height, status | 15 s, 10 m          | hartig26-core |
 | met        | `nsametC1.b1`                        | Surface meteorology station (2003-) | 2-m T and RH, wind, pressure    | 1 min               | bertrand25-core |
 | mettwr     | `nsamettwrC1.b1`                     | Tower met, MET predecessor (~1998-2003) | 2-m T and RH               | 1 min               | bertrand25-core |
@@ -203,7 +203,13 @@ arm_nsa/
   coordinate.py   sonde-coordinated hourly library builder (Hartig26 product)
   phase.py        sonde-anchored sky-state heuristic (full-period fallback
                   where Shupe-Turner is unavailable)
-scripts/          CLI entry points (download, build, 6 plot scripts, and
+  seb.py          surface energy budget: SEB datastream tiers, readers, Eq. (1)
+                  terms with ERA5-compatible names (see the SEB section)
+  bulk_flux.py    bulk-aerodynamic SH/LH (MOST) for the un-instrumented terms
+  ground_flux.py  ground heat flux estimates (residual / conduction / inertia)
+  cloud_water.py  IWP from reflectivity, cloud temperature at ARSCL boundaries
+scripts/          CLI entry points (download_nsa_data.py, download_nsa_seb_data.py,
+                  download_nsa_wind_data.py, build, plot scripts, and
                   analyze_phase_radiation.py)
 tests/            unit tests + synthetic end-to-end integration tests
 ```
@@ -380,6 +386,7 @@ statistics table as CSV.
 ```bash
 python tests/test_pipeline.py                # 21 unit tests, synthetic arrays
 python tests/test_shupe_turner.py            # 7 tests: scene rules + pairing
+python tests/test_seb.py                     # 19 tests: SEB terms, bulk flux, G, IWP
 python tests/test_integration_synthetic.py   # end-to-end on fabricated ARM files
 # or: pytest tests/ -v
 ```
@@ -391,6 +398,196 @@ base at 450 m) through `build_library()` with analytic value checks, ending
 in `phase_code = liquid_confident`; and (2) a Shupe-Turner day with four 6-h
 scene blocks (clear/liquid/mixed/ice) plus QCRAD, checked for exactly 25%
 occurrence each and correct per-scene flux statistics.
+
+## Surface energy budget from observations (the ERA5 SEB twin)
+
+`scripts/download_nsa_seb_data.py` + `arm_nsa/seb.py` are the observational
+counterpart of `ERA5/surface_energy_budget/download_era5_seb.py` +
+`seb_terms.py`: the same Sledd et al. (2025) Equation (1), the same tiers
+(`--var-set core / recommended / extended`), the same output variable names
+and sign conventions (`lwd_W_m2`, `sh_up_W_m2` positive upward, ...), so an
+ERA5 grid cell and the NSA C1 instruments can be compared term by term.
+
+```
+LWD - LWU + SWD - SWU - SWT - SH - LH + G = M                       (Eq. 1)
+```
+
+```bash
+python scripts/download_nsa_seb_data.py --dry-run          # what the archive holds
+python scripts/download_nsa_seb_data.py --var-set core     # < 1 GB, minutes
+python scripts/download_nsa_seb_data.py                    # recommended, ~14 GB
+python scripts/download_nsa_seb_data.py --season 2024      # a different cold season
+python scripts/build_nsa_seb_hourly.py                     # -> data/processed/nsa_seb_hourly_<start>_<end>.nc
+```
+
+`build_nsa_seb_hourly.py` turns the 1-min streams into the hourly file the ERA5
+comparison needs: every Eq. (1) term, the bulk SH/LH, two G estimates,
+merged LWP with provenance, PWV, ARSCL cloud fraction / lowest base / highest
+top, Z-based IWP and precipitation (when `cldtype` is on disk), and the
+temperature at the lowest cloud base from the nearest sonde (when `sonde` is
+on disk). Cloud phase is left to a follow-up step on top of this file (see the
+script docstring for why).
+
+Everything below was established by querying the ARM Live archive and opening
+one real file per datastream on **2026-09-15**, for the cold season
+**2025-10-01 .. 2026-03-31** (182 days). Variable names, units, mounting
+heights and QC conventions in `config.py` come from those files, not from
+documentation.
+
+### What Barrow measures, term by term
+
+| Term | Status at NSA C1 | Source (key) | Reliability |
+|------|------------------|--------------|-------------|
+| LWD, LWU, SWD, SWU | **measured**, 1-min | `qcrad` (QCRAD1LONG c1, Long & Shi 2008 QC); `sirs` carries the second LWD pyrgeometer and the case/dome temperatures | highest: calibrated, ventilated radiometers. QCRAD c1 LWD is SKYRAD pyrgeometer 1 verbatim; on 2025-12-15 pyrgeometer 2 read 4.6 W/m^2 lower on average (up to 12 W/m^2) -- that spread is the in-situ LWD uncertainty and is the size of the SH term. LWU is measured at **10 m** (10-m-radius footprint). |
+| T_skin | measured as IR brightness T, 1-min | `gndirt` (looks down from 10 m); also inverted from LWU | needs emissivity (0.985 as in Sledd) and reflected-sky correction (`seb.skin_temperature_from_irt`); the two routes agreed to -0.5 +- 0.4 K on a test week |
+| T, RH, U, p | measured, 1-min | `met` (2 m T/RH, 10 m wind), `twr` (2/10/20/40 m) | high |
+| SH, LH | **not measured** -- no eddy-correlation system has ever existed at C1 | `arm_nsa/bulk_flux.py` from T_skin, T/RH, U, p | parameterization: MOST with SHEBA (Grachev et al. 2007) stable functions and Andreas (1987) scalar roughness; z_0 is a free parameter (default 3e-4 m; +-x3 changes SH by ~5%) |
+| G | **not measured** -- no SEBS, STAMP, snow depth or snow temperature at C1 | `arm_nsa/ground_flux.py` | weakest: residual of Eq. (5), snow conduction (needs non-ARM snow data), or thermal inertia from the T_skin history (Wang & Bras 1999) |
+| SWT, M | zero in polar night / for frozen tundra | -- | -- |
+
+The measured turbulent and soil fluxes nearest to Barrow are at **NSA E10,
+Oliktok Point (~250 km ESE)**: `ecor_e10` (nsaecorsfE10.b1, 2024-10 .. present,
+EddyPro SH/LH/u*/L) and `sebs_e10` (nsasebsE10.b1, soil heat-flux plates,
+2011 .. present; positive **upward**, per its `standard_name` and its own
+closing `surface_energy_balance`). They are in the `extended` tier for testing
+the bulk parameterization on the same tundra type in the same season and must
+never be plotted as Barrow data. Two cautions from the 2025-12-15 sample:
+the E10 ECOR reported SH of +200 to +1400 W/m^2 in polar night with EddyPro
+flag 0 -- a rimed sonic anemometer -- so `seb.read_ecor_e10` applies a
+plausibility screen (|flux| < 150 W/m^2) and the winter record should be
+expected to be sparse; and the E10 SEBS read G = +7 W/m^2 upward with the
+5-cm soil still at -3.9 degC (active layer refreezing), which is the kind of
+magnitude to expect for G at Barrow in early winter. Every ECOR/SEBS/STAMP datastream name was queried at
+C1, C2, E10-E14 and M1 over 1998-2026; the full list of absences, with the
+evidence, is `seb.UNAVAILABLE_AT_C1` and is printed by every run.
+
+### Cloud state (the ERA5 tclw / tciw / cloud-temperature / phase analogues)
+
+| Quantity | Source (key) | Notes for 2025/26 |
+|----------|--------------|-------------------|
+| LWP | `mwr` (MWRRET c2 -> c1) **and** `mwr3c` (3-channel MWR, 90 GHz) | MWRRET is the standard physical retrieval but this season has no retrieval on Dec 15-16, no files Dec 14 / Feb 15, and a bias episode (median -47 g/m^2 on Nov 15). MWR3C ran continuously; its regression LWP looked sane on those days (5-11 g/m^2 medians) but has no clear-sky bias correction and no qc_lwp. `cloud_water.merge_lwp` keeps provenance. |
+| IWP | `cldtype` 1-min ARSCL reflectivity profile + `cloud_water.iwp_from_reflectivity` (IWC = 0.1 Z^0.63, phase-masked) | factor-of-2 class uncertainty. The only retrieved IWC at NSA is `microbase` (nsamicrobaseC1.c1) at **670 MB/day**, so it is excluded from every tier -- request by key. |
+| cloud base/top | `arsclbnd` (c1 -> c0) | complete; clear-sky sentinels (-1/-2) converted to NaN + `sky_flag` |
+| cloud temperature | boundaries placed in the sonde profile: `thermocldphase` `sonde_temp` (through Jan 20), then `sonde` launches or `interpsonde` (61 MB/day) via `cloud_water.cloud_temperature_at_boundaries` | |
+| phase | `thermocldphase` c0 | processed **only through 2026-01-20** at the time of writing; nothing later exists yet. `mplcmask` depolarization also ends Jan 20. Re-run `--dry-run` later. |
+| precipitation | `met` PWD fields; `cldtype` radar precip rate | no stand-alone gauge at C1 |
+
+### Data quality of the 2025/26 season (found while building this; act on it)
+
+**Downwelling pyrgeometer 1 failed for much of Dec 2025 - Feb 2026, and
+QCRAD c1 reports pyrgeometer 1 verbatim.** Monthly medians / 95th percentiles
+of the two SKYRAD pyrgeometers (from `sirs`):
+
+| month | pyrg 1 (= QCRAD c1 LWD) | pyrg 2 | LWU | QCRAD c1 LWD surviving its QC |
+|-------|------------------------|--------|-----|-------------------------------|
+| Oct | 284 / 315 | 283 / 315 | 296 / 320 | 100% |
+| Nov | 250 / 291 | 249 / 291 | 266 / 297 | 100% |
+| Dec | 225 / **419** | 208 / 269 | 230 / 275 | 88% |
+| Jan | 193 / **363** | 162 / 289 | 203 / 292 | 81% |
+| Feb | **290** / **508** | 165 / 271 | 202 / 270 | **44%** |
+| Mar | 204 / 272 | 204 / 272 | 221 / 278 | 100% |
+
+LWD above ~300 W/m^2 is impossible in Arctic winter; 25% of Dec-Feb
+pyrgeometer-1 samples exceed sigma T_2m^4 + 25 W/m^2 (0.4% for pyrgeometer 2).
+Ventilators ran and dome-case temperature differences were ~0 throughout, so
+this is a sensor fault, not dome heating. QCRAD's tests removed only the
+extreme part: on the samples it kept, c1 LWD is **12-13.5 W/m^2 too high in
+Dec-Jan**, and in Feb its 56% rejection preferentially removed cloudy periods,
+leaving a clear-sky-biased record. Consequences and remedy:
+
+- `seb.best_estimate_lwdn()` builds LWD from both pyrgeometers with an
+  explicit, flagged rule (mean when they agree within 10 W/m^2; the plausible
+  one otherwise; pyrgeometer 2 when both are "plausible" but disagree), and
+  `seb.compute_seb_terms(..., sirs=sirs)` uses it. Over the season: 74% mean of
+  both, 13.5% pyrgeometer 2 only, 12% flagged disagreements, 99.8% coverage
+  (vs 86% for QCRAD c1). Season-mean LWD 213 W/m^2 vs 223 from QCRAD c1.
+- Re-check when QCRAD **c2** appears for these dates: its best-estimate logic
+  will arbitrate the two sensors properly and should supersede this rule.
+
+**Skin temperature: IRT vs LWU disagree in calm clear conditions.** Corrected
+IRT minus LWU-inverted skin temperature is -0.5 +- 0.4 K in Oct-Nov and Mar
+but -1.3 to -2.6 K (std up to 3 K, 5th percentile -9.5 K) in Dec-Feb, worst
+when pyrgeometer 1 is also bad. In those cases (mean wind 2.9 m/s) the IRT
+puts the surface 5.7 K colder than the 2-m air -- the expected clear-sky
+inversion -- while the LWU inversion puts it 0.7 K *warmer* than 2-m air,
+which is not physical. A frost-covered downward-facing dome emitting near the
+10-m air temperature would produce exactly that. Moderately confident
+interpretation: **in calm clear periods the IRT is the better skin
+temperature and LWU may be biased high by ~10 W/m^2** (3 K at 250 K). Not
+corrected in the code; `compute_seb_terms` reports both (`t_skin_K` from the
+IRT, `t_skin_from_lwu_K`) so the difference can be used as a screen.
+
+**MWRRET LWP** has gaps and a bias episode (see the cloud-state table);
+**MWR3C** LWP shows a ~+8 g/m^2 clear-sky offset (5th percentile) because it
+has no clear-sky bias correction -- estimate and remove it against MWRRET in
+clear periods before comparing with ERA5 tclw.
+
+### Flux responses to radiative forcing (Sledd et al. 2025 framework)
+
+Two notebooks at the repository root are the observational twins of
+`ERA5/surface_energy_budget/turbulent_flux_response_to_DLR.ipynb` and
+`..._to_DLR_and_SW.ipynb`:
+
+| notebook | forcer | what it answers |
+|---|---|---|
+| `seb_flux_response_to_DLR.ipynb` | LWD | where an extra W m^-2 of downwelling longwave goes: LWU, bulk SH, bulk LH, SW_net co-variation, and the subsurface remainder |
+| `seb_flux_response_to_DLR_and_SW.ipynb` | LWD + SW_net (Sledd's forcer) | the same four-term partition, month by month against the digitised MOSAiC responses of Sledd et al. Fig. 2a, the December Fig. 1 panels, their winter window, closure |
+
+Both are generated by `scripts/make_flux_response_notebooks.py` (`--execute`
+runs them) and hold no analysis of their own: everything comes from
+`arm_nsa/flux_response.py` -- plain and T_2m-controlled least-squares
+responses, the partition and its sign-honest ledger, a moving-block bootstrap
+(7-day blocks) for intervals, monthly responses with r^2-sized markers, the
+sensitivity of the bulk-flux responses to z_0 and the stable-stability scheme,
+the 10-min vs hourly comparison, and the ERA5 grid cell nearest the site on the
+same Eq. (1) terms. They read the two products of
+`scripts/build_nsa_seb_hourly.py` (`--average 10min` for the Sledd cadence,
+`1h` for ERA5) and write PNGs to `figures/seb_flux_response/`.
+
+**Read the variables section of either notebook first.** At MOSAiC every
+responder was an independent measurement; at Barrow only the radiative terms
+are, so f_LWU is comparable with Sledd's while f_SH, f_LH (bulk
+parameterizations) and f_G (thermal inertia) are all downstream of the same
+measured skin temperature. Their sum closing to one is therefore consistency,
+not closure; the testable statement is d(NA)/dF against d(-G_TI)/dF.
+
+### Tiers and sizes (measured per-day sizes x 182 days)
+
+| Tier | Keys | Size |
+|------|------|------|
+| core | qcrad gndirt met twr mwr arsclbnd | ~0.8 GB |
+| recommended | core + mwr3c cldtype sonde thermocldphase sirs | ~14 GB (thermocldphase 7.6 GB for its 111 days) |
+| extended | recommended + interpsonde ceil mplcmask ecor_e10 sebs_e10 | ~+17 GB |
+| by key only | microbase (61 GB for Oct-Dec), kazr, skyrad, gndrad | |
+
+Each run writes `data/processed/seb_manifest_<start>_<end>.json` with archive
+vs. on-disk file counts, sizes and the absence list.
+
+### Analysis modules
+
+```
+arm_nsa/seb.py          tiers + sizing, readers (gndirt, sirs, mwr3c, arsclbnd,
+                        cldtype, ecor_e10, sebs_e10), skin temperature from LWU
+                        and from the IRT, compute_seb_terms() with ERA5 names
+arm_nsa/bulk_flux.py    MOST bulk SH/LH: Grachev 2007 / Beljaars 1991 stable psi,
+                        Paulson 1970 unstable, Andreas 1987 z_T/z_Q, Murphy &
+                        Koop 2005 saturation over ice, iterated in L
+arm_nsa/ground_flux.py  G: residual, snow conduction (Sturm 1997 k), thermal
+                        inertia (Wang & Bras 1999; validated against the
+                        analytic half-space solution in tests/test_seb.py)
+arm_nsa/cloud_water.py  IWP from reflectivity, cloud temperature at ARSCL
+                        boundaries, LWP merging with provenance
+scripts/download_nsa_seb_data.py   the downloader (tiers, dry-run, manifest)
+scripts/build_nsa_seb_hourly.py    the hourly product for the ERA5 comparison
+```
+
+Two reader fixes came out of this work and apply package-wide: `qc.py` now
+reads the QC bit table from the file's *global* `qc_bit_N_assessment`
+attributes when the `qc_` variable has none (GNDIRT, the 40-m tower), so those
+streams no longer drop merely-Indeterminate samples; and `download.local_files`
+keeps the spec's preferred-datastream order so QCRAD c2 (and ARSCL c1) win
+over c1/c0 wherever two levels overlap, instead of the alphabetical order that
+silently inverted the preference.
 
 ## Not implemented yet (natural next steps)
 

@@ -136,7 +136,9 @@ def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
     min_lwp_g = float(A.phase_kw["min_lwp_g"])
     min_iwp_g = float(A.phase_kw["min_iwp_g"])
 
-    si_l, mi_l, tcc_l, ice_frac_l, has_cloud_l, rain_l, valid_l = ([] for _ in range(7))
+    (si_l, mi_l, tcc_l, ice_frac_l, has_cloud_l, rain_l, valid_l,
+     lwp_l, iwp_l, time_l) = ([] for _ in range(10))
+    times_all = np.asarray(ds["valid_time"].values)
     read_vars = ["tcc", "tclw", "tciw", "tp"]
     for i0, block in iter_time_blocks(ds, read_vars, args.block_hours,
                                       keep_mask=use_step):
@@ -146,6 +148,7 @@ def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
             continue
         si_l.append(s_idx[slice(i0, i0 + n_t)][keep])
         mi_l.append(mi_of_slot[dos[slice(i0, i0 + n_t)][keep]])
+        time_l.append(times_all[slice(i0, i0 + n_t)][keep])
 
         tcc = block["tcc"].values[keep, i, j]
         lwp_g = block["tclw"].values[keep, i, j] * 1000.0   # kg m-2 -> g m-2
@@ -166,6 +169,11 @@ def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
 
         tcc_l.append(tcc)
         ice_frac_l.append(ice_frac)
+        # The floored paths themselves, kept for the LWP distribution figure.
+        # A liquid-containing scene always has lwp_eff > min_lwp, so the floor
+        # never appears inside that population.
+        lwp_l.append(lwp_eff)
+        iwp_l.append(iwp_eff)
         has_cloud_l.append(has_cloud)
         valid_l.append(valid)
         rain_l.append(np.isfinite(rate) & (rate >= precip_rate_max_mm_hr))
@@ -188,7 +196,12 @@ def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
     S = {
         "si": si, "mi": mi,
         "tcc": cat(tcc_l),
+        # Timestamps, so a consumer can tell a contiguous run of hours from
+        # one that jumps a gap in the archive or a season boundary.
+        "time": cat(time_l),
         "ice_frac": cat(ice_frac_l),
+        "lwp_g": cat(lwp_l),                      # g m-2, floored
+        "iwp_g": cat(iwp_l),
         "has_cloud": cat(has_cloud_l),
         "raining": cat(rain_l),
         "valid": valid,

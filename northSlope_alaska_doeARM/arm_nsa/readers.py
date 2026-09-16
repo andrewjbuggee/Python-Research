@@ -161,9 +161,13 @@ def read_timeseries(
         )
 
     combined = xr.concat(pieces, dim="time", combine_attrs="drop_conflicts")
+    # Stable sort (xarray sortby uses lexsort), so among equal timestamps the
+    # concatenation order survives -- which is the spec's preferred-datastream
+    # order from download.local_files (c2 before c1, etc.).
     combined = combined.sortby("time")
-    # Duplicate timestamps can appear at file boundaries or after reprocessing;
-    # keep the first occurrence.
+    # Duplicate timestamps can appear at file boundaries, after reprocessing,
+    # or wherever two data levels of the same product overlap; keep the first
+    # occurrence, i.e. the preferred datastream.
     _, unique_idx = np.unique(combined["time"].values, return_index=True)
     if unique_idx.size != combined.sizes["time"]:
         combined = combined.isel(time=unique_idx)

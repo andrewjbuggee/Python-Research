@@ -324,7 +324,35 @@ TRACKED: tuple[Tracked, ...] = (
     # of its own, regressing it on DLR is an INDEPENDENT route to f_res, which
     # the partition otherwise defines as a remainder.
     Tracked("rnet_W_m2", r"Net surface flux $R$", "W m$^{-2}$", 0.0),
+    # The Sledd et al. (2025) forcer: downwelling longwave PLUS net shortwave,
+    # "LWD + SWN" in their eq. 9. Regressing on it treats the shortwave as part
+    # of the perturbation rather than as a responder, which is the right frame
+    # for a cloud perturbation in the sunlit shoulders of the season -- a
+    # thinner cloud raises SW_net at the same time as it lowers DLR. In polar
+    # night the two forcers coincide, since SW_net is then zero.
+    Tracked("fnet_W_m2", r"$\mathrm{DLR} + SW_{net}$", "W m$^{-2}$", 230.0),
+    # Top ice-layer temperature (IFS Cy41r2 Section 8.9: four layers, the top
+    # one 0.07 m thick, its temperature at mid-layer). Carried so that an
+    # INDEPENDENT conductive flux into the ice can be formed, which is the one
+    # thing the residual R can be checked against. Over land the field holds a
+    # filler near 268 K and over open water the prescribed base T_0 - 1.7 K;
+    # it is meaningful for the sea-ice classes only.
+    Tracked("istl1_K", "Ice layer-1 temperature", "K", 260.0),
+    # Conduction from the skin into ice layer 1, Lambda_sk (T_sk - T_1), the
+    # right-hand side of the tile skin balance (IFS eq. 8.22). Positive DOWN,
+    # into the ice, so that a regression of R on it has slope one if the skin
+    # balance closes. See ICE_SKIN_CONDUCTIVITY for the coefficient.
+    Tracked("g_ice_W_m2", "Skin-to-ice conduction", "W m$^{-2}$", 0.0),
 )
+
+# Skin conductivity of the sea-ice tile, W m-2 K-1. INFERRED, NOT READ: the
+# extracted IFS Cy41r2 text gives Table 8.2 only for land vegetation types,
+# where "Ice caps and glaciers" is 58.0. For the sea-ice column of Section 8.9
+# the conductance from the skin to the centre of a 0.07 m top layer with
+# lambda_I = 2.03 W m-1 K-1 is 2 * 2.03 / 0.07 = 58.0 exactly, which is why the
+# ice-cap value is taken to apply. Treat the closure figure that uses it as a
+# test of this inference as much as of the energy balance.
+ICE_SKIN_CONDUCTIVITY_W_M2_K = 58.0
 
 # ---------------------------------------------------------------------------
 # Humidity, for the latent-heat side of the budget
@@ -381,7 +409,7 @@ CENTERS = np.array([t.center for t in TRACKED])
 READ_VARS: tuple[str, ...] = (
     "tcc", "tclw", "tciw", "siconc",
     "msshf", "mslhf", "msdwlwrf", "msnlwrf", "msnswrf",
-    "skt", "t2m", "u10", "v10", "d2m", "sp",
+    "skt", "t2m", "u10", "v10", "d2m", "sp", "istl1",
 )
 
 # Read only when with_cloud_temperature is on: sp clips the lowest pressure
@@ -621,7 +649,7 @@ def derived_fields(block, keep: np.ndarray) -> dict[str, np.ndarray]:
     """
     v = {name: block[name].values[keep].astype(np.float64) for name in
          ("msshf", "mslhf", "msdwlwrf", "msnlwrf", "msnswrf", "skt", "t2m",
-          "u10", "v10", "tclw", "tciw", "d2m", "sp")}
+          "u10", "v10", "tclw", "tciw", "d2m", "sp", "istl1")}
     p_hpa = v["sp"] / 100.0
     wspd = np.hypot(v["u10"], v["v10"])
     d_skt = v["skt"] - v["t2m"]
@@ -650,6 +678,9 @@ def derived_fields(block, keep: np.ndarray) -> dict[str, np.ndarray]:
     }
     out["rnet_W_m2"] = (out["lwd_W_m2"] - out["lwu_W_m2"] + out["swnet_W_m2"]
                         + out["shf_W_m2"] + out["lhf_W_m2"])
+    out["fnet_W_m2"] = out["lwd_W_m2"] + out["swnet_W_m2"]
+    out["istl1_K"] = v["istl1"]
+    out["g_ice_W_m2"] = ICE_SKIN_CONDUCTIVITY_W_M2_K * (v["skt"] - v["istl1"])
     return out
 
 
@@ -811,6 +842,23 @@ DEFAULT_PANELS: dict[str, Panel2D] = {
                          (0.0, 120.0), 180, 180, "y_on_x"),
     "dlr_rnet": Panel2D("lwd_W_m2", "rnet_W_m2", (140.0, 330.0),
                         (-450.0, 200.0), 180, 180, "y_on_x"),
+    # The same four responders against the Sledd forcer DLR + SW_net. The x
+    # range is wider at the top because net shortwave adds up to ~100 W m-2 in
+    # October and March.
+    "fnet_lwu": Panel2D("fnet_W_m2", "lwu_W_m2", (140.0, 400.0),
+                        (150.0, 350.0), 180, 180, "y_on_x"),
+    "fnet_shf": Panel2D("fnet_W_m2", "shf_W_m2", (140.0, 400.0),
+                        (-250.0, 60.0), 180, 180, "y_on_x"),
+    "fnet_lhf": Panel2D("fnet_W_m2", "lhf_W_m2", (140.0, 400.0),
+                        (-150.0, 40.0), 180, 180, "y_on_x"),
+    "fnet_rnet": Panel2D("fnet_W_m2", "rnet_W_m2", (140.0, 400.0),
+                         (-450.0, 200.0), 180, 180, "y_on_x"),
+    # The closure check: net flux R against the independent conduction G_ice.
+    # If the skin balance closes, the cloud lies on the 1:1 line. Meaningful
+    # for the sea-ice classes only; the land and open-water panels of this
+    # figure are drawn but are not a test of anything.
+    "gice_rnet": Panel2D("g_ice_W_m2", "rnet_W_m2", (-150.0, 150.0),
+                         (-150.0, 150.0), 180, 180, "y_on_x"),
 }
 
 
@@ -844,8 +892,45 @@ MIN_CURVE_HOURS = 200.0
 
 # Sea ice concentration bins for the MIZ transect. Twenty equal bins resolve
 # the 0.05-0.95 marginal band in eighteen of them, which is the point.
-DEFAULT_SICONC_EDGES = np.linspace(0.0, 1.0, 21)
+#
+# THE TOP BIN IS SPLIT, AND THE LAST EDGE SITS ABOVE ONE. Two reasons:
+#
+# (1) np.digitize(x, edges) - 1 with a final edge of exactly 1.0 sends
+#     siconc == 1.0 to index n_ice, which the accumulation then drops as
+#     out of range. On the Barrow strip that is about a third of all ocean
+#     cell-hours, silently missing from the transect until this was found.
+# (2) The skin-energy closure test needs PURE ice. ERA5's skt is the
+#     tile-weighted grid mean, and the open-water tile sits at the freezing
+#     point, 271.46 K, some 15 K warmer than a winter ice skin. Two per cent
+#     of open water inside a "pack ice" cell therefore warms the grid-mean
+#     skt by ~0.3 K, which through a skin conductivity of 58 W m-2 K-1 is
+#     ~19 W m-2 of spurious conduction -- larger than the signal, and of the
+#     opposite sign. MEASURED: mean (skt - istl1) is +0.2 K at siconc
+#     0.95-0.99 and -0.3 K at siconc = 1 exactly. Only the last bin below is
+#     free of that contamination, and it is the only one the closure figure
+#     should be read from.
+DEFAULT_SICONC_EDGES = np.concatenate([np.linspace(0.0, 0.95, 20),
+                                       [0.9999, 1.0001]])
+PURE_ICE_BIN = len(DEFAULT_SICONC_EDGES) - 2      # index of [0.9999, 1.0001)
 MIN_MIZ_HOURS = 500.0
+
+# Skin-temperature distributions by sea-ice concentration and calendar month,
+# for the contamination figure. A box plot needs quantiles, which the moment
+# matrix cannot supply, so these are accumulated as 1-D histograms of skt and
+# of (skt - istl1) per (month, siconc bin). Months are indexed Oct..Sep so the
+# Oct-Mar window is contiguous. Half-kelvin bins over 220-280 K resolve a
+# median to better than the 1.5 C that Sledd's Figure 2b can be read to.
+SKT_HIST_EDGES = np.arange(220.0, 280.01, 0.5)
+DSKT_HIST_EDGES = np.arange(-6.0, 6.001, 0.05)     # skt - istl1, K
+MONTH_ORDER = (10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+# The temperature ERA5 holds beneath its sea ice and, under ice, at its
+# open-water tile: T_0 - 1.7 K with T_0 = 273.16 K (IFS Cy41r2 Section 8.9,
+# text below eq. 8.149). MEASURED: istl1 over open-water cells in this archive
+# is 271.46 K exactly. Distinct from SEAWATER_FREEZING_K, the generic -1.8 C
+# used as a physical reference line on the skin-temperature figure.
+ERA5_ICE_BASE_K = 273.16 - 1.7
+MONTH_INDEX = {m: i for i, m in enumerate(MONTH_ORDER)}
 
 
 # ----------------------------------------------------------------------------
@@ -1554,6 +1639,133 @@ def partition_ledger(part: dict) -> dict:
 
 
 # ----------------------------------------------------------------------------
+# The partition on the Sledd forcer, DLR + SW_net
+# ----------------------------------------------------------------------------
+# Sledd et al. (2025, JGR Atmos., doi:10.1029/2024JD042578) regress every
+# surface term on the NET radiative forcing LWD + SWN rather than on LWD alone
+# (their Section 3.2 and eq. 9). With F = DLR + SW_net the net flux into the
+# surface is
+#
+#     R = LWD - LWU + SW_net + SH + LH  =  F - LWU + SH + LH
+#
+# so d(R)/d(F) = 1 - d(LWU)/d(F) + d(SH)/d(F) + d(LH)/d(F), and the partition
+# has FOUR terms, not five: the shortwave has moved from the responder side to
+# the forcer side. That is the frame for a cloud perturbation in the sunlit
+# part of the season, where thinning a cloud lowers DLR and raises SW_net at
+# once, and it is what makes the numbers comparable with Sledd's Figure 3.
+#
+# SIGN CONVENTION, because this is where the closure check goes wrong. ERA5
+# stores every flux positive DOWNWARD. Sledd define turbulent fluxes "positive
+# when directed away from the surface" (their eq. 1). The fractions below use
+# the Sledd sense -- energy LEAVING the surface -- so f_SH = -d(SH_down)/d(F).
+# Adding ERA5's downward-positive slopes to the upward LWU slope without that
+# flip does not sum to one and was never going to: it mixes conventions inside
+# one sum. In ERA5's own convention the closure reads
+#
+#     d(msnlwrf)/dF + d(msnswrf)/dF + d(msshf)/dF + d(mslhf)/dF = d(R)/dF
+#
+# with msnlwrf = LWD - LWU the NET longwave, downward-positive. Both forms are
+# the same identity; ``print_sign_convention_check`` prints all three.
+FNET_PARTITION_TERMS: tuple[tuple[str, str, str], ...] = (
+    ("f_lwu", "Upwelling LW", "#B2182B"),
+    ("f_sh", "Sensible heat", "#4C72B0"),
+    ("f_lh", "Latent heat", "#55A868"),
+    ("f_res", "Subsurface / storage", "#BBBBBB"),
+)
+
+
+def partition_fnet(acc: dict, slot: int,
+                   control: tuple[str, ...] = ()) -> dict:
+    """The four-way split of each additional W m-2 of DLR + SW_net.
+
+    Same estimator as ``partition`` with the forcer changed; the SW term is
+    absent because it is now part of what is being perturbed. ``f_res`` is the
+    remainder and equals the direct regression of ``rnet_W_m2`` on the forcer
+    by linearity, which ``self_check`` asserts.
+    """
+    x = "fnet_W_m2"
+    f_lwu = partial_slope(acc, slot, "lwu_W_m2", x, control)
+    f_sh = -partial_slope(acc, slot, "shf_W_m2", x, control)
+    f_lh = -partial_slope(acc, slot, "lhf_W_m2", x, control)
+    return {
+        "f_lwu": f_lwu, "f_sh": f_sh, "f_lh": f_lh,
+        "f_res": 1.0 - f_lwu - f_sh - f_lh,
+        "f_res_direct": partial_slope(acc, slot, "rnet_W_m2", x, control),
+        "dskt_dfnet": partial_slope(acc, slot, "skt_K", x, control),
+        "control": control,
+        "n_hours": float(acc["n"][slot]) * HOURS_PER_STEP,
+        "fnet_mean": mean_of(acc, slot, "fnet_W_m2"),
+        "swnet_mean": mean_of(acc, slot, "swnet_W_m2"),
+    }
+
+
+def ice_closure(acc: dict, slot: int) -> dict:
+    """Does the residual R equal the independent conduction into the ice?
+
+    Over a sea-ice tile the IFS skin balance (eq. 8.22) says the net flux
+    into the skin is passed entirely into the ice column, Lambda_sk (T_sk -
+    T_1). Both sides are available here: R from the four hourly-mean fluxes,
+    and G_ice from the instantaneous skin and layer-1 temperatures with the
+    (inferred) skin conductivity. If ERA5 conserves energy at the skin and the
+    hourly-mean/instantaneous mismatch is small, regressing R on G_ice gives a
+    slope of one and an intercept of zero, and d(G_ice)/d(DLR) equals f_res.
+
+    Returns those numbers. Only meaningful for the sea-ice classes: over land
+    ``istl1`` is a filler and over open water it is the prescribed base.
+    """
+    st = moment_stats(acc, slot, "g_ice_W_m2", "rnet_W_m2")
+    return {
+        "slope": st["slope"], "intercept": st["intercept"], "r2": st["r2"],
+        "r_mean": st["y_mean"], "g_mean": st["x_mean"],
+        "dgice_dlwd": partial_slope(acc, slot, "g_ice_W_m2", "lwd_W_m2"),
+        "f_res_dlr": partition(acc, slot)["f_res"],
+        "dgice_dfnet": partial_slope(acc, slot, "g_ice_W_m2", "fnet_W_m2"),
+        "f_res_fnet": partition_fnet(acc, slot)["f_res"],
+        "n_hours": st["n_hours"],
+    }
+
+
+def print_sign_convention_check(A: "Analysis",
+                                population: str | None = None) -> None:
+    """The three ways to write the closure, so the sign trap is visible.
+
+    Row 1 adds ERA5's downward-positive slopes for SH, LH and SW_net to the
+    UPWARD-magnitude slope for LWU. It does not sum to one, and it should not:
+    LWU was pulled out of the archive as a positive upward number, so it is not
+    in the same convention as the other three.
+
+    Row 2 uses ERA5's own convention throughout -- the NET longwave msnlwrf =
+    LWD - LWU, downward-positive, in place of LWU -- and the four native slopes
+    then sum exactly to the residual slope, with no flipping anywhere.
+
+    Row 3 is the Sledd et al. (2025) convention: every responder counted as
+    energy LEAVING the surface. That flips SH, LH and SW_net and keeps LWU,
+    and the four sum with the residual to one. Rows 2 and 3 are the same
+    identity rearranged; row 1 is a mistake.
+    """
+    acc = A.acc(population)
+    print("Closure of the DLR regression, three ways   (cos-lat weighted)")
+    print(f"  {'class':<20}{'d(LWU)':>8}{'d(SH)':>8}{'d(LH)':>8}{'d(SW)':>8}"
+          f"{'d(R)':>8}  |{'row1: native':>13}{'row2: ERA5':>12}"
+          f"{'row3: Sledd':>12}")
+    print(f"  {'':<20}{'up-mag':>8}{'down+':>8}{'down+':>8}{'down+':>8}"
+          f"{'down+':>8}  |{'LWU+SH+LH+SW':>13}{'NLW+SW+SH+LH':>12}"
+          f"{'LWU-SH-LH-SW+R':>12}")
+    for slot in PANEL_SLOTS:
+        nm = SLOT_LABELS[SLOT_ORDER[slot]]
+        sl = lambda k: partial_slope(acc, slot, k, "lwd_W_m2")
+        dU, dS, dL, dW, dR = (sl("lwu_W_m2"), sl("shf_W_m2"), sl("lhf_W_m2"),
+                              sl("swnet_W_m2"), sl("rnet_W_m2"))
+        row1 = dU + dS + dL + dW                 # mixed conventions: wrong
+        row2 = (1.0 - dU) + dW + dS + dL         # all downward-positive = d(R)
+        row3 = dU - dS - dL - dW + dR            # Sledd sense: = 1
+        print(f"  {nm:<20}{dU:>8.3f}{dS:>8.3f}{dL:>8.3f}{dW:>8.3f}{dR:>8.3f}"
+              f"  |{row1:>13.3f}{row2:>12.3f}{row3:>12.4f}")
+    print("  row1 should NOT equal anything.  row2 should equal d(R).  "
+          "row3 should equal 1.")
+
+
+# ----------------------------------------------------------------------------
 # The streaming pass
 # ----------------------------------------------------------------------------
 def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
@@ -1592,6 +1804,17 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
     # cells only. One group axis, no class axis -- siconc IS the class here,
     # resolved continuously instead of cut into three.
     ice_mom = {p: new_moments(n_ice) for p in POPULATIONS}
+    # (population, month, siconc bin, temperature bin) -- see SKT_HIST_EDGES.
+    n_month = len(MONTH_ORDER)
+    # Full moments per (month, class slot), for the month-by-month response
+    # figures modelled on Sledd et al. (2025) Figure 2a. Flattened as
+    # month_index * N_SLOT + slot. Six of the twelve months are empty under
+    # the Oct-Mar window, which costs nothing.
+    month_mom = {p: new_moments(n_month * N_SLOT) for p in POPULATIONS}
+    skt_hist = {p: np.zeros((n_month, n_ice, len(SKT_HIST_EDGES) - 1))
+                for p in POPULATIONS}
+    dskt_hist = {p: np.zeros((n_month, n_ice, len(DSKT_HIST_EDGES) - 1))
+                 for p in POPULATIONS}
     # Stratified by LWP regime AND surface class: the matched comparison. Full
     # moments per cell, so the bar chart gets a mean, the whisker gets a
     # standard deviation, and any within-bin regression is available later
@@ -1636,6 +1859,10 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
         keep = use_step[i0:i0 + n_t]
         if not keep.any():
             continue
+        # Calendar month of each kept step, as an index into MONTH_ORDER, and
+        # then broadcast to every cell so it lines up with the flat sample axis.
+        month_of = np.array([MONTH_INDEX[int(m)] for m in
+                             block["valid_time"].dt.month.values[keep]])
 
         siconc = block["siconc"].values
         classes = classify_cells(
@@ -1710,6 +1937,13 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
                           for slot, m in slot_of for r in range(n_regime)]
             accumulate_moments(regime_mom[pop], reg_groups, values, w_flat)
 
+            mo_all = np.broadcast_to(month_of[:, None, None],
+                                     classes.shape).ravel()
+            month_groups = [(mo * N_SLOT + slot, pmask & m & (mo_all == mo))
+                            for slot, m in slot_of
+                            for mo in np.unique(mo_all)]
+            accumulate_moments(month_mom[pop], month_groups, values, w_flat)
+
             if pop == "cloud":
                 # Only the blocks this streaming chunk actually touches, so the
                 # loop stays a handful of groups rather than all n_block.
@@ -1733,6 +1967,28 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
             sea_pop = pmask & is_sea & (ib >= 0) & (ib < n_ice)
             ice_groups = [(b, sea_pop & (ib == b)) for b in range(n_ice)]
             accumulate_moments(ice_mom[pop], ice_groups, values, w_flat)
+
+            # Skin temperature and skin-minus-ice-layer distributions per
+            # (month, siconc bin). Weighted by area like everything else.
+            mo_flat = np.broadcast_to(month_of[:, None, None],
+                                      classes.shape).ravel()
+            skt_flat = fields["skt_K"].ravel()
+            dsk_flat = skt_flat - fields["istl1_K"].ravel()
+            ti = np.digitize(skt_flat, SKT_HIST_EDGES) - 1
+            di = np.digitize(dsk_flat, DSKT_HIST_EDGES) - 1
+            ok_t = sea_pop & (ti >= 0) & (ti < len(SKT_HIST_EDGES) - 1)
+            ok_d = sea_pop & (di >= 0) & (di < len(DSKT_HIST_EDGES) - 1)
+            nT, nD = len(SKT_HIST_EDGES) - 1, len(DSKT_HIST_EDGES) - 1
+            if ok_t.any():
+                flat = (mo_flat[ok_t] * n_ice + ib[ok_t]) * nT + ti[ok_t]
+                skt_hist[pop] += np.bincount(
+                    flat, weights=w_flat[ok_t],
+                    minlength=n_month * n_ice * nT).reshape(n_month, n_ice, nT)
+            if ok_d.any():
+                flat = (mo_flat[ok_d] * n_ice + ib[ok_d]) * nD + di[ok_d]
+                dskt_hist[pop] += np.bincount(
+                    flat, weights=w_flat[ok_d],
+                    minlength=n_month * n_ice * nD).reshape(n_month, n_ice, nD)
 
         # Everything below is the FILTERED population only: the density
         # scatters and the response curves both describe liquid-bearing
@@ -1802,6 +2058,9 @@ def collect(ds, lsm: np.ndarray, args, layout: dict, wanted_idx: list[int],
     return {
         "mom": mom,
         "ice_mom": ice_mom,
+        "skt_hist": skt_hist,
+        "dskt_hist": dskt_hist,
+        "month_mom": month_mom,
         "regime_mom": regime_mom,
         "block_mom": block_mom,
         "n_block": n_block,
@@ -1988,6 +2247,15 @@ class Analysis(SimpleNamespace):
     def control(self, control: str | None = None) -> tuple[str, ...]:
         """The tracked variables held fixed by the sensitivity regressions."""
         return CONTROL_SETS[control or self.args.control]
+
+    def month_acc(self, population: str | None = None) -> dict:
+        """Moments per (calendar month, class slot); see ``month_group``."""
+        return self.sec["month_mom"][population or self.args.population]
+
+
+def month_group(month: int, slot: int) -> int:
+    """Index into ``Analysis.month_acc`` for a calendar month and a slot."""
+    return MONTH_INDEX[month] * N_SLOT + slot
 
 
 def prepare(argv=None, args=None, **overrides) -> Analysis:
@@ -3009,6 +3277,716 @@ def fig_shf_vs_dskt(A: Analysis, out_dir=None, dpi: int | None = None,
 # ----------------------------------------------------------------------------
 # Figure 4: the partition, by surface class
 # ----------------------------------------------------------------------------
+def fig_lwu_vs_fnet(A: Analysis, out_dir=None, dpi: int | None = None,
+                    fit_mode: str | None = None, fit_orient: str | None = None):
+    """Upwelling longwave against DLR + SW_net, the Sledd et al. forcer."""
+    return _scatter_figure(
+        A, "fnet_lwu",
+        "Upwelling longwave against net radiative forcing (DLR + SW$_{net}$)",
+        "lwu_vs_fnet", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower right", show_legend=False)
+
+
+def fig_shf_vs_fnet(A: Analysis, out_dir=None, dpi: int | None = None,
+                    fit_mode: str | None = None, fit_orient: str | None = None):
+    """Sensible heat flux against DLR + SW_net."""
+    return _scatter_figure(
+        A, "fnet_shf",
+        "Sensible heat flux against net radiative forcing (DLR + SW$_{net}$)",
+        "shf_vs_fnet", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower right", show_legend=False)
+
+
+def fig_lhf_vs_fnet(A: Analysis, out_dir=None, dpi: int | None = None,
+                    fit_mode: str | None = None, fit_orient: str | None = None):
+    """Latent heat flux against DLR + SW_net."""
+    return _scatter_figure(
+        A, "fnet_lhf",
+        "Latent heat flux against net radiative forcing (DLR + SW$_{net}$)",
+        "lhf_vs_fnet", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower right", show_legend=False)
+
+
+def fig_rnet_vs_fnet(A: Analysis, out_dir=None, dpi: int | None = None,
+                     fit_mode: str | None = None, fit_orient: str | None = None):
+    """Net surface flux R against DLR + SW_net; the slope is f_res on that forcer."""
+    return _scatter_figure(
+        A, "fnet_rnet",
+        "Net surface flux against net radiative forcing (DLR + SW$_{net}$)",
+        "rnet_vs_fnet", out_dir, dpi, fit_mode=fit_mode, fit_orient=fit_orient,
+        note_loc="lower left", show_legend=False)
+
+
+def _one_to_one(A, acc, slot, panel, span):
+    """Overlay for the closure scatter: the 1:1 line the cloud should lie on."""
+    lo, hi = panel.x_range
+    return ([([lo, hi], [lo, hi], dict(color="#B2182B", lw=1.2, ls="--",
+                                       label="1:1"))], [])
+
+
+def fig_rnet_vs_gice(A: Analysis, out_dir=None, dpi: int | None = None,
+                     fit_mode: str | None = None):
+    """The closure test: net flux R against the independent conduction G_ice.
+
+    R is the sum of four HOURLY-MEAN fluxes; G_ice = Lambda_sk (T_sk - T_1) is
+    built from two INSTANTANEOUS temperatures at the end of the hour. If the
+    skin balance closes and the mismatch between the two time bases is small,
+    the sea-ice panels sit on the dashed 1:1 line with slope one. Read the
+    land and open-water panels as what happens when the test is applied where
+    it does not apply -- ``istl1`` is a filler over land and the prescribed
+    base over water.
+    """
+    return _scatter_figure(
+        A, "gice_rnet",
+        "Skin energy closure over sea ice: net flux against conduction into "
+        "the ice",
+        "rnet_vs_gice", out_dir, dpi, fit_mode=fit_mode, fit_orient="y_on_x",
+        note_loc="upper left", show_legend=False, overlay=_one_to_one)
+
+
+
+
+# ----------------------------------------------------------------------------
+# Skin temperature against sea-ice concentration: the open-water contamination
+# ----------------------------------------------------------------------------
+# ERA5's skt is the tile-weighted grid mean (IFS Cy41r2 Section 8.2: separate
+# skin temperatures per tile, aggregated for output), and over a sea point the
+# two tiles are ice and open water, the latter held at the freezing point
+# T_0 - 1.7 = 271.46 K (Section 8.9). A winter ice skin is 10-25 K colder, so
+#
+#     skt_grid = c * T_ice + (1 - c) * 271.46
+#
+# is warmer than the ice skin by (1 - c)(271.46 - T_ice): about 0.3 K at
+# c = 0.98, 3 K at c = 0.8, and a full 15 K at c = 0. Any quantity built from
+# skt as if it were the ice skin -- the skin-to-layer-1 conduction above all --
+# inherits that bias with the open fraction as its lever. The figure below
+# shows it, and shows that only siconc = 1 exactly is free of it.
+
+# Sledd et al. (2025) Figure 2b, MOSAiC Central Observatory, all available
+# observations per month. DIGITISED BY EYE from a high-resolution copy of the
+# published panel, reading each box against the 10 C gridlines (about 147 px
+# per 10 C on that copy), to roughly +-0.7 C. Median (black line) and mean
+# (star) are read separately -- they sit on opposite sides of the box centre
+# in March, which a first pass conflated. Quartiles are the box edges, "lo"
+# and "hi" the whisker ends (1.5 IQR, per their caption). All in C.
+#
+# The expedition drifted at 84-88 N through these months, well north of the
+# Barrow strip, so a colder distribution than ERA5 shows here is expected from
+# latitude alone; the comparison is of shape and spread, not of level.
+SLEDD_FIG2B_SKT_C: dict[int, dict[str, float]] = {
+    10: dict(med=-15.8, mean=-16.7, q1=-21.3, q3=-12.5, lo=-28.8, hi=-2.2),
+    11: dict(med=-20.8, mean=-20.8, q1=-25.7, q3=-16.7, lo=-34.7, hi=-4.9),
+    12: dict(med=-25.3, mean=-24.8, q1=-28.7, q3=-20.4, lo=-39.2, hi=-14.3),
+    1: dict(med=-29.3, mean=-28.6, q1=-31.5, q3=-26.0, lo=-38.9, hi=-17.6),
+    2: dict(med=-28.4, mean=-27.2, q1=-32.4, q3=-21.9, lo=-41.3, hi=-9.7),
+    3: dict(med=-29.6, mean=-31.0, q1=-34.5, q3=-26.0, lo=-45.5, hi=-19.6),
+}
+
+
+def hist_box_stats(h: np.ndarray, edges: np.ndarray) -> dict | None:
+    """Box-plot statistics from one histogram, in the Sledd et al. convention.
+
+    Median and quartiles by linear interpolation of the cumulative weight.
+    Whiskers at the last populated bin inside Q1 - 1.5 IQR and Q3 + 1.5 IQR,
+    which is the matplotlib default and the one Sledd et al. (2025) state for
+    their Figure 2. Returns None for an empty histogram.
+    """
+    total = h.sum()
+    if total <= 0.0:
+        return None
+    cum = np.concatenate([[0.0], np.cumsum(h)]) / total
+    q1, med, q3 = np.interp([0.25, 0.5, 0.75], cum, edges)
+    centres = 0.5 * (edges[:-1] + edges[1:])
+    iqr = q3 - q1
+    inside = (h > 0) & (centres >= q1 - 1.5 * iqr) & (centres <= q3 + 1.5 * iqr)
+    lo = float(centres[inside].min()) if inside.any() else float(q1)
+    hi = float(centres[inside].max()) if inside.any() else float(q3)
+    mean = float((h * centres).sum() / total)
+    return dict(med=float(med), q1=float(q1), q3=float(q3), whislo=lo,
+                whishi=hi, mean=mean, n=float(total))
+
+
+def _bxp(ax, stats: list, positions, width: float, color: str,
+         alpha: float = 0.55, label: str | None = None):
+    """Draw precomputed boxes; matplotlib's bxp with a consistent style."""
+    boxes = [dict(med=s["med"], q1=s["q1"], q3=s["q3"], whislo=s["whislo"],
+                  whishi=s["whishi"], mean=s["mean"], fliers=[]) for s in stats]
+    art = ax.bxp(boxes, positions=positions, widths=width, showmeans=True,
+                 showfliers=False, patch_artist=True,
+                 boxprops=dict(facecolor=color, alpha=alpha,
+                               edgecolor="#333333", linewidth=0.8),
+                 medianprops=dict(color="#111111", linewidth=1.4),
+                 meanprops=dict(marker="*", markerfacecolor="#111111",
+                                markeredgecolor="#111111", markersize=6),
+                 whiskerprops=dict(color="#333333", linewidth=0.8),
+                 capprops=dict(color="#333333", linewidth=0.8))
+    if label is not None:
+        art["boxes"][0].set_label(label)
+    return art
+
+
+
+
+# ----------------------------------------------------------------------------
+# Month by month: the response of each surface term through the season
+# ----------------------------------------------------------------------------
+# Sledd et al. (2025) Figure 2a draws the slope of every responder on the
+# forcing LWD + SWN, one point per calendar month, from the MOSAiC year. The
+# functions below do the same from the (month, class) moment accumulator, on
+# either forcer, so the seasonal march of the partition can be seen for each
+# surface class and set against the MOSAiC values. No confidence shading: the
+# block bootstrap is not carried per month, and the naive standard error would
+# be off by two orders of magnitude on autocorrelated hourly data.
+WINTER_MONTHS: tuple[int, ...] = (10, 11, 12, 1, 2, 3)
+WINTER_LABELS: tuple[str, ...] = ("Oct", "Nov", "Dec", "Jan", "Feb", "Mar")
+
+# Sledd et al. (2025) Figure 2a, October to March, DIGITISED BY EYE from a
+# high-resolution copy of the published panel against its 0.2 gridlines, to
+# roughly +-0.02. Markers are the mean of slopes across the available sites in
+# each month, regressed on LWD + SWN. Their sign convention: every responder
+# counted as energy LEAVING the surface, which is the convention of
+# ``partition`` and ``partition_fnet`` here. "na" is their net atmospheric
+# flux LWN - SH - LH, the residual of the measured atmospheric terms and the
+# counterpart of ``f_res``; "g" is the INDEPENDENT subsurface flux from the
+# ice-mass-balance buoys, -(S + C), which ERA5 output cannot supply; "total"
+# is the sum of measured responders (their eq. 9), which is one only to the
+# extent the independent measurements close. Consistency check on the
+# reading: lwu + sh + lh + g reproduces "total" to within 0.03 in every month.
+SLEDD_FIG2A_WINTER: dict[str, dict[int, float]] = {
+    "lwu":   {10: 0.535, 11: 0.530, 12: 0.500, 1: 0.440, 2: 0.565, 3: 0.535},
+    "sh":    {10: 0.150, 11: 0.125, 12: 0.250, 1: 0.215, 2: 0.130, 3: 0.320},
+    "lh":    {10: 0.020, 11: 0.005, 12: 0.025, 1: 0.010, 2: -0.010, 3: 0.005},
+    "g":     {10: 0.240, 11: 0.280, 12: 0.210, 1: 0.320, 2: 0.255, 3: 0.235},
+    "na":    {10: 0.285, 11: 0.335, 12: 0.220, 1: 0.335, 2: 0.310, 3: 0.120},
+    "swt":   {10: 0.000, 11: 0.000, 12: 0.000, 1: 0.000, 2: 0.000, 3: -0.010},
+    "total": {10: 0.940, 11: 0.940, 12: 0.960, 1: 0.995, 2: 0.945, 3: 1.075},
+}
+
+
+def monthly_partition(A: "Analysis", slot: int, forcer: str = "lwd",
+                      population: str | None = None,
+                      months: tuple[int, ...] = WINTER_MONTHS) -> dict:
+    """The partition of the forcing, one entry per calendar month.
+
+    ``forcer`` is ``"lwd"`` (DLR alone, five responders) or ``"fnet"``
+    (DLR + SW_net as in Sledd et al., four responders). Returns arrays over
+    ``months`` for each fraction, the r^2 of each underlying regression on the
+    forcer (for marker sizing, as Sledd's Figure 2a does), the cell-hours, and
+    the mean forcer and net shortwave, so a reader can see where the two
+    forcers part company.
+    """
+    acc = A.month_acc(population)
+    x_key = {"lwd": "lwd_W_m2", "fnet": "fnet_W_m2"}[forcer]
+    keys = (["f_lwu", "f_sh", "f_lh", "f_sw", "f_res"] if forcer == "lwd"
+            else ["f_lwu", "f_sh", "f_lh", "f_res"])
+    r2_of = {"f_lwu": "lwu_W_m2", "f_sh": "shf_W_m2", "f_lh": "lhf_W_m2",
+             "f_sw": "swnet_W_m2", "f_res": "rnet_W_m2"}
+    out = {k: np.full(len(months), np.nan) for k in keys}
+    out.update({f"r2_{k}": np.full(len(months), np.nan) for k in keys})
+    out.update({k: np.full(len(months), np.nan)
+                for k in ("n_hours", "forcer_mean", "swnet_mean", "sum")})
+    for i, m in enumerate(months):
+        g = month_group(m, slot)
+        if acc["w"][g] <= 0.0:
+            continue
+        p = (partition(acc, g) if forcer == "lwd" else partition_fnet(acc, g))
+        for k in keys:
+            out[k][i] = p[k]
+            out[f"r2_{k}"][i] = moment_stats(acc, g, x_key, r2_of[k])["r2"]
+        out["sum"][i] = sum(p[k] for k in keys)
+        out["n_hours"][i] = p["n_hours"]
+        out["forcer_mean"][i] = mean_of(acc, g, x_key)
+        out["swnet_mean"][i] = mean_of(acc, g, "swnet_W_m2")
+    out["months"] = months
+    out["forcer"] = forcer
+    return out
+
+
+# One style per term, shared by the two monthly figures so a colour means the
+# same thing in both. Colours follow PARTITION_TERMS; markers follow Sledd's
+# Figure 2a where a term has a counterpart there.
+MONTHLY_STYLE: dict[str, tuple[str, str, str]] = {
+    "f_lwu": ("Upwelling LW", "#B2182B", "o"),
+    "f_sh": ("Sensible heat", "#2A9D8F", "s"),
+    "f_lh": ("Latent heat", "#3A6FD8", "X"),
+    "f_sw": ("Net shortwave", "#DD8452", "D"),
+    "f_res": ("Residual (subsurface, NA)", "#7B2D8E", "^"),
+}
+
+
+def fig_monthly_response(A: "Analysis", forcer: str = "lwd", out_dir=None,
+                         dpi: int | None = None,
+                         population: str | None = None,
+                         slots: tuple[str, ...] = CLASS_ORDER,
+                         min_hours: float = 5000.0):
+    """Month-by-month response of each surface term, one panel per class.
+
+    The ERA5 counterpart of Sledd et al. (2025) Figure 2a, restricted to
+    Oct-Mar and split by surface class rather than pooled. Marker size scales
+    with the r^2 of that term's regression on the forcer, as in their figure,
+    so a reader can tell a well-constrained slope from a noisy one without a
+    confidence band. The "total" of Sledd's figure is not drawn: with the
+    residual defined as the remainder it is identically one and would say
+    nothing.
+    """
+    import matplotlib.pyplot as plt
+
+    pop = population or A.args.population
+    fig, axes = plt.subplots(1, len(slots), figsize=(3.4 * len(slots), 4.6),
+                             sharey=True)
+    x = np.arange(len(WINTER_MONTHS))
+    for ax, name in zip(axes, slots):
+        slot = SLOT_ORDER.index(name)
+        r = monthly_partition(A, slot, forcer, pop)
+        ok = r["n_hours"] >= min_hours
+        for key, (lab, col, mk) in MONTHLY_STYLE.items():
+            if key not in r:
+                continue
+            y = np.where(ok, r[key], np.nan)
+            ax.plot(x, y, color=col, lw=1.6, zorder=3)
+            sz = 18 + 110 * np.nan_to_num(r[f"r2_{key}"])
+            ax.scatter(x, y, s=sz, color=col, marker=mk, edgecolor="#222222",
+                       linewidth=0.5, zorder=4,
+                       label=lab if ax is axes[0] else None)
+        ax.axhline(0.0, color="#333333", lw=0.9)
+        ax.axhline(1.0, color="#333333", lw=0.8, ls=":")
+        ax.set_xticks(x)
+        ax.set_xticklabels(WINTER_LABELS, fontsize=9)
+        ax.set_title(SLOT_LABELS[name], fontsize=11, loc="left",
+                     fontweight="bold", color=SLOT_COLORS[name])
+        ax.grid(alpha=0.2, lw=0.5)
+        # Say how much shortwave each month carries, since that is where the
+        # two forcers differ.
+        sw = r["swnet_mean"]
+        ax.annotate("mean SW$_{net}$: " + "  ".join(
+            f"{v:.0f}" if np.isfinite(v) else "-" for v in sw) + " W m$^{-2}$",
+            (0.5, 0.02), xycoords="axes fraction", ha="center", va="bottom",
+            fontsize=6.6, color="#555555")
+    f_lab = {"lwd": "DLR", "fnet": "DLR + SW$_{net}$"}[forcer]
+    axes[0].set_ylabel(f"response to {f_lab}\n(fraction, energy leaving "
+                       "the surface)")
+    axes[0].legend(fontsize=7.4, frameon=False, loc="upper left", ncol=1)
+    # Open water is not a partition at all -- the surface is prescribed -- and
+    # its residual runs to several; keep the axis where the other four live.
+    axes[0].set_ylim(-1.0, 1.6)
+    top = _header_block(
+        fig, f"Month-by-month response of the surface terms to {f_lab}",
+        _figure_subtitle(A, pop),
+        note=("plain regression within each (class, month); marker size "
+              "scales with r$^2$ as in Sledd et al. (2025) Fig. 2a; "
+              "no confidence bands -- see the bootstrap discussion\n"
+              "the five (or four) fractions sum to one by construction, so "
+              "the 'total' of Sledd's figure is not drawn; open water is "
+              "clipped, its residual exceeding two"),
+        title_fs=13.5)
+    fig.subplots_adjust(top=top - 0.03, bottom=0.11, left=0.06, right=0.99,
+                        wspace=0.10)
+    return _save(fig, A, f"monthly_response_{forcer}_{pop}", out_dir, dpi)
+
+
+def fig_monthly_vs_mosaic(A: "Analysis", out_dir=None, dpi: int | None = None,
+                          slot_name: str = "sea_ice",
+                          forcer: str = "fnet", min_hours: float = 5000.0):
+    """ERA5 pack ice against the MOSAiC responses of Sledd et al. Figure 2a.
+
+    Four panels, one per term. In each: the MOSAiC observed response (large
+    markers, digitised), ERA5 for the all-sky population (solid), and ERA5 for
+    the liquid-bearing overcast population (dashed). All-sky is the like-for-
+    like comparison -- Sledd's regressions use every observation -- and the
+    cloud line shows what conditioning on cloud does to the monthly slopes.
+
+    The residual panel carries two MOSAiC series: NA, their atmospheric-side
+    residual and the direct counterpart of f_res, and -G, the independent
+    ice-mass-balance measurement of the same flux. Their separation is the
+    observational closure error, which ERA5 has no way to show.
+    """
+    import matplotlib.pyplot as plt
+
+    slot = SLOT_ORDER.index(slot_name)
+    x = np.arange(len(WINTER_MONTHS))
+    fig, axes = plt.subplots(1, 4, figsize=(15.6, 4.6), sharex=True)
+    panels = (("f_lwu", "lwu", "Upwelling LW"),
+              ("f_sh", "sh", "Sensible heat"),
+              ("f_lh", "lh", "Latent heat"),
+              ("f_res", "na", "Residual / subsurface"))
+    era = {pop: monthly_partition(A, slot, forcer, pop) for pop in POPULATIONS}
+    for ax, (key, skey, title) in zip(axes, panels):
+        lab, col, mk = MONTHLY_STYLE[key]
+        for pop, ls, txt in (("all", "-", "ERA5, all sky"),
+                             ("cloud", "--", "ERA5, liquid-bearing overcast")):
+            r = era[pop]
+            y = np.where(r["n_hours"] >= min_hours, r[key], np.nan)
+            ax.plot(x, y, color=col, lw=1.8, ls=ls, marker=mk, ms=5,
+                    markeredgecolor="#222222", markeredgewidth=0.5,
+                    label=txt, zorder=3)
+        obs = [SLEDD_FIG2A_WINTER[skey][m] for m in WINTER_MONTHS]
+        ax.plot(x, obs, color="#111111", lw=1.2, ls=":", marker="D", ms=8,
+                markerfacecolor="#f4a582", markeredgecolor="#111111",
+                label="MOSAiC obs, Sledd et al. 2025 Fig. 2a"
+                      + (" (NA)" if skey == "na" else ""), zorder=5)
+        if skey == "na":
+            g = [SLEDD_FIG2A_WINTER["g"][m] for m in WINTER_MONTHS]
+            ax.plot(x, g, color="#111111", lw=1.0, ls=":", marker=">", ms=8,
+                    markerfacecolor="#DD8452", markeredgecolor="#111111",
+                    label="MOSAiC $-G$, ice-mass-balance buoys", zorder=5)
+        ax.axhline(0.0, color="#333333", lw=0.9)
+        ax.set_xticks(x)
+        ax.set_xticklabels(WINTER_LABELS)
+        ax.set_title(title, fontsize=11, loc="left", fontweight="bold")
+        ax.grid(alpha=0.2, lw=0.5)
+        ax.legend(fontsize=7.0, frameon=False, loc="best")
+    axes[0].set_ylabel("response to DLR + SW$_{net}$\n(fraction, energy "
+                       "leaving the surface)")
+    top = _header_block(
+        fig, "Pack ice, month by month: ERA5 on the Barrow strip against "
+        "MOSAiC observations",
+        f"{A.args.region} | Oct-Mar | seasons {A.used[0]}/{A.used[0] + 1}-"
+        f"{A.used[-1]}/{A.used[-1] + 1} | ERA5 class siconc > "
+        f"{A.args.sea_ice_min_siconc:g}\n"
+        "MOSAiC: Central Observatory 2019/20, 84-88 N, all observations, "
+        "regressed on LWD + SWN, digitised to about $\\pm$0.02",
+        note=("both use the Sledd sign convention (energy leaving the "
+              "surface) and the same forcer; ERA5's residual is the remainder "
+              "of four regressions, MOSAiC's NA the remainder of three "
+              "measurements"),
+        title_fs=13)
+    fig.subplots_adjust(top=top - 0.02, bottom=0.11, left=0.055, right=0.99,
+                        wspace=0.22)
+    return _save(fig, A, f"monthly_vs_mosaic_{slot_name}_{forcer}", out_dir,
+                 dpi)
+
+
+def fig_skt_by_siconc(A: Analysis, out_dir=None, dpi: int | None = None,
+                      population: str = "all", min_hours: float = 20000.0):
+    """How the grid-mean skin temperature is contaminated by open water.
+
+    (a) Box plots of skt by sea-ice-concentration bin, Oct-Mar pooled. The
+        dashed line is the tile-mixing prediction c T_ice + (1 - c) 271.46,
+        with T_ice the pure-ice median, so a reader can see that the warming
+        toward low concentration is arithmetic, not physics.
+    (b) The same for skt - istl1, the temperature difference the skin-to-ice
+        conduction is built from. It changes SIGN at siconc = 1, which is why
+        the closure test in the other notebook can be read from that bin only.
+    (c) Month by month over Oct-Mar: ERA5 at siconc = 1 exactly, ERA5 at
+        0.95-0.9999 (the rest of the "sea ice" class), and the MOSAiC
+        observations of Sledd et al. (2025) Figure 2b digitised by eye. MOSAiC
+        sat 5-15 degrees of latitude further north, so its colder level is
+        expected; compare the spread and the month-to-month shape.
+
+    ``population`` defaults to "all" -- every valid cell-hour -- because
+    Sledd's Figure 2b is drawn from all observations, not cloudy ones.
+    """
+    import matplotlib.pyplot as plt
+
+    edges = A.sec["siconc_edges"]
+    n_ice = len(edges) - 1
+    H = A.sec["skt_hist"][population]        # (month, ice bin, T bin)
+    D = A.sec["dskt_hist"][population]
+    winter = [MONTH_INDEX[m] for m in (10, 11, 12, 1, 2, 3)]
+    Hw = H[winter].sum(axis=0)               # (ice bin, T bin)
+    Dw = D[winter].sum(axis=0)
+    K = 273.15
+
+    fig, axes = plt.subplots(1, 3, figsize=(16.4, 5.4),
+                             gridspec_kw={"width_ratios": [1.15, 1.15, 1.4]})
+    ax_a, ax_b, ax_c = axes
+    centres = 0.5 * (edges[:-1] + edges[1:])
+
+    # (a), (b): by concentration ------------------------------------------
+    keep = [b for b in range(n_ice)
+            if Hw[b].sum() * HOURS_PER_STEP >= min_hours]
+    st_a = [hist_box_stats(Hw[b], SKT_HIST_EDGES) for b in keep]
+    st_b = [hist_box_stats(Dw[b], DSKT_HIST_EDGES) for b in keep]
+    # Kelvin -> Celsius for the skin temperature panel
+    for st in st_a:
+        for k in ("med", "q1", "q3", "whislo", "whishi", "mean"):
+            st[k] -= K
+    pos = centres[keep]
+    w = 0.028
+    cols = [SLOT_COLORS["sea_ice"] if b == PURE_ICE_BIN else "#9ecae1"
+            for b in keep]
+    for x, st, c in zip(pos, st_a, cols):
+        _bxp(ax_a, [st], [x], w, c)
+    for x, st, c in zip(pos, st_b, cols):
+        _bxp(ax_b, [st], [x], w, c)
+
+    # tile-mixing prediction from the pure-ice median
+    if PURE_ICE_BIN in keep:
+        t_ice = st_a[keep.index(PURE_ICE_BIN)]["med"] + K
+        cc = np.linspace(0.0, 1.0, 101)
+        # Two-tile mixing with the pure-ice skin held fixed. It is a FLOOR on
+        # the warming, not a fit: at intermediate concentration the data sit
+        # well above it, because the ice in a half-covered cell is itself
+        # warmer than pack ice -- thinner, younger, nearer the edge, and more
+        # often an autumn hour. The line says how much of the warming is
+        # arithmetic; the gap above it is the ice being different ice.
+        ax_a.plot(cc, cc * t_ice + (1 - cc) * ERA5_ICE_BASE_K - K,
+                  color="#B2182B", lw=1.4, ls="--",
+                  label="two-tile mixing with the pure-ice skin held fixed\n"
+                        "(the floor: the rest is warmer ice, not more water)")
+        ax_a.legend(fontsize=7.6, frameon=False, loc="upper left")
+    ax_a.set_ylabel("skin temperature   [$^\\circ$C]")
+    ax_a.set_title("(a)  Grid-mean skin temperature by ice concentration",
+                   fontsize=10.5, loc="left", fontweight="bold")
+
+    ax_b.axhline(0.0, color="#B2182B", lw=1.2, ls="--")
+    ax_b.set_ylabel("$T_{skin} - T_{ice\\ layer\\ 1}$   [K]")
+    ax_b.set_title("(b)  Skin minus ice layer 1: the conduction driver",
+                   fontsize=10.5, loc="left", fontweight="bold")
+    ax_b.annotate("above zero: skin warmer than the ice below,\n"
+                  "conduction DOWN -- impossible for winter pack ice\n"
+                  "unless open water is warming the grid mean",
+                  (0.97, 0.97), xycoords="axes fraction", ha="right",
+                  va="top", fontsize=7.4, bbox=NOTE_BOX, zorder=7)
+    for ax in (ax_a, ax_b):
+        # bxp labels the ticks with the raw positions; put real ticks back.
+        ax.set_xticks(np.linspace(0.0, 1.0, 6))
+        ax.set_xticklabels([f"{v:.1f}" for v in np.linspace(0.0, 1.0, 6)])
+        ax.set_xlabel("sea ice concentration")
+        ax.set_xlim(-0.03, 1.05)
+        ax.axvspan(edges[PURE_ICE_BIN] - 0.012, 1.03, color="#55A868",
+                   alpha=0.15, lw=0)
+        ax.grid(alpha=0.2, lw=0.5)
+
+    # (c): month by month, pure ice vs the rest of the class vs MOSAiC -------
+    months = (10, 11, 12, 1, 2, 3)
+    names = ("Oct", "Nov", "Dec", "Jan", "Feb", "Mar")
+    x0 = np.arange(len(months))
+    pure_b, rest_b = PURE_ICE_BIN, PURE_ICE_BIN - 1
+    for off, b, col, lab in ((-0.27, pure_b, SLOT_COLORS["sea_ice"],
+                              "ERA5, siconc = 1"),
+                             (0.0, rest_b, "#9ecae1",
+                              f"ERA5, siconc {edges[rest_b]:g}-{edges[rest_b+1]:g}")):
+        stats, xs = [], []
+        for i, m in enumerate(months):
+            st = hist_box_stats(H[MONTH_INDEX[m], b], SKT_HIST_EDGES)
+            if st is None:
+                continue
+            for k in ("med", "q1", "q3", "whislo", "whishi", "mean"):
+                st[k] -= K
+            stats.append(st); xs.append(x0[i] + off)
+        if stats:
+            _bxp(ax_c, stats, xs, 0.24, col, label=lab)
+    sl = [dict(med=v["med"], q1=v["q1"], q3=v["q3"], whislo=v["lo"],
+               whishi=v["hi"], mean=v["mean"]) for v in
+          (SLEDD_FIG2B_SKT_C[m] for m in months)]
+    _bxp(ax_c, sl, x0 + 0.27, 0.24, "#f4a582",
+         label="MOSAiC obs, Sledd et al. 2025 Fig. 2b (digitised)")
+    ax_c.set_xticks(x0)
+    ax_c.set_xticklabels(names)
+    ax_c.set_ylabel("skin temperature   [$^\\circ$C]")
+    ax_c.set_title("(c)  Month by month, pack ice: ERA5 against MOSAiC",
+                   fontsize=10.5, loc="left", fontweight="bold")
+    ax_c.legend(fontsize=7.6, frameon=False, loc="upper right")
+    ax_c.grid(axis="y", alpha=0.2, lw=0.5)
+    ax_c.annotate("MOSAiC drifted at 84-88 N; the Barrow strip is 70-80 N.\n"
+                  "Compare spread and shape, not level. MOSAiC boxes are\n"
+                  "read off the published figure to about $\\pm$0.7 C.",
+                  (0.03, 0.03), xycoords="axes fraction", ha="left",
+                  va="bottom", fontsize=7.2, bbox=NOTE_BOX, zorder=7)
+    ax_c.set_ylim(-50, 2)
+
+    pop_label = ("all sky" if population == "all"
+                 else "overcast, liquid-bearing")
+    top = _header_block(
+        fig, "Skin temperature over sea ice, and what open water does to it",
+        f"{A.args.region} | Oct-Mar | seasons {A.used[0]}/{A.used[0] + 1}-"
+        f"{A.used[-1]}/{A.used[-1] + 1} | {pop_label}\n"
+        "boxes: median, quartiles; whiskers at 1.5 IQR (the Sledd et al. "
+        "convention); stars: means; green band: siconc = 1 exactly",
+        note=("ERA5's skt is the tile-weighted grid mean and the open-water "
+              "tile sits at 271.46 K, so every bin below siconc = 1 is warmed "
+              "by its open fraction -- a bias in skt, not a property of ice"),
+        title_fs=13.5)
+    fig.subplots_adjust(top=top - 0.02, bottom=0.12, left=0.05, right=0.99,
+                        wspace=0.25)
+    return _save(fig, A, f"skt_by_siconc_{population}", out_dir, dpi)
+
+
+def fig_ice_closure_transect(A: Analysis, out_dir=None,
+                             dpi: int | None = None,
+                             population: str | None = None,
+                             min_hours: float = MIN_MIZ_HOURS * 10):
+    """The skin-energy closure over sea ice, as a function of concentration.
+
+    The test compares R, the net flux into the surface from the four
+    hourly-mean fluxes, with G_ice = Lambda_sk (T_sk - T_1), the conduction
+    into the ice from two instantaneous temperatures. If ERA5 conserves energy
+    at the ice skin the two agree. They cannot agree at any concentration below
+    one, because skt is the tile-weighted GRID MEAN and the open-water tile is
+    ~15 K warmer than the ice skin: the contamination scales with the open
+    fraction and is drawn here as what it is, a monotonic departure that
+    vanishes at siconc = 1. The only bin that tests the balance is the last.
+
+    (a) Mean R and mean G_ice per bin, with the open-water contamination of
+        G_ice visible as the gap.
+    (b) The slope of R on G_ice, which should reach one in the pure-ice bin,
+        with r^2 as marker size.
+    (c) The subsurface response two ways: f_res from the DLR partition, and
+        the direct regression of G_ice on DLR. Agreement in the last bin is the
+        same closure seen through the regression.
+    """
+    import matplotlib.pyplot as plt
+
+    pop = population or A.args.population
+    ice = A.ice_acc(pop)
+    edges = A.sec["siconc_edges"]
+    n_bin = len(edges) - 1
+    centres = 0.5 * (edges[:-1] + edges[1:])
+    rows = []
+    for b in range(n_bin):
+        if ice["w"][b] <= 0.0:
+            continue
+        st = moment_stats(ice, b, "g_ice_W_m2", "rnet_W_m2")
+        if st["n_hours"] < min_hours:
+            continue
+        rows.append(dict(
+            b=b, x=centres[b], n=st["n_hours"], r_mean=st["y_mean"],
+            g_mean=st["x_mean"], slope=st["slope"], icpt=st["intercept"],
+            r2=st["r2"],
+            dg_dlwd=partial_slope(ice, b, "g_ice_W_m2", "lwd_W_m2"),
+            f_res=partition(ice, b)["f_res"],
+            dskt=mean_of(ice, b, "skt_K") - mean_of(ice, b, "istl1_K")))
+    x = np.array([r["x"] for r in rows])
+    pure = np.array([r["b"] == PURE_ICE_BIN for r in rows])
+
+    fig, axes = plt.subplots(1, 3, figsize=(15.6, 5.0))
+    ax_a, ax_b, ax_c = axes
+    ax_a.plot(x, [r["r_mean"] for r in rows], marker="o", ms=4, lw=1.8,
+              color="#333333", label="mean $R$ (four hourly-mean fluxes)")
+    ax_a.plot(x, [r["g_mean"] for r in rows], marker="s", ms=4, lw=1.8,
+              color="#B2182B",
+              label=r"mean $G_{ice} = \Lambda_{sk}(T_{sk}-T_1)$")
+    ax_a.axhline(0.0, color="#333333", lw=0.8)
+    ax_a.set_ylabel("W m$^{-2}$, positive into the surface")
+    ax_a.set_title("(a)  Net flux and conduction into the ice", fontsize=11,
+                   loc="left", fontweight="bold")
+    ax_a.legend(fontsize=8, frameon=False, loc="lower left")
+
+    sz = 20 + 160 * np.array([r["r2"] for r in rows])
+    ax_b.scatter(x, [r["slope"] for r in rows], s=sz, color="#4C72B0",
+                 edgecolor="#333333", linewidth=0.6, zorder=5)
+    ax_b.plot(x, [r["slope"] for r in rows], lw=1.2, color="#4C72B0")
+    ax_b.axhline(1.0, color="#B2182B", lw=1.2, ls="--")
+    ax_b.axhline(0.0, color="#333333", lw=0.8)
+    ax_b.set_ylabel("slope of $R$ on $G_{ice}$   (1 = closure)")
+    ax_b.set_title("(b)  Does $R$ track $G_{ice}$?  (marker size = $r^2$)",
+                   fontsize=11, loc="left", fontweight="bold")
+
+    ax_c.plot(x, [r["f_res"] for r in rows], marker="o", ms=4, lw=1.8,
+              color="#BBBBBB", markeredgecolor="#333333",
+              label="$f_{res}$: residual of the DLR partition")
+    ax_c.plot(x, [r["dg_dlwd"] for r in rows], marker="s", ms=4, lw=1.8,
+              color="#B2182B", label="$d(G_{ice})/d(\\mathrm{DLR})$: direct")
+    ax_c.axhline(0.0, color="#333333", lw=0.8)
+    ax_c.set_ylabel("fraction of $d(\\mathrm{DLR})$")
+    ax_c.set_title("(c)  The subsurface response, two ways", fontsize=11,
+                   loc="left", fontweight="bold")
+    ax_c.legend(fontsize=8, frameon=False, loc="upper left")
+
+    for ax in axes:
+        ax.set_xlabel("sea ice concentration")
+        ax.set_xlim(-0.02, 1.04)
+        ax.grid(alpha=0.2, lw=0.5)
+        # The one bin that is a fair test, marked on every panel.
+        if pure.any():
+            ax.axvspan(edges[PURE_ICE_BIN] - 0.012, edges[PURE_ICE_BIN + 1],
+                       color="#55A868", alpha=0.18, lw=0)
+    if pure.any():
+        r = rows[int(np.flatnonzero(pure)[0])]
+        ax_b.annotate(f"siconc = 1 exactly\n{r['n']:,.0f} cell-hours\n"
+                      f"slope {r['slope']:.2f}, $r^2$ {r['r2']:.2f}\n"
+                      f"mean $R$ {r['r_mean']:.1f}, mean $G$ {r['g_mean']:.1f}",
+                      (0.03, 0.97), xycoords="axes fraction", ha="left",
+                      va="top", fontsize=7.8, bbox=NOTE_BOX, zorder=7)
+
+    top = _header_block(
+        fig, "Skin-energy closure over sea ice: net flux against conduction "
+        "into the ice",
+        _figure_subtitle(A, pop),
+        note=("green band: siconc = 1, the only bin free of open-water "
+              "contamination of the grid-mean skin temperature; elsewhere "
+              f"$G_{{ice}}$ is biased warm by the open fraction\n"
+              f"$\\Lambda_{{sk}}$ = {ICE_SKIN_CONDUCTIVITY_W_M2_K:g} W m-2 K-1 "
+              "is inferred from the IFS ice column (2 lambda / D_1), not read "
+              "from a table; R is hourly-mean, $G_{ice}$ end-of-hour"),
+        title_fs=13)
+    fig.subplots_adjust(top=top - 0.02, bottom=0.13, left=0.06, right=0.99,
+                        wspace=0.28)
+    return _save(fig, A, f"ice_closure_transect_{pop}", out_dir, dpi)
+
+
+def fig_partition_forcer(A: Analysis, out_dir=None, dpi: int | None = None,
+                         population: str | None = None,
+                         control: str | None = None):
+    """The partition on DLR beside the partition on DLR + SW_net, per class.
+
+    Grouped bars so the sign is visible. The DLR partition has five terms and
+    the DLR + SW_net partition four, because the shortwave changes sides; the
+    net-shortwave bar therefore appears only in the left group of each pair.
+    """
+    import matplotlib.pyplot as plt
+
+    pop = population or A.args.population
+    cname = control or A.args.control
+    ctrl = CONTROL_SETS[cname]
+    acc = A.acc(pop)
+    slots = list(PANEL_SLOTS)
+    names = [SLOT_ORDER[s] for s in slots]
+    pa = [partition(acc, s, control=ctrl) for s in slots]
+    pb = [partition_fnet(acc, s, control=ctrl) for s in slots]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14.6, 5.6), sharey=True)
+    for ax, parts, terms, title in (
+            (axes[0], pa, PARTITION_TERMS,
+             "(a)  Forcer: DLR alone   (five responders)"),
+            (axes[1], pb, FNET_PARTITION_TERMS,
+             "(b)  Forcer: DLR + SW$_{net}$   (four responders, Sledd et al.)")):
+        x = np.arange(len(slots))
+        n_t = len(terms)
+        bw = 0.8 / n_t
+        for j, (key, lab, col) in enumerate(terms):
+            v = np.array([p[key] for p in parts])
+            off = (j - (n_t - 1) / 2) * bw
+            ax.bar(x + off, v, bw * 0.92, color=col, edgecolor="#333333",
+                   linewidth=0.5, label=lab)
+            for xi, vi in zip(x, v):
+                if abs(vi) > 0.2:
+                    ax.annotate(f"{vi:.2f}", (xi + off, vi),
+                                textcoords="offset points",
+                                xytext=(0, 3 if vi >= 0 else -14),
+                                ha="center", fontsize=6.4, rotation=90)
+        ax.axhline(1.0, color="#333333", lw=1.0, ls="--")
+        ax.axhline(0.0, color="#333333", lw=0.8)
+        ax.set_xticks(x)
+        ax.set_xticklabels([SLOT_SHORT[n] for n in names], fontsize=8.5)
+        ax.set_title(title, fontsize=11, loc="left", fontweight="bold")
+        ax.grid(axis="y", alpha=0.2, lw=0.5)
+        ax.legend(fontsize=7.8, ncol=3, frameon=False, loc="upper center",
+                  bbox_to_anchor=(0.5, -0.12))
+    axes[0].set_ylabel("fraction of the forcing, Sledd sign convention\n"
+                       "(energy leaving the surface)")
+    # Five terms on the left, four on the right: flatten before taking the
+    # range, since a ragged 2-D array is not one np.array will build.
+    vals = ([p[k] for p in pa for k, _, _ in PARTITION_TERMS]
+            + [p[k] for p in pb for k, _, _ in FNET_PARTITION_TERMS])
+    lo, hi = float(np.nanmin(vals)), float(np.nanmax(vals))
+    pad = 0.12 * (hi - lo)
+    axes[0].set_ylim(min(lo - pad, -0.1), max(hi + pad, 1.25))
+
+    top = _header_block(
+        fig, "The same partition on two forcers",
+        _figure_subtitle(A, pop),
+        note=(f"{CONTROL_LABELS[cname]}; each group sums to one by "
+              "construction, with the residual taken as the remainder\n"
+              "mean SW$_{net}$ over this population is 2-8 W m$^{-2}$, so the "
+              "two forcers differ mainly in the sunlit shoulders of the season"),
+        title_fs=14)
+    fig.subplots_adjust(top=top - 0.02, bottom=0.2, left=0.07, right=0.985,
+                        wspace=0.08)
+    return _save(fig, A, f"partition_forcer_{pop}_{cname}", out_dir, dpi)
+
+
 def fig_response_partition(A: Analysis, out_dir=None, dpi: int | None = None,
                            population: str | None = None,
                            control: str | None = None):
@@ -4358,6 +5336,11 @@ def self_check(A: Analysis, tol: float = 1e-9, verbose: bool = True) -> bool:
              f"{nm}: residual vs the direct fit of R on DLR")
         near(p["f_res"], net_flux_slope(acc, slot),
              f"{nm}: residual vs the same combination in the covariance")
+        # 4c. The same closure on the Sledd forcer DLR + SW_net: four terms,
+        #     the residual as remainder equals the direct fit of R.
+        pf = partition_fnet(acc, slot)
+        near(pf["f_res"], pf["f_res_direct"],
+             f"{nm}: fnet residual vs the direct fit of R")
         near(t["dshf_dlwd"] + t["dlhf_dlwd"], t["dturb_dlwd"],
              f"{nm}: turbulent sum")
 
@@ -4399,6 +5382,16 @@ ALL_FIGURES = (
     fig_lwu_vs_dlr,
     fig_swnet_vs_dlr,
     fig_rnet_vs_dlr,
+    fig_lwu_vs_fnet,
+    fig_shf_vs_fnet,
+    fig_lhf_vs_fnet,
+    fig_rnet_vs_fnet,
+    fig_rnet_vs_gice,
+    fig_ice_closure_transect,
+    fig_skt_by_siconc,
+    fig_monthly_response,
+    fig_monthly_vs_mosaic,
+    fig_partition_forcer,
     fig_response_partition,
     fig_partition_terms,
     fig_partition_ledger,

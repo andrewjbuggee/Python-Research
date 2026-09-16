@@ -349,8 +349,12 @@ class DatastreamSpec:
     role:
         "hartig26-core" for Hartig26 Table 1 instruments, "bertrand25-core"
         for the Bertrand25 radiation-environment set (QCRAD, MET/METTWR,
-        Shupe-Turner microphysics), "extension" for registered-but-unwrapped
-        convenience datastreams.
+        Shupe-Turner microphysics), "seb-core" / "seb-extension" for the
+        surface-energy-budget set consumed by arm_nsa/seb.py and
+        scripts/download_nsa_seb_data.py (the observational counterpart of
+        the ERA5 SEB pipeline), and "extension" for registered-but-unwrapped
+        convenience datastreams. Membership in the SEB download tiers is
+        defined in seb.py (SEB_VARIABLE_SETS), not by this field.
     """
 
     key: str
@@ -407,7 +411,14 @@ DATASTREAMS: Dict[str, DatastreamSpec] = {
     ),
     "mwr": DatastreamSpec(
         key="mwr",
-        datastreams=("nsamwrret1liljclouC1.c2",),
+        datastreams=(
+            # c2 is the final reprocessing and is preferred wherever it exists;
+            # c1 is the near-real-time level that runs months ahead of it (on
+            # 2026-09-15: c2 ended 2025-12-31, c1 ran to 2026-03-31). Both are
+            # fetched, and the readers keep c2 wherever the two overlap.
+            "nsamwrret1liljclouC1.c2",
+            "nsamwrret1liljclouC1.c1",
+        ),
         description=(
             "Microwave radiometer retrieval (MWRRET v1, Turner et al. 2007 "
             "physical retrieval): best-estimate LWP and PWV from 23.8/31.4 "
@@ -659,17 +670,328 @@ DATASTREAMS: Dict[str, DatastreamSpec] = {
         key="interpsonde",
         datastreams=("nsainterpolatedsondeC1.c1",),
         description=(
-            "INTERPOLATEDSONDE value-added product: radiosonde thermodynamic "
-            "profiles interpolated to a continuous 1-min time grid (used by "
-            "Bertrand25 as RRTM input). Registered for download convenience; "
-            "no custom reader."
+            "INTERPOLATEDSONDE value-added product (ARM doi:10.5439/1095316): "
+            "radiosonde thermodynamic and wind profiles interpolated to a "
+            "continuous 1-min time grid on 332 levels, with RH additionally "
+            "scaled to the MWR PWV ('rh_scaled'). Used by Bertrand25 as RRTM "
+            "input. In the SEB set it supplies the temperature profile that "
+            "turns ARSCL cloud boundaries into cloud-base / cloud-top "
+            "temperatures for dates THERMOCLDPHASE (which embeds the same "
+            "profile as 'sonde_temp') has not yet been processed for. Files "
+            "are ~61 MB/day, so the raw 'sonde' launches (~4/day, ~1.5 MB "
+            "each) are the cheaper source when hourly resolution suffices."
         ),
         variables={
             "temp_c": ("temp",),
             "rh_pct": ("rh",),
             "pres_hpa": ("bar_pres", "pres"),
+            # Added for the SEB set (names read from a 2025-12-15 file):
+            "dp_c": ("dp",),
+            "sh_g_g": ("sh",),
+            "wspd_m_s": ("wspd",),
+            "u_wind_m_s": ("u_wind",),
+            "v_wind_m_s": ("v_wind",),
+            "potential_temp_k": ("potential_temp",),
+            "rh_scaled_pct": ("rh_scaled",),
         },
         role="extension",
+    ),
+    # -- Surface energy budget (SEB) set --------------------------------------
+    # Registered for scripts/download_nsa_seb_data.py and arm_nsa/seb.py: the
+    # observational counterpart of ERA5/surface_energy_budget/download_era5_seb.py
+    # (Sledd et al. 2025, Eq. 1). Every entry below was checked against the ARM
+    # Live archive AND one real file from the 2025/26 cold season on 2026-09-15;
+    # the variable names, units and dimensions are read from those files, not
+    # from documentation. See config.SEB_* constants and the README "Surface
+    # energy budget" section for the reliability assessment and for the two
+    # terms NO instrument at NSA C1 measures (turbulent fluxes, ground heat flux).
+    "gndirt": DatastreamSpec(
+        key="gndirt",
+        datastreams=("nsagndirtC1.b1",),
+        description=(
+            "Ground-looking infrared thermometer (GNDIRT; ARM doi:10.5439/"
+            "1366509): 1-min surface skin brightness "
+            "temperature [K], sensor mounted at 10 m on the GNDRAD stand "
+            "looking down at the (snow-covered) tundra. Archive coverage "
+            "2018-07-01 .. present at NSA C1; the older 'nsairtC1.b1' stream "
+            "it replaced ended 2025-10-29 and is not registered. THE surface "
+            "temperature for the bulk turbulent-flux parameterization "
+            "(T_skin - T_air drives SH; q_sat_ice(T_skin) - q_air drives LH) "
+            "and an independent check on LW-up-derived skin temperature. It "
+            "is a brightness temperature: convert with the snow emissivity "
+            "(config.SEB_SNOW_EMISSIVITY) and the reflected sky term before "
+            "treating it as a thermodynamic temperature."
+        ),
+        variables={
+            "t_skin_ir_k": ("sfc_ir_temp",),
+            "t_skin_ir_std_k": ("sfc_ir_temp_std",),
+        },
+        role="seb-core",
+    ),
+    "sirs": DatastreamSpec(
+        key="sirs",
+        datastreams=("nsasirsC1.b1",),
+        description=(
+            "SIRS (Solar and Infrared Radiation Station) b1 at NSA C1, "
+            "2024-07-18 .. present. NOT an independent radiometer set: the "
+            "file's own input_datastreams and process_version "
+            "('ingest-mergerad2sirs') show it is a merge of the SKYRAD "
+            "(downwelling) and GNDRAD (upwelling) 60-s streams into one file. "
+            "It is registered as the un-QC'd fallback for 'qcrad' (QCRAD1LONG "
+            "is derived from exactly these fields) for dates the QCRAD VAP has "
+            "not yet processed, and because it carries the pyrgeometer case "
+            "and dome thermistor temperatures needed to audit the LW fluxes. "
+            "Prefer 'qcrad' whenever it exists for the date."
+        ),
+        variables={
+            "swdn_w_m2": ("down_short_hemisp",),
+            "swdn_diffuse_w_m2": ("down_short_diffuse_hemisp",),
+            "sw_direct_normal_w_m2": ("short_direct_normal",),
+            # Two co-located downwelling pyrgeometers: their disagreement is
+            # a direct, in-situ estimate of the LW-down measurement uncertainty.
+            "lwdn_w_m2": ("down_long_hemisp1",),
+            "lwdn2_w_m2": ("down_long_hemisp2",),
+            "swup_w_m2": ("up_short_hemisp",),
+            "lwup_w_m2": ("up_long_hemisp",),
+            "lwup_case_temp_k": ("up_long_hemisp_case_temp",),
+            "lwup_dome_temp_k": ("up_long_hemisp_dome_temp",),
+            "lwdn_case_temp_k": ("down_long_hemisp1_case_temp",),
+            "lwdn_dome_temp_k": ("down_long_hemisp1_dome_temp",),
+        },
+        role="seb-extension",
+    ),
+    "skyrad": DatastreamSpec(
+        key="skyrad",
+        datastreams=("nsaskyrad60sC1.b1",),
+        description=(
+            "SKYRAD 60-s downwelling broadband radiation (two pyrgeometers, "
+            "global/diffuse pyranometers, pyrheliometer), 1999 .. present. "
+            "The upstream source of the downwelling half of 'qcrad' and "
+            "'sirs'; registered so that either can be rebuilt or audited from "
+            "its inputs. Not needed when 'qcrad' covers the period."
+        ),
+        variables={
+            "swdn_w_m2": ("down_short_hemisp",),
+            "lwdn_w_m2": ("down_long_hemisp1",),
+            "lwdn2_w_m2": ("down_long_hemisp2",),
+        },
+        role="seb-extension",
+    ),
+    "gndrad": DatastreamSpec(
+        key="gndrad",
+        datastreams=("nsagndrad60sC1.b1",),
+        description=(
+            "GNDRAD 60-s upwelling broadband radiation (pyrgeometer + "
+            "pyranometer mounted at 10 m looking down), 1999 .. present. The "
+            "upstream source of the upwelling half of 'qcrad' and 'sirs'. "
+            "NOTE the 10-m mounting height (QCRAD labels the field 'Upwelling "
+            "(10 meter) Longwave'): the footprint is a ~10-m-radius patch of "
+            "tundra, not the point under the IRT, which matters for LW-up-"
+            "derived skin temperature vs. GNDIRT comparisons."
+        ),
+        variables={
+            "swup_w_m2": ("up_short_hemisp",),
+            "lwup_w_m2": ("up_long_hemisp",),
+        },
+        role="seb-extension",
+    ),
+    "mwr3c": DatastreamSpec(
+        key="mwr3c",
+        datastreams=("nsamwr3cC1.b1",),
+        description=(
+            "Three-channel microwave radiometer (MWR3C; 23.84 / 31.4 / 90 GHz; "
+            "ARM doi:10.5439/1025248), ~1-s "
+            "zenith samples, 2021-06-16 .. present. Reports LWP and PWV from "
+            "the manufacturer's multiple linear regression on the three "
+            "brightness temperatures (the regression coefficients are stored "
+            "in each file) plus a 10.5-um zenith infrared sky temperature. "
+            "Liquid absorption rises roughly with frequency squared, so the "
+            "90 GHz channel is several times more sensitive to liquid than "
+            "31.4 GHz, which is why this is the SECOND LWP source for "
+            "the SEB set: in the 2025/26 season the MWRRET retrieval ('mwr') "
+            "has multi-day gaps (no retrieval at all 2025-12-15/16; no files "
+            "2025-12-14 and 2026-02-15) and a period in mid-November 2025 with "
+            "median LWP of -47 g/m^2, i.e. an uncorrected brightness-"
+            "temperature bias, while MWR3C ran continuously and reported "
+            "physically sensible values (5-11 g/m^2 medians on the same days). "
+            "Caveats: NO clear-sky bias correction and NO qc_lwp variable (only "
+            "the brightness temperatures carry QC); regression, not physical, "
+            "retrieval; LWP is stored in mm (1 mm = 1000 g/m^2; converted by "
+            "the reader). Files are ~21 MB/day."
+        ),
+        variables={
+            "lwp_g_m2": ("lwp",),
+            "lwp_err_g_m2": ("lwp_err",),
+            "pwv_cm": ("pwv",),
+            "tb_23_k": ("tbsky23",),
+            "tb_31_k": ("tbsky31",),
+            "tb_90_k": ("tbsky90",),
+            "ir_sky_temp_k": ("infrared_temperature",),
+            "elevation_deg": ("elevation",),
+        },
+        role="seb-core",
+    ),
+    "arsclbnd": DatastreamSpec(
+        key="arsclbnd",
+        datastreams=(
+            # c1 is the later reprocessing where it exists (Oct-Dec 2025 at the
+            # time of writing); c0 runs to the present. Preferred-first order,
+            # as for 'qcrad'.
+            "nsaarsclkazrbnd1kolliasC1.c1",
+            "nsaarsclkazrbnd1kolliasC1.c0",
+        ),
+        description=(
+            "ARSCL cloud boundaries (Kollias KAZR-ARSCL; ARM doi:10.5439/"
+            "1393438): per-4-s base and top heights [m AGL] of up to 10 "
+            "hydrometeor layers from the combined KAZR + MPL + ceilometer "
+            "cloud mask, plus the ceilometer/MPL cloud-base best estimate. "
+            "The compact (2.3 MB/day) companion of the full ARSCL product: "
+            "everything needed to place a cloud in the temperature profile "
+            "(cloud-base / cloud-top temperature) without the reflectivity "
+            "and Doppler fields. Clear sky is flagged as -1 (and 'possible "
+            "clear' as -2) in the height fields, NOT as NaN -- the reader "
+            "converts both to NaN and keeps a separate clear-sky flag."
+        ),
+        variables={
+            "cloud_base_best_estimate_m": ("cloud_base_best_estimate",),
+            "cloud_layer_base_m": ("cloud_layer_base_height",),
+            "cloud_layer_top_m": ("cloud_layer_top_height",),
+            "instrument_availability_flag": ("instrument_availability_flag",),
+        },
+        role="seb-core",
+    ),
+    "cldtype": DatastreamSpec(
+        key="cldtype",
+        datastreams=("nsacldtypeC1.c1",),
+        description=(
+            "CLDTYPE VAP (ARM doi:10.5439/1349884): 1-min cloud-type classification of each "
+            "ARSCL layer (low cloud, congestus, deep convection, altocumulus, "
+            "altostratus, cirrostratus/anvil, cirrus) from layer base/top and "
+            "thickness rules, with the layer boundaries, the ARSCL best-"
+            "estimate radar reflectivity profile at 1-min resolution on the "
+            "596-level / 30-m grid (160-18010 m AGL), and the surface "
+            "precipitation rate. At 9 MB/day it is the cheapest route to a "
+            "reflectivity profile: the Z-based IWC relation already in this "
+            "package (IWC = a Z^b, config.IWC_PREFACTOR_A / IWC_EXPONENT_B) "
+            "integrated over ice-phase gates gives an ice water path, "
+            "without the 670 MB/day MICROBASE files. Same height grid as "
+            "THERMOCLDPHASE, so the phase mask applies gate-for-gate."
+        ),
+        variables={
+            "cloud_type": ("cloudtype",),
+            "cloud_base_best_estimate_m": ("cloud_base_best_estimate",),
+            "cloud_layer_base_m": ("cloud_layer_base_height",),
+            "cloud_layer_top_m": ("cloud_layer_top_height",),
+            "reflectivity_dbz": ("reflectivity",),
+            "precip_rate_mm_min": ("precipitation",),
+            "cloud_source_flag": ("cloud_source_flag",),
+        },
+        role="seb-core",
+    ),
+    "microbase": DatastreamSpec(
+        key="microbase",
+        datastreams=("nsamicrobaseC1.c1",),
+        description=(
+            "MICROBASE c1 (ARM doi:10.5439/1900609; the 'Improved Continuous "
+            "Baseline Microphysical Retrieval ... with QC flags and "
+            "Uncertainties' entry on ARM Data Discovery): retrieved LWC and "
+            "IWC [g m-3] and liquid/ice effective radius [um] on (time, "
+            "height) at 4 s / 30 m (596 levels), with per-gate random "
+            "uncertainties, a retrieval flag, and the MWR scale factor "
+            "(ratio of MWR LWP to the integrated LWC). NSA coverage "
+            "2011-11-11 .. 2025-12-31 at the time of writing. The only "
+            "routine ARM source of a retrieved IWC/IWP at NSA -- but at "
+            "~670 MB/day (a 3-month winter is ~60 GB) it is deliberately kept "
+            "OUT of every SEB variable set and must be requested by key. The "
+            "reflectivity-based IWP from 'cldtype' is the lightweight "
+            "alternative; MICROBASE's IWC uses the same Z-IWC family of "
+            "relations, so the two are not independent."
+        ),
+        variables={
+            "lwc_g_m3": ("liquid_water_content",),
+            "iwc_g_m3": ("ice_water_content",),
+            "liquid_re_um": ("liquid_effective_radius",),
+            "ice_re_um": ("ice_effective_radius",),
+            "retrieval_flag": ("retrieval_flag",),
+            "mwr_scale_factor": ("mwr_scale_factor",),
+        },
+        role="seb-extension",
+    ),
+    # -- Oliktok Point (NSA E10) turbulent and soil fluxes: NOT Barrow ---------
+    # ECOR and SEBS were queried at every NSA facility code over 1998-2026 on
+    # 2026-09-15. They exist ONLY at E10 (Oliktok Point, ~250 km ESE of
+    # Utqiagvik); no file has ever been archived for C1. They are registered
+    # so the measured fluxes can be used to test the bulk parameterization and
+    # the ground-flux estimates on the SAME tundra type in the SAME season, but
+    # they are a different site and must never be plotted as Barrow data.
+    "ecor_e10": DatastreamSpec(
+        key="ecor_e10",
+        datastreams=("nsaecorsfE10.b1",),
+        description=(
+            "Eddy-correlation flux system with SmartFlux (ECORSF, EddyPro "
+            "processing; ARM doi:10.5439/1494128) at NSA **E10 Oliktok "
+            "Point**, 30-min fluxes, 2024-10-01 .. present (its predecessors "
+            "nsa30ecorE10.b1 / nsa30qcecorE10.s1 cover 2011-2024 with "
+            "different variable names and are not registered). Directly "
+            "measured sensible and latent heat flux, friction velocity, "
+            "Obukhov length and EddyPro quality flags (0 best .. 2 discard). "
+            "The nearest measured turbulent fluxes to Barrow; there are none "
+            "at C1. Sign convention: positive UPWARD (from surface to air), "
+            "i.e. the Sledd et al. (2025) convention, opposite to ERA5. "
+            "WINTER CAVEAT: on the 2025-12-15 sample day the flagged-good "
+            "records reported SH of +200 to +1400 W/m^2 in polar night with "
+            "u* = 0.7 m/s at 3 m/s wind -- the signature of a rimed sonic "
+            "anemometer, which the EddyPro flags did not catch. The reader "
+            "applies a plausibility screen (|SH|, |LH| < 150 W/m^2 by "
+            "default); expect to discard much of the cold-season record."
+        ),
+        variables={
+            "sh_w_m2": ("sensible_heat_flux",),
+            "lh_w_m2": ("latent_flux",),
+            "sh_flag": ("flag_sensible_heat_flux",),
+            "lh_flag": ("flag_latent_flux",),
+            "ustar_m_s": ("friction_velocity",),
+            "obukhov_length_m": ("Monin_Obukhov_length",),
+            "wspd_m_s": ("mean_wind",),
+            "t_air_k": ("air_temperature",),
+            "q_air_kg_kg": ("specific_humidity",),
+        },
+        role="seb-extension",
+    ),
+    "sebs_e10": DatastreamSpec(
+        key="sebs_e10",
+        datastreams=("nsasebsE10.b1",),
+        description=(
+            "Surface Energy Balance System (SEBS; ARM doi:10.5439/1984921) at "
+            "NSA **E10 Oliktok Point**, 30-min means, 2011-09-13 .. present: "
+            "three soil heat-flux plates with the soil temperature, moisture "
+            "and 0-5 cm storage correction needed to bring the plate flux to "
+            "the surface, plus a net radiometer. The only measured ground "
+            "heat flux in the ARM North Slope network; nothing equivalent "
+            "exists at C1 (queried 2026-09-15). Sign convention, read from "
+            "the file: surface_soil_heat_flux_avg carries standard_name "
+            "'upward_heat_flux_at_ground_level_in_soil' and the file's own "
+            "surface_energy_balance equals net_radiation + G -- i.e. G is "
+            "positive UPWARD (toward the surface), the same sign as Sledd "
+            "et al. (2025) Eq. (1). On 2025-12-15 the plates read +7.0 W/m^2 "
+            "with the 5-cm soil at -3.9 degC against a net radiation of "
+            "-7.8 W/m^2: the active layer was still refreezing and the "
+            "budget closed to -0.8 W/m^2, a useful expectation for G at "
+            "Barrow in early winter."
+        ),
+        variables={
+            "soil_heat_flux_w_m2": ("surface_soil_heat_flux_avg",),
+            "soil_heat_flux_1_w_m2": ("surface_soil_heat_flux_1",),
+            "soil_heat_flux_2_w_m2": ("surface_soil_heat_flux_2",),
+            "soil_heat_flux_3_w_m2": ("surface_soil_heat_flux_3",),
+            "soil_temp_1_c": ("soil_temp_1",),
+            "soil_temp_2_c": ("soil_temp_2",),
+            "soil_temp_3_c": ("soil_temp_3",),
+            "soil_moisture_1_pct": ("soil_moisture_1",),
+            "net_radiation_w_m2": ("net_radiation",),
+            "energy_storage_change_1_w_m2": ("energy_storage_change_1",),
+        },
+        role="seb-extension",
     ),
 }
 

@@ -23,7 +23,7 @@ Reference: ARM Data Quality documentation, https://www.arm.gov/guidance/datause
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Mapping, Optional, Tuple
 
 import numpy as np
 import xarray as xr
@@ -33,8 +33,20 @@ import xarray as xr
 ARM_MISSING_SENTINELS = (-9999.0, -7999.0, 9999.0)
 
 
-def _bit_severities(qc_var: xr.DataArray) -> List[Tuple[int, str]]:
-    """Return [(bitmask, assessment), ...] parsed from qc-variable attrs."""
+def _bit_severities(
+    qc_var: xr.DataArray, global_attrs: Optional[Mapping[str, object]] = None
+) -> List[Tuple[int, str]]:
+    """Return [(bitmask, assessment), ...] parsed from qc-variable attrs.
+
+    Falls back to the dataset's GLOBAL attributes when the qc variable itself
+    carries no bit metadata. Several ARM b1 ingests (nsagndirtC1.b1,
+    nsatwrC1.b1, ...) write only ``description: "See global attributes for
+    individual QC bit descriptions."`` on the variable and put the actual
+    table in global ``qc_bit_N_description`` / ``qc_bit_N_assessment``
+    attributes. Without this fallback those streams hit the conservative
+    "any nonzero flag is suspect" branch below and lose every sample that
+    merely failed the Indeterminate valid_delta (spike) test.
+    """
     attrs = qc_var.attrs
     out: List[Tuple[int, str]] = []
 
@@ -51,6 +63,18 @@ def _bit_severities(qc_var: xr.DataArray) -> List[Tuple[int, str]]:
     bit = 1
     while f"bit_{bit}_description" in attrs or f"bit_{bit}_assessment" in attrs:
         assessment = str(attrs.get(f"bit_{bit}_assessment", "Bad"))
+        out.append((1 << (bit - 1), assessment))
+        bit += 1
+    if out or not global_attrs:
+        return out
+
+    # Global-attribute table: qc_bit_1_assessment, qc_bit_2_assessment, ...
+    bit = 1
+    while (
+        f"qc_bit_{bit}_description" in global_attrs
+        or f"qc_bit_{bit}_assessment" in global_attrs
+    ):
+        assessment = str(global_attrs.get(f"qc_bit_{bit}_assessment", "Bad"))
         out.append((1 << (bit - 1), assessment))
         bit += 1
     return out
@@ -83,7 +107,7 @@ def qc_mask(
     if qc_name in ds:
         qc_var = ds[qc_name]
         qc_int = qc_var.fillna(0).astype("int64")
-        severities = _bit_severities(qc_var)
+        severities = _bit_severities(qc_var, global_attrs=ds.attrs)
         if severities:
             for bitmask, assessment in severities:
                 is_bad = assessment.strip().lower() == "bad"

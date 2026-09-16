@@ -1,0 +1,70 @@
+UCSD VPN + ETHERNET — WHAT WENT WRONG AND HOW TO CONNECT
+Diagnosed 2026-09-14 (with Claude Code)
+
+WHAT WENT WRONG (three separate problems stacked on top of each other)
+
+1. Account became "Secure Connect"-enforced.
+   UCSD now checks the DEVICE, not just the login. Requirements (from the
+   posture policy the VPN pushes): Qualys Cloud Agent + Trellix (FireEye xagt)
+   installed. Without them the VPN "connects" but carries no traffic
+   ("internet-only" / quarantined). On allthru that looks like no internet at
+   all; on split it looks like the VPN does nothing.
+   FIX: installed both agents. Trellix installer needs agent_config.json in the
+   SAME folder as xagtSetup_*.pkg or it fails (Installer error 112). Then
+   approve the FireEye system extension + Full Disk Access when macOS asks.
+
+2. Private Wi-Fi address was set to "Fixed" on UCSD-PROTECTED.
+   UCSD looks up the device by its real MAC address (registered with SIO IT).
+   A private/fixed MAC is not in their database, so the lookup fails.
+   FIX: System Settings > Wi-Fi > (i) next to UCSD-PROTECTED >
+   Private Wi-Fi address = OFF (not "Fixed"). Reconnect Wi-Fi.
+   Real Wi-Fi MAC: ac:07:75:0d:30:6b
+
+3. The office wired port is campus-only.
+   It hands out a 172.16.114.x address, reaches UCSD internal networks
+   directly, but has NO path to the public internet. So "secure-connect-split"
+   (only UCSD traffic through the tunnel) can never give internet on Ethernet.
+   "secure-connect-allthru" (everything through the tunnel) is required —
+   same as the old "2-Step Secured - allthruucsd" that used to work.
+   Ethernet adapter in use: AX88179B (en11), MAC 6c:6e:07:55:6e:d2
+
+GOING FORWARD
+
+At the desk (Ethernet):
+  1. On Wi-Fi, open Cisco Secure Client -> vpn.ucsd.edu ->
+     Group: secure-connect-allthru -> log in (Duo).
+  2. Plug in the Ethernet adapter. Wait ~20 s (client shows "Reconnecting"
+     then "Connected" as the tunnel moves to Ethernet).
+  3. Turn Wi-Fi off. Internet + UCSD should both work, faster than Wi-Fi.
+
+On Wi-Fi anywhere else:
+  Use secure-connect-split. It is faster (only UCSD traffic is tunneled).
+  allthru on Wi-Fi is what made things slow.
+
+Cisco client tiles to IGNORE: "Zero Trust Access: Enroll" and
+"Umbrella: Profile is missing" — UCSD isn't using those modules.
+"ISE Posture: No policy server detected / Default network access" is the
+NORMAL message after a compliant check.
+
+Do NOT uninstall Cisco Secure Client, Qualys, or Trellix to fix VPN problems —
+UCSD's KB says that can break the compliance process.
+
+Keep macOS and browsers updated; Qualys reports stale software to UCSD.
+
+IF IT BREAKS AGAIN — quick checks (Terminal):
+  /opt/cisco/secureclient/bin/vpn stats
+     -> "Secured Routes (IPv4)" should list 132.239.0.0/16, 169.228.0.0/16,
+        128.54.0.0/16 ... If EMPTY, the posture check failed.
+  ifconfig en0 | grep ether
+     -> should show ac:07:75:0d:30:6b (real MAC). If not, Private Wi-Fi
+        address got turned back on.
+  grep -ao 'value="[^"]*ompliant[^"]*"' ~/.cisco/vpn/log/UIHistory_*.txt | tail
+     -> last posture verdict ("Compliant. Network access allowed." is good).
+
+SUPPORT
+  UCSD KB "Secure Connect VPN Troubleshooting":
+    https://support.ucsd.edu/its?id=kb_article&sysparm_article=KB0036091
+  ITS Service Desk: (858) 246-4357, support@ucsd.edu
+  Departmental: SIO IT (they hold the MAC-address registrations)
+  When asking for help, include: tunnel group used, whether first connection
+  since enforcement, and a screenshot of ISE Posture > Message History.
