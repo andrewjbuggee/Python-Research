@@ -1111,7 +1111,13 @@ def moment_stats(acc: dict, slot: int, x_key: str, y_key: str,
     y_mean = my_c + CENTERS[iy]
 
     slope = sxy / sxx if sxx > 0.0 else np.nan
-    denom = np.sqrt(sxx * syy)
+    # A variable that is identically constant within a group -- net shortwave
+    # in a polar-night month is exactly zero at every hour -- leaves
+    # E[y^2] - E[y]^2 at about -1e-43 rather than zero after the two
+    # subtractions, and the product then reaches sqrt as a negative number.
+    # The correlation is undefined there and NaN is the right answer; clip
+    # both variances at zero so it arrives without a RuntimeWarning.
+    denom = np.sqrt(max(sxx, 0.0) * max(syy, 0.0))
     r = float(sxy / denom) if denom > 0.0 else np.nan
     out.update(
         slope=float(slope),
@@ -2162,6 +2168,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "annotated either way. Both moment sets are "
                              "accumulated, so this can be changed on an "
                              "existing Analysis without reloading.")
+    parser.add_argument("--sign-convention", choices=SIGN_CONVENTIONS,
+                        default=DEFAULT_SIGN_CONVENTION,
+                        help="Sign of the responders on the slide version of "
+                             "the monthly figure: 'era5' is the archive's own "
+                             "convention, positive DOWNWARD into the surface, "
+                             "negative into the atmosphere; 'sledd' counts "
+                             "every term as energy leaving the surface, as "
+                             "Sledd et al. (2025) Fig. 2a does (default "
+                             f"{DEFAULT_SIGN_CONVENTION}). A relabelling of "
+                             "the same regression, so it can be changed on "
+                             "an existing Analysis without reloading.")
+    parser.add_argument("--monthly-palette", choices=tuple(MONTHLY_PALETTES),
+                        default=DEFAULT_MONTHLY_PALETTE,
+                        help="Colours on the slide version of the monthly "
+                             "figure: 'sledd' is the scheme of the full "
+                             "figure (MONTHLY_STYLE), 'slide' the palette "
+                             "kept clear of the other figures in the talk "
+                             f"(default {DEFAULT_MONTHLY_PALETTE}).")
     parser.add_argument("--bootstrap-block-days", type=int,
                         default=DEFAULT_BOOTSTRAP_BLOCK_DAYS, metavar="D",
                         help="Length of the contiguous time blocks the "
@@ -3582,6 +3606,314 @@ def fig_monthly_response(A: "Analysis", forcer: str = "lwd", out_dir=None,
     fig.subplots_adjust(top=top - 0.03, bottom=0.11, left=0.06, right=0.99,
                         wspace=0.10)
     return _save(fig, A, f"monthly_response_{forcer}_{pop}", out_dir, dpi)
+
+
+# Colours for the slide version of the monthly figure. They are chosen AWAY
+# from everything else on the deck this figure sits in: the five class colours
+# (brown, orange, dark blue, cyan, grey), the red/blue pair of the cloud-hours
+# bars, the black reference lines, and the dark-red/teal/blue/orange/purple of
+# MONTHLY_STYLE, which has already been shown. Three hue families map onto the
+# physics -- purples for the radiative terms, greens for the turbulent terms,
+# magenta for what is left over -- with lightness separating the two members
+# of a family. Purple against green is the ColorBrewer PRGn pairing, which
+# survives red-green colour blindness; the marker shapes are Sledd's and
+# carry the identity on their own in greyscale.
+MONTHLY_STYLE_SIMPLE: dict[str, tuple[str, str, str]] = {
+    "f_lwu": ("Upwelling LW", "#5E3C99", "o"),
+    "f_sw": ("Net shortwave", "#A98BCB", "D"),
+    "f_sh": ("Sensible heat", "#1B7837", "s"),
+    "f_lh": ("Latent heat", "#7FBC41", "X"),
+    "f_res": ("Residual (subsurface)", "#C51B7D", "^"),
+}
+
+# The two colour schemes the slide figure can draw with. "sledd" is the one
+# ``fig_monthly_response`` uses (``MONTHLY_STYLE``), so the slide and the
+# working figure read alike; "slide" is the palette above, kept clear of the
+# rest of the deck. Both carry the same marker shapes.
+MONTHLY_PALETTES: dict[str, dict[str, tuple[str, str, str]]] = {
+    "sledd": MONTHLY_STYLE,
+    "slide": MONTHLY_STYLE_SIMPLE,
+}
+DEFAULT_MONTHLY_PALETTE = "sledd"
+
+# The three classes a talk has room for: the two ends of the surface spectrum
+# and the one the pack-ice question is about.
+SIMPLE_MONTHLY_SLOTS: tuple[str, ...] = ("land", "open_ocean", "sea_ice")
+
+# Two ways to sign the same regression. ``monthly_partition`` returns Sledd's
+# convention: every responder counted as energy LEAVING the surface, so that
+# the terms sum to one. ERA5's own convention is positive DOWNWARD, into the
+# surface. Going from one to the other flips the atmosphere-side terms (the
+# skin emits LWU upward, and SH, LH, SW_net are archived positive downward,
+# so their Sledd fractions carry a minus sign that comes off again) and
+# leaves the residual alone: R = LWD - LWU + SW_net + SH + LH is already the
+# net flux INTO the surface, and its response is the same number in both.
+# Under "era5" the identity becomes  f_res - (f_lwu + f_sh + f_lh [+ f_sw]) = 1
+# with every term a change in downward flux per W m-2 of forcing.
+SIGN_CONVENTIONS: tuple[str, ...] = ("era5", "sledd")
+DEFAULT_SIGN_CONVENTION = "era5"
+SIGN_OF_TERM: dict[str, dict[str, float]] = {
+    "sledd": {"f_lwu": 1.0, "f_sh": 1.0, "f_lh": 1.0, "f_sw": 1.0,
+              "f_res": 1.0},
+    "era5": {"f_lwu": -1.0, "f_sh": -1.0, "f_lh": -1.0, "f_sw": -1.0,
+             "f_res": 1.0},
+}
+
+
+def _slide_subtitle(A: "Analysis", pop: str) -> str:
+    """One grey line saying what the data are, for figures without a header."""
+    a = A.args
+    what = ("overcast, liquid-bearing cloud hours" if pop == "cloud"
+            else "all cell-hours")
+    return (f"ERA5, {a.region} domain  |  Oct-Mar, seasons {A.used[0]}/"
+            f"{A.used[0] + 1}-{A.used[-1]}/{A.used[-1] + 1}  |  {what}")
+
+
+def fig_monthly_response_simple(A: "Analysis", forcer: str = "lwd",
+                                out_dir=None, dpi: int | None = None,
+                                population: str | None = None,
+                                slots: tuple[str, ...] = SIMPLE_MONTHLY_SLOTS,
+                                min_hours: float = 5000.0,
+                                label_fs: float = 12.0,
+                                layout: str = "column",
+                                figsize: tuple[float, float] | None = None,
+                                convention: str | None = None,
+                                palette: str | None = None,
+                                ocean_note: bool = True):
+    """The monthly-response figure cut down for a slide.
+
+    Three classes, each with its own y-axis: open water, where ERA5
+    prescribes the SST and the "fractions" run past +-2 (they are slopes of
+    a surface that cannot warm, not a partition), no longer sets the scale
+    for land and pack ice. Compared with ``fig_monthly_response``: fixed
+    marker size (no r^2 scaling), no diagnostic header, no shortwave
+    read-out. Still no confidence bands, for the reason given there: the
+    block bootstrap is not carried per month and the naive error is two
+    orders of magnitude too small on these data.
+
+    ``convention`` signs the responders (see ``SIGN_OF_TERM``): ``"era5"``
+    is the archive's own, positive DOWNWARD into the surface and negative
+    into the atmosphere, so the upwelling-longwave term is negative and a
+    turbulent loss that weakens shows as a positive change; ``"sledd"`` is
+    the full figure's, every term counted as energy leaving the surface. It
+    defaults to ``--sign-convention`` on the Analysis.
+
+    ``palette`` picks the colours (see ``MONTHLY_PALETTES``): ``"sledd"``
+    is the scheme of the full figure, ``"slide"`` the one kept clear of the
+    rest of the talk. Defaults to ``--monthly-palette`` on the Analysis.
+
+    ``layout`` is ``"column"`` (panels stacked, portrait -- for a document
+    page or beside a column of bullets) or ``"row"`` (panels side by side,
+    about 2.7:1 -- fills the width of a 16:9 slide under its title).
+    ``figsize`` overrides the default of either layout.
+
+    ``forcer`` is ``"lwd"`` (DLR alone; five responders, net shortwave among
+    them) or ``"fnet"`` (DLR + SW_net as in Sledd et al. 2025; four).
+    """
+    return _monthly_simple_core(
+        A, forcer, out_dir, dpi, population, slots, min_hours, label_fs,
+        layout, figsize, convention, palette, ocean_note,
+        normalize=False, signed=True)
+
+
+def fig_monthly_response_simple_normalized(
+        A: "Analysis", forcer: str = "lwd", out_dir=None,
+        dpi: int | None = None, population: str | None = None,
+        slots: tuple[str, ...] = SIMPLE_MONTHLY_SLOTS,
+        min_hours: float = 5000.0, label_fs: float = 12.0,
+        layout: str = "column", figsize: tuple[float, float] | None = None,
+        convention: str | None = None, palette: str | None = None,
+        ocean_note: bool = True, signed: bool = True):
+    """``fig_monthly_response_simple`` with each term divided by the sum of
+    magnitudes: the share of the GROSS flux change that each channel carries.
+
+    For every (class, month) the responses f_k of the partition are rescaled
+
+        s_k = f_k / sum_j |f_j|            (``signed=True``, the default)
+        s_k = |f_k| / sum_j |f_j|          (``signed=False``)
+
+    so that the magnitudes sum to one and every value lies in [-1, 1]. Read
+    it as: of all the energy that changes hands at the skin per W m-2 of
+    forcing -- in either direction -- what share moves through each channel.
+
+    WHAT THIS IS NOT. It is not a partition of the forcing, and the
+    difference matters exactly where a channel turns into a source. Where
+    every f_k is non-negative the denominator is one and the shares ARE the
+    partition (land in October and March). Where a term is negative the
+    denominator exceeds one and every share shrinks: over pack ice in
+    February the partition puts 0.66 of the forcing into the ice, the share
+    is 0.48; over open water the turbulent terms are sources of 2-3 W m-2
+    per W m-2 and the "shares" describe the size of that co-variation, not
+    where a forcing goes. The y-label says "share of the flux change" for
+    that reason, and the ocean caveat is kept. With ``signed=True`` a
+    negative share still marks a channel that adds energy rather than
+    disposing of it; ``signed=False`` hides that and should be read as
+    activity only. The sign ``convention`` applies before normalising.
+    """
+    return _monthly_simple_core(
+        A, forcer, out_dir, dpi, population, slots, min_hours, label_fs,
+        layout, figsize, convention, palette, ocean_note,
+        normalize=True, signed=signed)
+
+
+def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
+                         population, slots, min_hours: float,
+                         label_fs: float, layout: str, figsize,
+                         convention, palette, ocean_note: bool,
+                         normalize: bool, signed: bool):
+    """Shared body of the two slide figures; see their docstrings."""
+    import matplotlib.pyplot as plt
+
+    if layout not in ("column", "row"):
+        raise ValueError(f"layout must be 'column' or 'row', got {layout!r}")
+    conv = convention or getattr(A.args, "sign_convention",
+                                 DEFAULT_SIGN_CONVENTION)
+    if conv not in SIGN_CONVENTIONS:
+        raise ValueError(f"convention must be one of {SIGN_CONVENTIONS}, "
+                         f"got {conv!r}")
+    sign = SIGN_OF_TERM[conv]
+    pal = palette or getattr(A.args, "monthly_palette",
+                             DEFAULT_MONTHLY_PALETTE)
+    if pal not in MONTHLY_PALETTES:
+        raise ValueError(f"palette must be one of {tuple(MONTHLY_PALETTES)}, "
+                         f"got {pal!r}")
+    style = MONTHLY_PALETTES[pal]
+    row = layout == "row"
+    pop = population or A.args.population
+    n = len(slots)
+    if figsize is None:
+        # Column: an upright page. Row: a 16:9 slide is 13.33 x 7.5 in, and
+        # under a one-line title about 13.3 x 5.6 in is left for the figure.
+        figsize = (5.0 * n + 0.5, 5.6) if row else (7.6, 3.2 * n)
+    fig, axes = plt.subplots(1 if row else n, n if row else 1,
+                             figsize=figsize, sharex=not row)
+    axes = np.atleast_1d(axes)
+    x = np.arange(len(WINTER_MONTHS))
+    for ax, name in zip(axes, slots):
+        slot = SLOT_ORDER.index(name)
+        r = monthly_partition(A, slot, forcer, pop)
+        ok = r["n_hours"] >= min_hours
+        keys = [k for k in MONTHLY_STYLE_SIMPLE if k in r]
+        # The signed responses under the chosen convention, one row per term.
+        vals = np.array([np.where(ok, sign[k] * r[k], np.nan) for k in keys])
+        if normalize:
+            # Divide by the sum of magnitudes across the terms present, month
+            # by month. Where nothing is negative this is a division by one.
+            gross = np.abs(vals).sum(axis=0)
+            vals = (vals if signed else np.abs(vals)) / gross
+        lo, hi = 0.0, 0.0
+        # Colour and marker from the chosen palette; the short slide label
+        # in every case, since the label is not part of the colour scheme.
+        for k, y in zip(keys, vals):
+            lab = MONTHLY_STYLE_SIMPLE[k][0]
+            _l, col, mk = style[k]
+            if not np.isfinite(y).any():
+                continue
+            ax.plot(x, y, color=col, lw=2.2, zorder=3)
+            ax.scatter(x, y, s=72, color=col, marker=mk, edgecolor="#222222",
+                       linewidth=0.6, zorder=4,
+                       label=lab if ax is axes[0] else None)
+            lo, hi = min(lo, np.nanmin(y)), max(hi, np.nanmax(y))
+        ax.axhline(0.0, color="#333333", lw=0.9)
+        # Reference lines where a single term would carry the whole forcing
+        # (or, normalised, the whole flux change). Under Sledd's signs that
+        # is +1 for every term; under ERA5's it is +1 for the residual and
+        # -1 for the atmosphere-side terms, so both are drawn and kept
+        # inside the axis. Magnitude shares cannot be negative.
+        ax.axhline(1.0, color="#333333", lw=0.8, ls=":")
+        floor = -0.1
+        if conv == "era5" and signed:
+            ax.axhline(-1.0, color="#333333", lw=0.8, ls=":")
+            floor = -1.0
+        if normalize:
+            # Shares are bounded, so every panel gets the same axis and the
+            # three classes can be read against each other directly.
+            ax.set_ylim((-1.06, 1.06) if signed else (-0.04, 1.06))
+        else:
+            # Each panel sets its own range: the reference band is always
+            # inside it, and the data get a margin beyond whichever side
+            # they push past.
+            pad = 0.08 * max(hi - lo, 1.0)
+            ax.set_ylim(min(lo, floor) - pad, max(hi, 1.0) + pad)
+        ax.set_title(SLOT_LABELS[name], fontsize=label_fs + 2, loc="left",
+                     fontweight="bold", color=SLOT_COLORS[name])
+        ax.grid(alpha=0.25, lw=0.6)
+        ax.tick_params(labelsize=label_fs - 1)
+        if row or ax is axes[-1]:
+            ax.set_xticks(x)
+            ax.set_xticklabels(WINTER_LABELS, fontsize=label_fs)
+        if ocean_note and name == "open_ocean":
+            # Open water empties out after December (the class shrinks below
+            # min_hours as the strip freezes), so the right half of the panel
+            # is free for the caveat.
+            # pass
+            # ax.annotate("ERA5 prescribes the SST:\nslopes of a fixed "
+            #             "surface,\nnot a partition of the forcing",
+            #             (0.98, 0.55), xycoords="axes fraction", ha="right",
+            #             va="center", fontsize=label_fs - 3, color="#555555",
+            #             style="italic", linespacing=1.4,
+            #             bbox=dict(boxstyle="round,pad=0.35", fc="white",
+            #                       ec="none", alpha=0.92))
+            ax.annotate("No open ocean beyond \nDecember",
+                        (0.98, 0.55), xycoords="axes fraction", ha="right",
+                        va="center", fontsize=label_fs - 3, color="#555555",
+                        style="italic", linespacing=1.4,
+                        bbox=dict(boxstyle="round,pad=0.35", fc="white",
+                        ec="none", alpha=0.92))
+    f_lab = {"lwd": "DLR", "fnet": "DLR + SW$_{net}$"}[forcer]
+    if normalize:
+        y_head = f"share of the flux change per 1 W m$^{{-2}}$ of {f_lab}"
+        # A capital sigma, not \sum: the big operator with limits makes the
+        # rotated label a line and a half tall and breaks its alignment.
+        if not signed:
+            y_tail = r"($|f_k| / \Sigma_j |f_j|$;  shares sum to one)"
+        elif conv == "era5":
+            y_tail = (r"($f_k / \Sigma_j |f_j|$;  + into the surface,  "
+                      r"$-$ into the atmosphere)")
+        else:
+            y_tail = (r"($f_k / \Sigma_j |f_j|$;  positive: energy leaving "
+                      "the surface)")
+        title = f"Month-by-month share of the response to {f_lab}, by term"
+    else:
+        if conv == "era5":
+            y_head = f"change in downward flux per 1 W m$^{{-2}}$ of {f_lab}"
+            y_tail = ("(positive: into the surface;  negative: into the "
+                      "atmosphere)")
+        else:
+            y_head = f"response to a 1 W m$^{{-2}}$ change in {f_lab}"
+            y_tail = "(fraction, energy leaving the surface)"
+        title = f"Month-by-month response of the surface terms to {f_lab}"
+    handles, labels = axes[0].get_legend_handles_labels()
+    if row:
+        # Side by side, the shared y-label has a short figure to sit against,
+        # so it takes two lines; the legend has the whole width, so one row.
+        fig.supylabel(f"{y_head}\n{y_tail}", fontsize=label_fs, x=0.012)
+        fig.legend(handles, labels, loc="lower center", ncol=len(labels),
+                   frameon=False, fontsize=label_fs - 0.5,
+                   bbox_to_anchor=(0.53, 0.0), handletextpad=0.3,
+                   columnspacing=1.8)
+        fig.suptitle(title, fontsize=label_fs + 3, y=0.985)
+        fig.text(0.53, 0.915, _slide_subtitle(A, pop), ha="center",
+                 fontsize=label_fs - 3, color="#555555")
+        fig.subplots_adjust(top=0.83, bottom=0.19, left=0.075, right=0.99,
+                            wspace=0.24)
+    else:
+        fig.supylabel(f"{y_head}   {y_tail}", fontsize=label_fs)
+        fig.legend(handles, labels, loc="lower center", ncol=3, frameon=False,
+                   fontsize=label_fs - 1, bbox_to_anchor=(0.53, 0.0),
+                   handletextpad=0.3, columnspacing=1.4)
+        fig.suptitle(title, fontsize=label_fs + 3, y=0.985)
+        fig.text(0.53, 0.945, _slide_subtitle(A, pop), ha="center",
+                 fontsize=label_fs - 3, color="#555555")
+        fig.subplots_adjust(top=0.905, bottom=0.10, left=0.13, right=0.98,
+                            hspace=0.28)
+    stem = f"monthly_response_simple_{forcer}_{pop}_{conv}_{pal}"
+    if normalize:
+        stem = (f"monthly_response_simple_norm_{forcer}_{pop}_{conv}_{pal}"
+                + ("_signed" if signed else "_abs"))
+    if row:
+        stem += "_wide"
+    return _save(fig, A, stem, out_dir, dpi)
 
 
 def fig_monthly_vs_mosaic(A: "Analysis", out_dir=None, dpi: int | None = None,
@@ -5390,6 +5722,8 @@ ALL_FIGURES = (
     fig_ice_closure_transect,
     fig_skt_by_siconc,
     fig_monthly_response,
+    fig_monthly_response_simple,
+    fig_monthly_response_simple_normalized,
     fig_monthly_vs_mosaic,
     fig_partition_forcer,
     fig_response_partition,

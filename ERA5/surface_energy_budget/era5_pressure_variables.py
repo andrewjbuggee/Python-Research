@@ -143,6 +143,18 @@ REDUNDANT_VARS: tuple[PlVar, ...] = (
     PlVar("relative_humidity", "r", "%", "redundant diagnostic"),
 )
 
+# Horizontal wind on the levels. Added for cloud_spatial_extent.py, which
+# needs the wind AT CLOUD LEVEL to convert a cloud duration into a horizontal
+# length (Taylor's hypothesis); the 10 m wind in the single-level archive is
+# only a lower bound under a stable Arctic boundary layer. Kept as its OWN set
+# so it can be fetched into its own directory (--dir-suffix) beside an archive
+# that already holds the cloud-water set: the downloader resumes in DATE
+# space, so mixing sets in one directory silently skips the days on disk.
+WIND_VARS: tuple[PlVar, ...] = (
+    PlVar("u_component_of_wind", "u", "m s-1", "wind"),
+    PlVar("v_component_of_wind", "v", "m s-1", "wind"),
+)
+
 VARIABLE_SETS: dict[str, tuple[PlVar, ...]] = {
     # Everything needed for BOTH conversions, and nothing else. 6 variables.
     "minimal": CONDENSATE_VARS + THERMO_VARS,
@@ -156,6 +168,8 @@ VARIABLE_SETS: dict[str, tuple[PlVar, ...]] = {
     # As requested, including the redundant relative humidity. 9 variables.
     "requested": (CONDENSATE_VARS + THERMO_VARS + CLOUD_FRACTION_VARS
                   + GEOMETRY_VARS + REDUNDANT_VARS),
+    # The two wind components alone, for the cloud-level advection speed.
+    "winds": WIND_VARS,
 }
 
 # 'standard' is the default: geopotential and relative humidity are both

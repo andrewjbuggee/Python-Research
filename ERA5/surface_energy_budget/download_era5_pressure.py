@@ -85,7 +85,11 @@ Time span
 
 What to download
 ----------------
---var-set NAME               minimal | standard | extended | requested.
+--var-set NAME               minimal | standard | extended | requested | winds.
+--dir-suffix SUFFIX          Appended to the destination directory, so a second
+                             variable set (e.g. --var-set winds --dir-suffix
+                             _wind) lands beside the existing archive instead
+                             of being skipped by the date-space resume.
 --levels SPEC                troposphere | lower | deep | all, or an explicit
                              list ('1000,925,850') or range ('1000-500').
 --grid DEG                   Resample to a coarser grid. Cuts bytes, not cost.
@@ -308,6 +312,8 @@ _SHORT_NAME = {
     "fraction_of_cloud_cover": "cc",
     "geopotential": "z",
     "relative_humidity": "r",
+    "u_component_of_wind": "u",
+    "v_component_of_wind": "v",
 }
 
 
@@ -377,6 +383,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--chunk-days", type=int, default=None,
                    help="Days per request. Default: the largest that fits "
                         "under the measured field ceiling.")
+    p.add_argument("--dir-suffix", default="", metavar="SUFFIX",
+                   help="Appended to the destination directory name, e.g. "
+                        "'_wind' writes to <root>/<region>_pressure_wind. Use "
+                        "it to keep a second variable set (--var-set winds) "
+                        "beside an existing archive: resume works in date "
+                        "space, so a different set in the SAME directory "
+                        "would be skipped as already present. (default: none)")
     p.add_argument("--var-set", choices=sorted(VARIABLE_SETS),
                    default=DEFAULT_VAR_SET)
     p.add_argument("--levels", default=DEFAULT_LEVEL_SET,
@@ -425,7 +438,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     root = args.out_dir or STORAGE_ROOTS[args.storage]
-    run_dir = Path(root) / f"{region_name}_pressure"
+    run_dir = Path(root) / f"{region_name}_pressure{args.dir_suffix}"
 
     print("=" * 78)
     print("ERA5 pressure-level download")

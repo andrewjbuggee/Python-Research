@@ -394,12 +394,18 @@ def _draw_one(ax, M, field, vmin, vmax, cmap, mark_site=True, labels=True,
     return mesh
 
 
-def _site_legend(fig, loc=(0.985, 0.012), fontsize=DEFAULT_MAP_LEGEND_FONTSIZE):
-    """The red star, named, in the figure margin rather than over the map."""
+def _site_legend(fig, loc=(0.985, 0.012), fontsize=DEFAULT_MAP_LEGEND_FONTSIZE,
+                 anchor_corner="lower right"):
+    """The red star, named, in the figure margin rather than over the map.
+
+    ``anchor_corner`` is the corner/edge of the legend box pinned to ``loc``
+    (a figure-fraction point) -- e.g. "upper center" to hang the box below a
+    point rather than the default bottom-right placement in the margin.
+    """
     from matplotlib.lines import Line2D
     fig.legend([Line2D([0], [0], marker="*", ms=12, mfc="red", mec="white",
                        mew=1.0, ls="none")],
-               ["Utqia\u0121vik (DOE ARM site)"], loc="lower right",
+               ["Utqia\u0121vik"], loc=anchor_corner,
                bbox_to_anchor=loc, fontsize=fontsize, framealpha=0.95,
                handletextpad=0.4)
 
@@ -666,7 +672,20 @@ def fig_fraction_and_lwp(M: MapAnalysis, out_dir=None, dpi=None,
         unit = "%" if cmap is FRACTION_CMAP else "g m$^{-2}$"
         ax.set_title(f"domain median {np.nanmedian(field):,.1f} {unit}   |   "
                      f"ARM cell {field[iy, ix]:,.1f} {unit}", fontsize=10)
-    _site_legend(fig, fontsize=legend_fontsize)
+    # Site legend in the gap between the two panels, hung just below the 72N
+    # gridline (found from the axes transform, not guessed) so it clears the
+    # data above while staying clear of the colourbars below.
+    fig.canvas.draw()
+    import cartopy.crs as ccrs
+    central_lon = float(np.mean(M.lon))
+    x_proj, y_proj = axes[0].projection.transform_point(
+        central_lon, 72.0, ccrs.PlateCarree())
+    _, y_disp = axes[0].transData.transform((x_proj, y_proj))
+    _, y_fig = fig.transFigure.inverted().transform((0.0, y_disp))
+    pos0, pos1 = axes[0].get_position(), axes[1].get_position()
+    x_fig = 0.5 * (pos0.x1 + pos1.x0)
+    _site_legend(fig, loc=(x_fig, y_fig - 0.01), fontsize=legend_fontsize,
+                 anchor_corner="upper center")
     fig.suptitle(f"{precip_banner(M.args)}\n"
                  f"Liquid-containing cloud: how often, and how much liquid — "
                  f"{M.args.region}, mean over {len(M.used)} seasons "

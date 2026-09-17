@@ -4195,9 +4195,15 @@ def fig_season_phase_binary(A: Analysis, out_dir=None, dpi: int | None = None,
 DEFAULT_OBS_FILE = "genie_arm_seasonal_hours.txt"
 OBS_COLUMNS = ("with_liquid", "ice_only", "liq_precip", "ice_precip",
                "clear_sky", "others", "missing")
-OBS_LEGEND_MEANS = {"with_liquid": 1474, "ice_only": 1071, "liq_precip": 282,
+# Expected record means of each column, as a regression guard on the file.
+# with_liquid and ice_only are the ver2 (2026-09-16) values: Genie's first
+# table had left mixed-phase counts in ice-only, and the correction moved
+# ~215 h/season from ice-only to liquid-containing. Her published legend
+# (1474 / 1071) predates the fix and no longer applies to those two columns;
+# the remaining four are unchanged from it. See build_genie_seasonal_hours.py.
+OBS_LEGEND_MEANS = {"with_liquid": 1689, "ice_only": 857, "liq_precip": 282,
                     "ice_precip": 255, "clear_sky": 898, "others": 36,
-                    "missing": 339}
+                    "missing": 358}
 
 # How far the observation files can be wrong, in hours, as a property of WHERE
 # THEY CAME FROM rather than of the figure drawing them.
@@ -4235,13 +4241,16 @@ def load_observations(path=DEFAULT_OBS_FILE, check: bool = True) -> dict:
     """Read the ARM seasonal hours table.
 
     Returns ``{"seasons": [...], <column>: array, ...}``. With ``check``, the
-    per-season columns are averaged and compared against the record means the
-    source figure's legend states; a departure of more than 100 h is reported.
+    per-season columns are averaged and compared against ``OBS_LEGEND_MEANS``;
+    a departure of more than 100 h is reported.
 
-    The file now holds Genie's exact numbers, so the check is a regression
-    guard rather than a digitisation sanity test -- every column should agree
-    with its legend value to within rounding, and anything else means the file
-    has been edited or the wrong one is being read.
+    The file holds Genie's exact numbers (built by
+    ``build_genie_seasonal_hours.py`` from her source files), so the check is
+    a regression guard rather than a digitisation sanity test -- every column
+    should agree with its expected mean to within rounding, and anything else
+    means the file has been edited, regenerated from different sources, or
+    the wrong one is being read. A ~200 h miss on with_liquid AND ice_only in
+    opposite directions is the signature of the pre-ver2 file.
     """
     seasons, rows = [], []
     for line in Path(path).read_text().splitlines():
@@ -4349,10 +4358,10 @@ def obs_mean_liquid_hours(obs: dict, exclude_precip: bool,
     hours are a lower bound on what the instruments would have seen, so
     leaving them in biases the mean low: the three flagged seasons (2016/17,
     2019/20 and 2020/21, with 700-1,970 h missing each) pull the no-precip
-    mean from 1565 h down to 1474 h. The residual tables' Average rows apply
-    the same exclusion. With ``exclude_incomplete=False`` this is
-    the plain record mean Genie's legend states: 1474 h (no precip) or
-    1474 + 282 = 1756 h (all sky).
+    mean from 1797 h down to 1689 h (ver2 file). The residual tables' Average
+    rows apply the same exclusion. With ``exclude_incomplete=False`` this is
+    the plain all-season record mean: 1689 h (no precip) or 1689 + 282 =
+    1971 h (all sky).
     """
     liq, _ice = obs_binary(obs, exclude_precip=exclude_precip)
     keep = np.ones(liq.size, dtype=bool)
@@ -5016,7 +5025,8 @@ def fig_era5_vs_obs_simple(A: Analysis, obs_path=DEFAULT_OBS_FILE,
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
 
-    ax.legend(fontsize=legend_fontsize, framealpha=0.9, loc="upper left")
+    ax.legend(fontsize=legend_fontsize, framealpha=0.9, loc="upper left",
+              bbox_to_anchor=(0.0, 1.04), bbox_transform=ax.transAxes)
     draw_threshold_box(ax, A, loc="upper right",
                        fontsize=legend_fontsize - 2.0)
 
