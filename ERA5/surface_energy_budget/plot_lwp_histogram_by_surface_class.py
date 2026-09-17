@@ -3190,6 +3190,129 @@ def fig_liquid_retention_era5_vs_obs(A: Analysis, obs_path=DEFAULT_OBS_RETAINED_
     return fig
 
 
+# Line styles for the record-per-series form of the comparison: the
+# observations are the reference, so they get the solid line and the filled
+# marker; ERA5 is the thing being compared and gets the dashed line and the
+# open marker. Both black -- the panel separates the knobs, so colour has
+# nothing left to encode.
+OBS_STYLE = dict(color="black", ls="-", lw=1.8, marker="o", markersize=5,
+                 markerfacecolor="black", markeredgecolor="black")
+ERA5_STYLE = dict(color="black", ls="--", lw=1.6, marker="o", markersize=5,
+                  markerfacecolor="none", markeredgecolor="black",
+                  markeredgewidth=1.3)
+
+
+def fig_liquid_retention_by_knob(A: Analysis,
+                                 obs_path=DEFAULT_OBS_RETAINED_PATH,
+                                 out_dir=None, dpi: int | None = None,
+                                 max_duration_h: int = DEFAULT_MAX_DURATION_H,
+                                 gap_h: float = 0.0,
+                                 dur_xmax_h: float | None = None,
+                                 obs_dur_marker_every_min: float = 30.0):
+    """ERA5 and the ARM observations on the SAME axes, one panel per knob.
+
+    The transpose of :func:`fig_liquid_retention_era5_vs_obs`. There, each
+    panel was one record carrying both knobs; here each panel is one KNOB
+    carrying both records, so the two curves that are meant to be compared
+    sit on top of each other instead of one panel apart.
+
+    (a) retained fraction against the minimum LWP threshold, 0-20 g m-2.
+    (b) retained fraction against the minimum cloud duration threshold, in
+        HOURS. The observational curve is native 5-minute steps converted to
+        hours (its ~6.6 h end is where the last event drops out); the ERA5
+        curve is integer hours from 1 h, ERA5's shortest resolvable event.
+        Putting both on one hours axis is what the other figure refused to
+        do, and the refusal still stands in one respect: below 1 h ERA5 has
+        no curve at all, so the observational drop from 100% to ~25% inside
+        the first hour has nothing to be compared against. What the shared
+        axis buys is a point-for-point comparison over 1 h to ~6.6 h, where
+        both records resolve the same threshold.
+
+    Observations: solid black line, filled black circles. ERA5: dashed black
+    line, open circles. Each curve is normalised to its own unfiltered value
+    exactly as in the source figures (see the note on the two observational
+    baselines in the CSV header).
+
+    ``dur_xmax_h`` clips the duration axis; None shows the full ERA5 sweep
+    (``max_duration_h``). ``obs_dur_marker_every_min`` thins the observational
+    markers in (b) only -- the line still passes through every 5-minute
+    point, but eighty filled circles in the first quarter of the axis would
+    fuse into a bar. Set it to 5 to draw every one.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MultipleLocator
+
+    args = A.args
+    obs = load_obs_retained_fraction(obs_path)
+
+    # --- ERA5, both knobs, as percent of their own unfiltered value ---------
+    dur = sweep_liquid_duration_hours(A, max_duration_h, gap_h)
+    e_dur_x, e_dur_y = dur["duration"], 100.0 * dur["mean"] / dur["mean"][0]
+    lh = sweep_liquid_containing_hours(A)
+    slot, _ = sweep_class_slot(SITE_KEY)
+    e_lwp_x, y_lwp_h = lh["lwp"], lh["mean"][:, slot]
+    e_lwp_y = 100.0 * y_lwp_h / y_lwp_h[0]
+
+    # --- observations, LWP clipped to the plotted range, duration to hours --
+    o_lwp_x, o_lwp_y = obs["lwp"]
+    ml = (o_lwp_x >= OBS_LWP_RANGE_G[0]) & (o_lwp_x <= OBS_LWP_RANGE_G[1])
+    o_lwp_x, o_lwp_y = o_lwp_x[ml], o_lwp_y[ml]
+    o_dur_min, o_dur_y = obs["duration"]
+    o_dur_x = o_dur_min / 60.0                        # minutes -> hours
+    xmax_h = float(dur_xmax_h if dur_xmax_h is not None else e_dur_x[-1])
+    md = o_dur_x <= xmax_h
+    # The observational samples are evenly spaced, so "a marker every N
+    # minutes" is an integer stride; guard against a step that is not.
+    o_step_min = float(np.median(np.diff(o_dur_min))) if o_dur_min.size > 1 else 1.0
+    stride = max(1, int(round(obs_dur_marker_every_min / o_step_min)))
+
+    obs_label = "ARM observations, Utqiagvik (11 seasons, 2014/15-2024/25)"
+    era_label = (f"ERA5, {args.region} grid cell ({len(A.used)} seasons, "
+                 f"{season_span_label(A.used)})")
+
+    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(13.0, 5.2), sharey=True,
+                                     constrained_layout=True)
+
+    # (a) LWP threshold.
+    ax_a.plot(o_lwp_x, o_lwp_y, label=obs_label, zorder=3, **OBS_STYLE)
+    ax_a.plot(e_lwp_x, e_lwp_y, label=era_label, zorder=4, **ERA5_STYLE)
+    ax_a.set_xlim(*OBS_LWP_RANGE_G)
+    ax_a.xaxis.set_major_locator(MultipleLocator(2))
+    ax_a.set_xlabel("Minimum LWP threshold  [g m$^{-2}$]", fontsize=11)
+    ax_a.set_title("(a) LWP threshold", fontsize=11.5)
+    ax_a.legend(fontsize=9.0, framealpha=0.9, loc="lower left")
+
+    # (b) cloud duration threshold, both in hours.
+    ax_b.plot(o_dur_x[md], o_dur_y[md], label=obs_label, zorder=3,
+              markevery=stride, **OBS_STYLE)
+    ax_b.plot(e_dur_x, e_dur_y, label=era_label, zorder=4, **ERA5_STYLE)
+    ax_b.set_xlim(0.0, xmax_h)
+    ax_b.set_xlabel("Minimum cloud duration threshold  [hours]", fontsize=11)
+    ax_b.set_title("(b) Cloud duration threshold", fontsize=11.5)
+    ax_b.legend(fontsize=9.0, framealpha=0.9, loc="upper right")
+
+    for ax in (ax_a, ax_b):
+        ax.set_ylim(0, 105)
+        ax.yaxis.set_major_locator(MultipleLocator(10))
+        ax.grid(True, alpha=0.25, linewidth=0.5)
+        ax.set_axisbelow(True)
+        ax.tick_params(labelsize=9.5)
+    ax_a.set_ylabel("Liquid-containing cloud hours retained  [%]", fontsize=11)
+
+    fig.suptitle("Cost of a quality threshold at Barrow: ARM observations "
+                 "against ERA5\nshare of each record's unfiltered "
+                 "liquid-containing hours that survives the threshold",
+                 fontsize=12.5)
+
+    if out_dir is not None:
+        path = (Path(out_dir) / f"{args.region}_liquid_retention_by_knob_"
+                                f"{A.tag}.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi or args.dpi, bbox_inches="tight")
+        print(f"  -> {path}")
+    return fig
+
+
 def duration_note_lines(A: Analysis, dur: dict, as_fraction: bool = False,
                         lwp_ref_g: float | None = None) -> list[str]:
     """Side note for the duration figure.
@@ -3592,6 +3715,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "value in hours instead. fig_era5_vs_obs_simple "
                              "also takes obs_liquid_mean= to override this for "
                              "one call.")
+    parser.add_argument("--bar-style", choices=BAR_STYLES,
+                        default=DEFAULT_BAR_STYLE,
+                        help="Layout of the liquid/ice bars on the "
+                             f"simplified ERA5-vs-observations figure "
+                             f"(default {DEFAULT_BAR_STYLE}). 'grouped' "
+                             "draws them side by side; 'stacked' draws one "
+                             "bar per season with ice on top of liquid, as "
+                             "on fig_era5_vs_obs / fig_era5_vs_obs_build. "
+                             "fig_era5_vs_obs_simple also takes bar_style= "
+                             "to override this for one call.")
     parser.add_argument("--obs-mean-include-incomplete", action="store_true",
                         help="Keep substantially incomplete observed seasons "
                              "(missing hours above "
@@ -4192,7 +4325,10 @@ def fig_season_phase_binary(A: Analysis, out_dir=None, dpi: int | None = None,
 # ----------------------------------------------------------------------------
 # Side-by-side comparison against the ARM observations
 # ----------------------------------------------------------------------------
-DEFAULT_OBS_FILE = "genie_arm_seasonal_hours.txt"
+# Anchored to this file, not the working directory, so notebooks in other
+# folders (e.g. Presentations_and_papers/) can import the module and draw
+# the comparison figures. Same pattern as DEFAULT_OBS_RETAINED_PATH.
+DEFAULT_OBS_FILE = Path(__file__).parent / "genie_arm_seasonal_hours.txt"
 OBS_COLUMNS = ("with_liquid", "ice_only", "liq_precip", "ice_precip",
                "clear_sky", "others", "missing")
 # Expected record means of each column, as a regression guard on the file.
@@ -4419,6 +4555,13 @@ RESIDUAL_YLABEL: dict[str, str] = {
     "percent_diff": "100 $\\times$ (ERA5 $-$ obs) / obs   [%]",
 }
 
+# How the liquid/ice bars sit relative to each other on
+# fig_era5_vs_obs_simple. 'grouped' (the default) draws them side by side;
+# 'stacked' draws one bar per season with ice on top of liquid, as on the
+# ERA5/obs bars in fig_era5_vs_obs / fig_era5_vs_obs_build.
+BAR_STYLES: tuple[str, ...] = ("grouped", "stacked")
+DEFAULT_BAR_STYLE = "grouped"
+
 
 def resolve_residual_mode(mode, args=None) -> str:
     """Pick the residual mode, falling back to the run's ``--residual-mode``.
@@ -4444,6 +4587,20 @@ def resolve_show_band(show, args=None) -> bool:
         show = getattr(args, "show_digitization_uncert",
                        DEFAULT_SHOW_DIGITIZATION_UNCERT)
     return bool(show)
+
+
+def resolve_bar_style(style, args=None) -> str:
+    """Pick the liquid/ice bar layout, falling back to the run's ``--bar-style``.
+
+    Passing ``None`` at the call site means "whatever the run was configured
+    with", matching :func:`resolve_residual_mode`.
+    """
+    if style is None:
+        style = getattr(args, "bar_style", DEFAULT_BAR_STYLE)
+    if style not in BAR_STYLES:
+        raise ValueError(f"unknown bar style {style!r}; "
+                         f"choose from {list(BAR_STYLES)}")
+    return style
 
 
 def residual_values(era_h, obs_h, mode: str) -> np.ndarray:
@@ -4936,6 +5093,7 @@ def fig_era5_vs_obs_simple(A: Analysis, obs_path=DEFAULT_OBS_FILE,
                            obs_liquid_mean=None,
                            exclude_incomplete: bool | None = None,
                            show_ice: bool = True,
+                           bar_style: str | None = None,
                            label_fontsize: float = DEFAULT_COMPARISON_LABEL_FONTSIZE,
                            tick_fontsize: float = DEFAULT_COMPARISON_TICK_FONTSIZE,
                            legend_fontsize: float = DEFAULT_COMPARISON_LEGEND_FONTSIZE):
@@ -4963,6 +5121,13 @@ def fig_era5_vs_obs_simple(A: Analysis, obs_path=DEFAULT_OBS_FILE,
 
     ``show_ice=False`` drops the blue bars and centres the red ones.
 
+    ``bar_style`` chooses how the liquid and ice bars sit relative to each
+    other: ``'grouped'`` (the default) draws them side by side; ``'stacked'``
+    draws one bar per season with ice on top of liquid, matching the ERA5 and
+    obs bars on :func:`fig_era5_vs_obs` / :func:`fig_era5_vs_obs_build`.
+    ``None`` follows the run's ``--bar-style``. Ignored when
+    ``show_ice=False``, since there is then only one bar to place.
+
     Seasons present in the ERA5 run but not in the observation file are
     still drawn -- the line is a record mean and does not need a per-season
     match -- but the count is reported in the subtitle.
@@ -4985,18 +5150,26 @@ def fig_era5_vs_obs_simple(A: Analysis, obs_path=DEFAULT_OBS_FILE,
     x = np.arange(len(era_years))
     fig, ax = plt.subplots(1, 1, figsize=(2.0 + 1.35 * len(era_years), 6.2))
 
-    # Solid bars in Genie's phase colours, grouped by season. No hatch: with
-    # no observation bars on the axes there is no second dataset to tell
-    # them apart from. Without the ice bars the red ones sit on the tick.
-    if show_ice:
-        w = 0.38
-        series = ((x - w / 2, e_liq, GENIE_LIQUID_COLOR, "ERA5 liquid containing"),
-                  (x + w / 2, e_ice, GENIE_ICE_COLOR, "ERA5 ice only"))
-    else:
+    # Solid bars in Genie's phase colours. No hatch: with no observation bars
+    # on the axes there is no second dataset to tell them apart from. Without
+    # the ice bars the red ones sit on the tick; with them, 'grouped' places
+    # liquid and ice side by side while 'stacked' puts ice on top of liquid
+    # in one bar per season (bottom= is 0.0 for every non-stacked segment).
+    style = resolve_bar_style(bar_style, args)
+    if not show_ice:
         w = 0.62
-        series = ((x, e_liq, GENIE_LIQUID_COLOR, "ERA5 liquid containing"),)
-    for xs, h, color, name in series:
-        ax.bar(xs, h, width=w, color=color, edgecolor="none", label=name)
+        bars = ((x, e_liq, 0.0, GENIE_LIQUID_COLOR, "ERA5 liquid containing"),)
+    elif style == "stacked":
+        w = 0.62
+        bars = ((x, e_liq, 0.0, GENIE_LIQUID_COLOR, "ERA5 liquid containing"),
+                (x, e_ice, e_liq, GENIE_ICE_COLOR, "ERA5 ice only"))
+    else:
+        w = 0.38
+        bars = ((x - w / 2, e_liq, 0.0, GENIE_LIQUID_COLOR, "ERA5 liquid containing"),
+                (x + w / 2, e_ice, 0.0, GENIE_ICE_COLOR, "ERA5 ice only"))
+    for xs, h, bottom, color, name in bars:
+        ax.bar(xs, h, width=w, bottom=bottom, color=color, edgecolor="none",
+              label=name)
 
     # The observed record mean, edge to edge across the axes.
     ax.axhline(mean_h, color="black", linestyle=(0, (2, 3)), linewidth=2.0,
@@ -5004,12 +5177,20 @@ def fig_era5_vs_obs_simple(A: Analysis, obs_path=DEFAULT_OBS_FILE,
                label=f"ARM obs mean liquid containing: {mean_h:,.0f} h "
                      f"({source})")
 
-    # Hours above each bar. The y limit leaves room for the labels and for
-    # the line, whichever is higher. A white pad behind each label keeps it
-    # legible where the dotted line passes through it -- inevitable for a
-    # bar close to the mean.
-    top = float(max(max(h.max() for _, h, _, _ in series), mean_h)) * 1.25
-    for xs, h, _, _ in series:
+    # Hours above each bar. Stacked liquid and ice share one bar, so only the
+    # total gets a label -- a label on the liquid segment would sit inside
+    # the ice segment drawn on top of it. The y limit leaves room for the
+    # labels and for the line, whichever is higher. A white pad behind each
+    # label keeps it legible where the dotted line passes through it --
+    # inevitable for a bar close to the mean.
+    if show_ice and style == "stacked":
+        label_series = ((x, e_liq + e_ice),)
+        max_h = float((e_liq + e_ice).max())
+    else:
+        label_series = tuple((xs, h) for xs, h, _, _, _ in bars)
+        max_h = max(h.max() for _, h, _, _, _ in bars)
+    top = float(max(max_h, mean_h)) * 1.25
+    for xs, h in label_series:
         for xi, hi in zip(xs, h):
             ax.text(xi, hi + 0.012 * top, f"{hi:,.0f}", ha="center",
                     va="bottom", fontsize=label_fontsize - 5.0, zorder=6,
@@ -5044,6 +5225,8 @@ def fig_era5_vs_obs_simple(A: Analysis, obs_path=DEFAULT_OBS_FILE,
     tag = "noprecip" if args.no_precip else "allsky"
     suffix = "" if source != "custom value" else f" - obs-mean-{mean_h:g}h"
     suffix += "" if show_ice else " - liquid-only"
+    suffix += ("" if not show_ice or style == DEFAULT_BAR_STYLE
+              else f" - {style}")
     return _save_stack(fig, A, out_dir, f"era5_vs_obs_simple_{tag}", dpi,
                        suffix=suffix)
 
@@ -5397,9 +5580,9 @@ DEFAULT_MONTHLY_OBS_SOURCE = "xlsx"
 
 # A copy of SLCCounts_monthly.xlsx as supplied by Genie Lorenzo Pearson, kept
 # beside the code so the notebook does not depend on a path in ~/Documents.
-DEFAULT_MONTHLY_OBS_XLSX = "genie_arm_monthly_hours.xlsx"
+DEFAULT_MONTHLY_OBS_XLSX = Path(__file__).parent / "genie_arm_monthly_hours.xlsx"
 DEFAULT_MONTHLY_OBS_XLSX_SHEET = "SUMMARY"
-DEFAULT_MONTHLY_OBS_FILE = "genie_arm_monthly_hours.txt"       # digitized
+DEFAULT_MONTHLY_OBS_FILE = Path(__file__).parent / "genie_arm_monthly_hours.txt"  # digitized
 
 # The fill Excel writes for its standard yellow. Compared case-insensitively
 # on the last six hex digits so an alpha-channel prefix does not matter.
