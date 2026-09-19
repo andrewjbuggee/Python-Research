@@ -733,7 +733,11 @@ DLR_clear / σT_air⁴ = a + b·√e, with e the 2-m vapour pressure in hPa from
 (Brunt 1932, *Q. J. R. Meteorol. Soc.* 58, 389–420; saturation vapour pressure after Bolton 1980).
 The coefficients are fitted here, not taken from the literature, and the 2-m vapour pressure is
 used rather than the MWR PWV because the MWR is missing in most clear minutes. Its RMSE on the
-clear minutes is the baseline uncertainty. The **cloud radiative effect** is then CRE_LW = DLR − DLR_clear(T_air, PWV), and
+clear minutes is the baseline uncertainty. If the fitted b is *negative* (DLR/σT_air⁴ falling with
+vapour pressure), the "clear" minutes are not radiatively clean: at the coldest temperatures ice
+crystals below the lidar/radar detection limits (diamond dust, ice fog) raise DLR/σT⁴, and the
+fitted emissivity is absorbing that covariance. The baseline is then an empirical reference for
+the cloud-vs-clear contrast, not a physical clear-sky flux, and CRE values inherit its RMSE. The **cloud radiative effect** is then CRE_LW = DLR − DLR_clear(T_air, PWV), and
 an **effective cloud emissivity** ε_eff = CRE_LW / (σT_base⁴ − DLR_clear) follows for cloud bases below
 2 km when the denominator exceeds 10 W m⁻². The classic saturation curve ε = 1 − exp(−a·LWP) is fitted
 (Stephens 1978 reports a ≈ 0.158 m² g⁻¹ for downward emissivity — moderately confident of that value;
@@ -1056,6 +1060,15 @@ shallow layers. Applicability: liquid-only, single-layer, non-precipitating colu
 at least half of the liquid pixels, and max Ze < −17 dBZ to exclude drizzle. Hansen & Travis (1974,
 Sect. 2.4) is the reference for r_eff and the effective variance v_eff = b as the two parameters that
 control scattering; only r_eff is accessible here, v_eff is assumed through σ_x.
+
+**How to read the residual-vs-r_e panel.** The physical expectation at fixed LWP is a *negative*
+slope (more, smaller droplets → larger absorption optical depth per unit LWP) that vanishes once
+the cloud is opaque. But r_e is inferred from Ze/LWC with LWC = LWP/depth, so MWR noise leaks in
+with a definite sign: an LWP overestimate lowers the inferred r_e (∝ LWC^(−1/3)) *and* lowers the
+residual (the LWP fit expects more DLR than the true LWP supports). LWP noise alone therefore
+produces an apparent **positive** relation in the lowest LWP bins, strongest where the noise is a
+large fraction of LWP. Only a negative slope that persists at LWP ≥ 15 g m⁻² and in the day-block
+interval would count as evidence of a droplet-size effect.
 ''')
 code(r'''
 SIGMA_X = 0.35
@@ -1370,6 +1383,44 @@ for k, v in summary.items():
     print(f"{k:60s} {v}")
 import json
 (FIG_DIR / "summary_numbers.json").write_text(json.dumps(summary, indent=2, default=str))
+''')
+
+md(r'''
+### 13.1 Results of the 2023/24 + 2024/25 run (recorded 2026-09-18; re-runs overwrite the cell above, not this text)
+
+* **The DLR spread at low LWP is emission temperature, not microphysics.** For liquid-containing
+  columns with LWP < 30 g m⁻² (155,449 minutes) DLR spans 174–304 W m⁻² (5–95 %). LWP alone explains
+  9 % of the variance; adding σT⁴ at the lidar/radar cloud base raises R² to 0.77 and PWV to 0.83.
+  Ice (IWP proxy, ice fraction) adds 0.004 and layering (layer count, highest-top temperature) adds
+  nothing at the population level. The skin temperature adds a further 0.06 but is a response to DLR.
+* **Emissivity saturates fast.** For pure single-layer liquid clouds ε_eff = 1 − exp(−0.118·LWP),
+  an e-folding LWP of 8.5 g m⁻²; the sky radiates within 3 K of the cloud-base blackbody in 60 % of
+  minutes at LWP ≈ 15 g m⁻² and 90 % at LWP ≈ 100 g m⁻². Above ~20 g m⁻² LWP no longer matters.
+* **The ERA5 relation is not the observed one.** Overcast-like liquid-containing minutes give
+  DLR = 0.104·LWP + 254 (r² = 0.16) against ERA5's 0.443·LWP + 218 (r² = 0.45) at the same site: the
+  observed curve saturates by ~20 g m⁻² whereas ERA5 needs ~100 g m⁻² to reach the same DLR.
+* **Ice matters where liquid is thin.** In ice-only columns CRE_LW rises from ≈ 0 to ≈ 60 W m⁻²
+  between IWP proxies of 1 and 1000 g m⁻² (thin-to-opaque; r = 0.61 with log IWP). In liquid-containing
+  columns the ice only adds DLR when LWP < 5 g m⁻² and the IWP proxy exceeds ~30 g m⁻².
+* **Layering and multi-layer clouds are second order.** At matched cloud-base temperature and LWP,
+  the class medians differ by ≤ 15 W m⁻²; two or more layers add about 3 W m⁻² over one layer.
+* **No droplet-size signal is detectable.** The Frisch radius for 11,441 liquid-only non-drizzling
+  minutes has median 8.7 µm (inferred N median 48 cm⁻³, plausible for the Arctic); the residual slope
+  against r_e at LWP < 30 is 0.08 [−0.61, 0.82] W m⁻² µm⁻¹, and the positive tendency in the 5–15 g m⁻²
+  bin is what LWP noise produces. MICROBASE r_e is LWC^(1/3) and temperature by construction and was not
+  used as evidence.
+* **Ice fall speed and depolarisation carry no clean DLR signal** beyond what Ze/IWP already gives
+  (|r| ≤ 0.25 with the residual; no monotonic relation).
+* **MCT analogues.** Replacing liquid-containing columns by ice-only columns at the same cloud-base
+  temperature and water path lowers the median DLR by 26.5 W m⁻² (frequency-weighted over 50 matched
+  bins; 20–46 W m⁻² for bases at 250–275 K and 10–300 g m⁻²), the observational counterpart of the
+  −54 W m⁻² full-glaciation LES result of Villanueva et al. (2022, Table 2). Naturally precipitating
+  supercooled clouds (57 % of liquid-containing minutes) have only 7.8 [1.5, 12.9] g m⁻² less LWP and
+  1.4 [−0.2, 3.2] W m⁻² less DLR than non-precipitating ones at matched cloud-base temperature: at
+  NSA, precipitation from supercooled layers does not by itself thin them enough to matter.
+* Data quality: monthly MWR clear-sky offsets were −4 to +7.5 g m⁻² (noise floor 5 g m⁻²); 17 days of
+  2024/25 are absent from the ARM archive (5–11 Sep 2024, 12–21 Apr 2025); the clear-sky baseline has
+  RMSE 16 W m⁻² and a negative vapour coefficient (undetected ice crystals in "clear" minutes).
 ''')
 
 md(r'''
