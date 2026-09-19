@@ -923,6 +923,202 @@ def print_taylor_report(E: ExtentAnalysis, ev: dict) -> None:
         )
 
 
+def site_liquid_hours_per_day(E: ExtentAnalysis) -> dict:
+    """Liquid-containing hours per day at the ARM cell, month by month.
+
+    For each calendar month of the season window, the liquid-containing hours
+    at the ARM grid cell summed over every selected season, divided by the
+    number of DAYS that month contributed over those seasons -- so a month
+    short of hours (a hole in the archive, or a partial first/last season)
+    is a rate, not a shortfall. Equivalent to 24 x the liquid-containing
+    fraction of the month's hours, and reported both ways.
+
+    A "day" is a calendar date with at least one hour in the record; a date
+    with fewer than 24 hours counts as one day, so a month with holes reads
+    slightly low. ``hours_per_day_seasons`` gives the same rate per season,
+    for the spread, and the closing ``all`` entry pools every month.
+
+    Returns ``{"months": [...], "liquid_h": (m,), "days": (m,),
+    "hours": (m,), "hours_per_day": (m,), "fraction_pct": (m,),
+    "hours_per_day_seasons": (m, n_season), "all": {...}}``.
+    """
+    iy, ix = E.site_iy, E.site_ix
+    liq = E.liq[:, iy, ix]
+    dates = E.times.astype("datetime64[D]")
+    months = list(E.months)
+    n_s = len(E.used)
+    liquid_h = np.zeros(len(months))
+    hours = np.zeros(len(months))
+    days = np.zeros(len(months))
+    per_season = np.full((len(months), n_s), np.nan)
+    for j in range(len(months)):
+        m = E.mi == j
+        liquid_h[j] = liq[m].sum() * STEP_H
+        hours[j] = m.sum() * STEP_H
+        days[j] = np.unique(dates[m]).size
+        for s_i in range(n_s):
+            ms = m & (E.s_of == s_i)
+            if ms.any():
+                per_season[j, s_i] = liq[ms].sum() * STEP_H / np.unique(dates[ms]).size
+    with np.errstate(invalid="ignore", divide="ignore"):
+        hpd = np.where(days > 0, liquid_h / np.where(days > 0, days, 1.0), np.nan)
+        frac = np.where(hours > 0, 100.0 * liquid_h / np.where(hours > 0, hours, 1.0), np.nan)
+    tot_days = float(np.unique(dates).size)
+    return {
+        "months": months, "liquid_h": liquid_h, "days": days, "hours": hours,
+        "hours_per_day": hpd, "fraction_pct": frac,
+        "hours_per_day_seasons": per_season,
+        "all": {"liquid_h": float(liq.sum() * STEP_H), "days": tot_days,
+                "hours": float(liq.size * STEP_H),
+                "hours_per_day": float(liq.sum() * STEP_H / tot_days),
+                "fraction_pct": float(100.0 * liq.mean())},
+    }
+
+
+def site_daily_liquid_hours(E: ExtentAnalysis) -> dict:
+    """Liquid-containing hours on every calendar day at the ARM cell.
+
+    One entry per date in the record, days with NO liquid-containing hour
+    included at 0 -- the distribution behind the ``h / day`` rates of
+    :func:`site_liquid_hours_per_day`, whose pooled mean it reproduces.
+    Returns ``{"date": (n,) datetime64[D], "hours": (n,) float,
+    "hours_in_record": (n,) float, "month": (n,) calendar month}``;
+    ``hours_in_record`` is how many hours of the day the record holds (24
+    unless a hole in the archive falls on it).
+    """
+    iy, ix = E.site_iy, E.site_ix
+    liq = E.liq[:, iy, ix].astype(float) * STEP_H
+    dates = E.times.astype("datetime64[D]")
+    uniq, inv = np.unique(dates, return_inverse=True)
+    hours = np.bincount(inv, weights=liq, minlength=uniq.size)
+    n_rec = np.bincount(inv, minlength=uniq.size).astype(float) * STEP_H
+    # The month of each day from its first hour in the record.
+    first = np.zeros(uniq.size, dtype=np.intp)
+    first[inv[::-1]] = np.arange(inv.size)[::-1]
+    month = np.asarray(E.months)[E.mi[first]]
+    return {"date": uniq, "hours": hours, "hours_in_record": n_rec, "month": month}
+
+
+def site_daily_coverage(E: ExtentAnalysis, E_pl=None, CL: dict | None = None,
+                        wind_source: str | None = None) -> dict:
+    """Taylor's frozen-turbulence estimate of the liquid-cloud length per day.
+
+    Per month and for all months, the liquid-containing hours per day at the
+    ARM cell (:func:`site_liquid_hours_per_day`) converted to seconds and
+    multiplied by the median wind speed at the cell's liquid-containing hours
+    in that month::
+
+        coverage_km = (hours_per_day * 3600 s/h) * U_median_m_s / 1000
+
+    -- the along-wind length of liquid-containing cloud that passes over the
+    cell in a day, if the cloud field is frozen and simply advected
+    (Taylor's hypothesis, as in :func:`taylor_events`).
+
+    ``wind_source`` picks the wind exactly as the slide figure does (``None``
+    follows the run's ``--wind-source``): ``'10m'`` from ``E`` itself, every
+    season; ``'cloud'`` from ``CL`` on ``E_pl``, the pressure-level archive's
+    two seasons. In the second case the hours per day are still the
+    eleven-season rates and only the wind is from the two seasons.
+
+    Returns ``{"months": [...], "hours_per_day": (m,), "seconds_per_day":
+    (m,), "U_median_m_s": (m,), "n_wind_hours": (m,), "coverage_km": (m,),
+    "all": {...}, "wind": <the site_wind_at_liquid_hours dict>}``.
+    """
+    import cloud_level_wind as clw       # local: clw imports this module
+
+    wind_source = clw.resolve_wind_source(wind_source, E.args)
+    if wind_source == "cloud":
+        wind = clw.site_wind_at_liquid_hours(E_pl if E_pl is not None else E, CL, "cloud")
+    else:
+        wind = clw.site_wind_at_liquid_hours(E, None, "10m")
+
+    t = site_liquid_hours_per_day(E)
+    months = t["months"]
+    U_med = np.full(len(months), np.nan)
+    n_w = np.zeros(len(months), dtype=int)
+    for j, m in enumerate(months):
+        sel = wind["month"] == m
+        n_w[j] = int(sel.sum())
+        if n_w[j]:
+            U_med[j] = float(np.median(wind["speed_m_s"][sel]))
+    sec_per_day = t["hours_per_day"] * SECONDS_PER_HOUR
+    coverage_km = sec_per_day * U_med / M_PER_KM
+    a_sec = t["all"]["hours_per_day"] * SECONDS_PER_HOUR
+    a_U = float(np.median(wind["speed_m_s"]))
+    return {
+        "months": months, "hours_per_day": t["hours_per_day"],
+        "seconds_per_day": sec_per_day, "U_median_m_s": U_med,
+        "n_wind_hours": n_w, "coverage_km": coverage_km,
+        "all": {"hours_per_day": t["all"]["hours_per_day"], "seconds_per_day": a_sec,
+                "U_median_m_s": a_U, "n_wind_hours": wind["n_hours"],
+                "coverage_km": a_sec * a_U / M_PER_KM},
+        "wind": wind,
+    }
+
+
+def print_site_liquid_hours_per_day(E: ExtentAnalysis, E_pl=None,
+                                    CL: dict | None = None,
+                                    wind_source: str | None = None) -> dict:
+    """Print :func:`site_liquid_hours_per_day`, then the Taylor coverage rows.
+
+    The second block is :func:`site_daily_coverage`: hours per day in
+    seconds, the median wind speed at the cell's liquid-containing hours
+    (``wind_source``: ``'cloud'`` needs ``E_pl`` and ``CL``; ``'10m'`` needs
+    only ``E``; ``None`` follows ``--wind-source``), and their product, the
+    along-wind length of liquid-containing cloud advected over the cell per
+    day. Returns the hours-per-day dict with the coverage block under
+    ``"coverage"``.
+    """
+    import calendar
+
+    t = site_liquid_hours_per_day(E)
+    n_s = len(E.used)
+    print(f"Liquid-containing hours per day at the ARM grid cell "
+          f"({E.site_lat:.2f} N, {E.site_lon:.2f} E), {E.args.region} region")
+    print(f"{_season_span(E)}, {n_s} seasons   |   {precip_label(E.args)}   |   "
+          f"tcc >= {E.args.min_cloud_fraction:g}\n")
+    print(f"  {'month':<7}{'liquid h':>10}{'days':>7}{'h / day':>9}{'% of hours':>12}"
+          f"{'season min':>12}{'season max':>12}")
+    for j, m in enumerate(t["months"]):
+        ps = t["hours_per_day_seasons"][j]
+        print(f"  {calendar.month_abbr[m]:<7}{t['liquid_h'][j]:>10,.0f}{t['days'][j]:>7.0f}"
+              f"{t['hours_per_day'][j]:>9.2f}{t['fraction_pct'][j]:>11.1f}%"
+              f"{np.nanmin(ps):>12.2f}{np.nanmax(ps):>12.2f}")
+    a = t["all"]
+    print(f"  {'all':<7}{a['liquid_h']:>10,.0f}{a['days']:>7.0f}{a['hours_per_day']:>9.2f}"
+          f"{a['fraction_pct']:>11.1f}%")
+    print("\n  h / day = liquid-containing hours in the month over all seasons, "
+          "divided by the days\n  the month contributed; the last two columns "
+          "are the same rate in the lowest and\n  highest single season.")
+
+    # ---- Taylor coverage -------------------------------------------------
+    cov = site_daily_coverage(E, E_pl, CL, wind_source)
+    w = cov["wind"]
+    print("\n  " + "-" * 73)
+    print("  Spatial coverage per day, Taylor's frozen-turbulence hypothesis:")
+    print("    coverage = (h / day x 3600 s/h) x median wind speed at "
+          "liquid-containing hours")
+    print(f"    wind: {w['label']}, {w['seasons']} "
+          f"({'pressure-level archive' if w['source'] == 'cloud' else 'single-level ERA5'}"
+          f"; --wind-source {w['source']})")
+    if w["source"] == "cloud" and w["seasons"] != _season_span(E):
+        print(f"    NOTE: h / day is the {_season_span(E)} rate; the wind median is "
+              f"from {w['seasons']} alone.\n")
+    else:
+        print()
+    print(f"  {'month':<7}{'h / day':>9}{'s / day':>10}{'median U [m/s]':>16}"
+          f"{'wind hours':>12}{'coverage [km/day]':>19}")
+    for j, m in enumerate(cov["months"]):
+        print(f"  {calendar.month_abbr[m]:<7}{cov['hours_per_day'][j]:>9.2f}"
+              f"{cov['seconds_per_day'][j]:>10,.0f}{cov['U_median_m_s'][j]:>16.2f}"
+              f"{cov['n_wind_hours'][j]:>12,}{cov['coverage_km'][j]:>19,.0f}")
+    a = cov["all"]
+    print(f"  {'all':<7}{a['hours_per_day']:>9.2f}{a['seconds_per_day']:>10,.0f}"
+          f"{a['U_median_m_s']:>16.2f}{a['n_wind_hours']:>12,}{a['coverage_km']:>19,.0f}")
+    t["coverage"] = cov
+    return t
+
+
 def print_snapshot_report(E: ExtentAnalysis, comp: dict) -> None:
     """Component statistics, all and with edge-touching components set aside."""
     print(

@@ -49,6 +49,22 @@ if TYPE_CHECKING:  # pragma: no cover
 DEFAULT_DATA_ROOT = STORAGE_ROOTS["local"]
 DEFAULT_STORAGE = "local"
 
+# --storage aws: the NSF NCAR S3 bucket, served by aws_pipeline/s3_storage.py.
+# Imported lazily so local runs never touch s3fs; the branches below are the
+# ONLY places the analysis side knows the bucket exists.
+AWS_STORAGE = "aws"
+
+
+def _aws():
+    from aws_pipeline import s3_storage
+
+    return s3_storage
+
+
+def is_aws_root(data_root) -> bool:
+    """True for the stand-in root/region objects ``--storage aws`` produces."""
+    return type(data_root).__name__ in ("S3DataRoot", "S3RegionDir")
+
 # Standard sea-ice-edge threshold. 15% is the long-standing convention for
 # defining ice extent in passive-microwave sea ice climatology, and is what
 # "ice free" normally means in the sea ice literature.
@@ -123,6 +139,8 @@ def available_regions(data_root: Path = DEFAULT_DATA_ROOT) -> list[str]:
     region's time-series chunks, and would otherwise be listed and then fail
     confusingly if loaded as one.
     """
+    if is_aws_root(data_root):
+        return _aws().available_regions()
     data_root = Path(data_root)
     if not data_root.is_dir():
         return []
@@ -144,13 +162,15 @@ def add_data_source_args(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("data source")
     group.add_argument(
         "--storage",
-        choices=sorted(STORAGE_ROOTS),
+        choices=sorted(STORAGE_ROOTS) + [AWS_STORAGE],
         default=DEFAULT_STORAGE,
         help=(
-            "Which disk to read from. 'local' is the data/ directory beside these "
+            "Where to read from. 'local' is the data/ directory beside these "
             "scripts; 'external' is EXTERNAL_ROOT in download_era5_seb.py. These "
-            "are the same two roots the downloader writes to. "
-            f"(default: {DEFAULT_STORAGE})"
+            "are the same two roots the downloader writes to. 'aws' reads the "
+            "public NSF NCAR ERA5 bucket directly (aws_pipeline/) for any region "
+            "box; it needs --years with a season, or --start/--end, to bound the "
+            f"request. (default: {DEFAULT_STORAGE})"
         ),
     )
     group.add_argument(
@@ -179,6 +199,8 @@ def resolve_data_root(storage: str = DEFAULT_STORAGE, data_root: Path | None = N
     """
     if data_root is not None:
         return Path(data_root).expanduser().resolve()
+    if storage == AWS_STORAGE:
+        return _aws().resolve_data_root()
     root = STORAGE_ROOTS[storage]
     if storage == "external":
         check_volume_mounted(root)
@@ -192,6 +214,10 @@ def resolve_region_dir(args: argparse.Namespace) -> Path:
     disk for something that was downloaded to the external drive is the obvious
     mistake this option introduces.
     """
+    if args.storage == AWS_STORAGE:
+        # Validates the region and derives the time window from args; the
+        # window rides on the returned object's .parent into load_seb_data.
+        return _aws().resolve_region_dir(args)
     data_root = resolve_data_root(args.storage, args.data_root)
     regions = available_regions(data_root)
     if args.region in regions:
@@ -335,6 +361,8 @@ def region_time_index(
     reading the index instead of 600 files. Season selection can therefore run
     before any data is opened.
     """
+    if is_aws_root(data_root):
+        return _aws().region_time_index(region, data_root)
     region_dir = Path(data_root) / region
     files = sorted(glob.glob(str(region_dir / "*.nc")))
     if not files:
@@ -399,6 +427,11 @@ def load_seb_data(
     it.
     """
     import xarray as xr
+
+    if is_aws_root(data_root):
+        # Same contract, straight from the NCAR bucket: lazy, canonical names,
+        # (valid_time, latitude, longitude), sorted unique hourly valid_time.
+        return _aws().load_seb_data(region, start, end, data_root, windows)
 
     region_dir = Path(data_root) / region
     files = sorted(glob.glob(str(region_dir / "*.nc")))

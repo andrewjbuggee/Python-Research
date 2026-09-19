@@ -589,6 +589,78 @@ keeps the spec's preferred-datastream order so QCRAD c2 (and ARSCL c1) win
 over c1/c0 wherever two levels overlap, instead of the alphabetical order that
 silently inverted the preference.
 
+## Downwelling longwave vs cloud microphysics (`dlr_cloud_microphysics_barrow.ipynb`)
+
+The notebook asks what sets the large spread of downwelling longwave (DLR) at low
+liquid water path in the ERA5 DLR-vs-LWP regressions, and whether cloud
+microphysics -- droplet size, ice-particle size, liquid/ice layering,
+precipitation -- has a measurable role, with mixed-phase cloud thinning as the
+motivation. Two complete cold seasons, **Sep 2023 - Apr 2024** and
+**Sep 2024 - Apr 2025**, at 1-min resolution.
+
+Why those seasons: `microbasepi2` (the ARM "Continuous Baseline Microphysical
+Retrieval, Profile-Instantaneous") exists at NSA only for **2002-01 .. 2011-03**,
+while `thermocldphase` starts in Nov 2011 -- they never overlap. Its successor
+`microbase` (nsamicrobaseC1.c1: 2011-11 .. 2014-06 and 2020-10 .. 2025-12) does,
+but at **670 MB/day**, and 2023/24 + 2024/25 are the latest seasons with complete
+phase, radiation and MICROBASE coverage (2025/26 thermocldphase ends 2026-01-20,
+QCRAD pyrgeometer 1 failed Dec 2025 - Feb 2026).
+
+What MICROBASE's effective radii are (Wang et al. 2025, DOE/SC-ARM-TR-095, Sect.
+4.2): liquid r_e = 1.358 r_mode with r_mode from LWC assuming N = 200 cm^-3 and a
+log-normal width sigma = 0.35, i.e. r_e ~ LWC^(1/3); ice r_e = (75.3 + 0.5895 T[C])/2
+(Ivanova et al. 2001), i.e. temperature only; phase by temperature (all ice below
+-16 C, linear to 0 C). Neither carries size information independent of LWC or T.
+The notebook therefore derives a droplet radius from KAZR reflectivity + MWR LWP
+(Frisch et al. 1995, lognormal spectrum, no N assumption) for liquid-only
+non-drizzling columns, and uses Doppler fall speed and depolarisation as ice
+proxies.
+
+```
+scripts/download_dlr_microphysics_winters.sh   qcrad, met, mwr, gndirt, cldtype, thermocldphase
+                                               for both seasons (~37 GB, resumable)
+scripts/reduce_microbase.py                    MICROBASE download-reduce-delete sampler:
+                                               1-min LWC/IWC/r_e profiles + column integrals,
+                                               every N-th day  -> data/processed/microbase_1min/
+scripts/build_dlr_columns.py                   per-day THERMOCLDPHASE column features
+arm_nsa/column_features.py                     -> data/processed/dlr_columns/<lidar>/
+arm_nsa/dlr_dataset.py                         1-min merge (columns + QCRAD + MET + GNDIRT skin T
+                                               + CLDTYPE + MICROBASE) -> data/processed/
+                                               dlr_microphysics_1min_<start>_<end>_<lidar>.nc
+scripts/make_dlr_microphysics_notebook.py      generates (and --execute runs) the notebook
+```
+
+Column features per 30-s profile (all on the VAP's 30 m grid by indexing, no
+interpolation): phase pixel counts and a whole-column class (clear / ice_only /
+liquid_only / mixed_column), liquid and ice base/top heights, ice pixels
+below/above/within the liquid, ARSCL layer count and per-layer phase, sonde
+temperatures at every boundary, low-level inversion strength, KAZR Ze / mean
+Doppler velocity (positive up) / spectral width / LDR summarised over liquid and
+ice pixels, a Z-based IWP proxy (IWC = 0.1 Ze^0.63) split below/above the liquid,
+MPL depolarisation, MWR LWP/PWV. See the module docstring for the code groups.
+
+Notebook sections: data inventory (what microphysical information exists at NSA
+at all), coverage, MWR clear-sky LWP correction, the ERA5 figure reproduced with
+ARM data, single-predictor correlations with autocorrelation-corrected sample
+sizes, nested OLS (LWP -> cloud-base sigma T^4 -> PWV -> ice -> layering; skin
+temperature only as a reference because it is a *response* to DLR), emission
+temperature and a Brunt-type clear-sky baseline -> effective emissivity vs LWP,
+surface-cloud temperature contrast, ice effects, liquid/ice layering classes,
+multi-layer clouds, Frisch droplet radius, MICROBASE r_e (shown to be LWC^(1/3)
+and T by construction), Doppler fall speed, and the MCT analogues (matched-bin
+glaciation estimate, precipitating vs non-precipitating supercooled clouds).
+Every interval is a day-block bootstrap. Figures go to `figures/dlr_microphysics/`,
+key numbers to `figures/dlr_microphysics/summary_numbers.json`.
+
+```bash
+nohup bash scripts/download_dlr_microphysics_winters.sh > data/download_logs/dl_winters.log 2>&1 &
+python scripts/reduce_microbase.py --start 2023-09-01 --end 2024-04-30 --every 5
+python scripts/build_dlr_columns.py --start 2023-09-01 --end 2025-04-30
+python scripts/make_dlr_microphysics_notebook.py --execute
+# a quick test on any month already on disk:
+DLR_NB_PERIODS="2025-11-01:2025-11-30" python scripts/make_dlr_microphysics_notebook.py --execute
+```
+
 ## Not implemented yet (natural next steps)
 
 - **Adiabatic LWP** (Hartig26 Eqs. 1-4, after Eytan et al. 2021) for the

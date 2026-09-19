@@ -102,6 +102,13 @@ from cloud_spatial_extent import (
     precip_banner,
     precip_label,
 )
+from plot_lwp_histogram_by_surface_class import (
+    DEFAULT_DURATION_MODE,
+    DEFAULT_WIND_SOURCE,
+    DURATION_MODES,
+    WIND_SOURCES,
+    threshold_box_lines,
+)
 from convert_specific_to_absolute import G_M_S2, layer_thickness_pa
 from download_era5_seb import days_covered_by_file
 from seb_analysis_common import resolve_data_root
@@ -155,6 +162,8 @@ def open_archive(files: list[str]):
 
 def wind_archive_available(E, data_root=None,
                            wind_suffix: str = DEFAULT_WIND_SUFFIX) -> bool:
+    if getattr(E.args, "storage", None) == "aws":
+        return True          # the bucket holds u and v for every month
     d = archive_dir(E, wind_suffix, data_root)
     return d.is_dir() and bool(files_for_times(d, E.times))
 
@@ -204,21 +213,33 @@ def cloud_level_wind(E, data_root=None, pressure_suffix: str = DEFAULT_PRESSURE_
     liquid" figures can be drawn before the download exists.
     """
     n_t, n_y, n_x = E.liq.shape
-    cloud_dir = archive_dir(E, pressure_suffix, data_root)
-    cloud_files = files_for_times(cloud_dir, E.times)
-    if not cloud_files:
-        raise FileNotFoundError(f"no pressure-level files under {cloud_dir} "
-                                f"overlap the run's hours")
-    wind_dir = archive_dir(E, wind_suffix, data_root)
-    wind_files = files_for_times(wind_dir, E.times) if wind_dir.is_dir() else []
-    if require_wind and not wind_files:
-        raise FileNotFoundError(
-            f"no wind files under {wind_dir}. Fetch them with:\n  "
-            + download_command(E, str(E.times[0].astype('datetime64[D]')),
-                               str(E.times[-1].astype('datetime64[D]'))))
+    if getattr(E.args, "storage", None) == "aws":
+        # --storage aws: lazy pressure-level datasets from the NCAR bucket over
+        # the run's own hours, same variables/levels as the local archives.
+        from aws_pipeline import s3_storage
 
-    ds_c = open_archive(cloud_files)[["clwc"]]
-    ds_w = open_archive(wind_files)[["u", "v"]] if wind_files else None
+        ds_c, ds_w = s3_storage.pressure_level_datasets(
+            E, pressure_suffix, wind_suffix, require_wind)
+        # No files behind these: record the S3 sources where the result dict
+        # would otherwise list the local chunk files.
+        cloud_files = [f"s3://{ds_c.attrs.get('source', 'nsf-ncar-era5')}"]
+        wind_files = [f"s3://{ds_w.attrs.get('source', 'nsf-ncar-era5')}"]
+    else:
+        cloud_dir = archive_dir(E, pressure_suffix, data_root)
+        cloud_files = files_for_times(cloud_dir, E.times)
+        if not cloud_files:
+            raise FileNotFoundError(f"no pressure-level files under {cloud_dir} "
+                                    f"overlap the run's hours")
+        wind_dir = archive_dir(E, wind_suffix, data_root)
+        wind_files = files_for_times(wind_dir, E.times) if wind_dir.is_dir() else []
+        if require_wind and not wind_files:
+            raise FileNotFoundError(
+                f"no wind files under {wind_dir}. Fetch them with:\n  "
+                + download_command(E, str(E.times[0].astype('datetime64[D]')),
+                                   str(E.times[-1].astype('datetime64[D]'))))
+
+        ds_c = open_archive(cloud_files)[["clwc"]]
+        ds_w = open_archive(wind_files)[["u", "v"]] if wind_files else None
 
     # Hours common to the run and the archives.
     t_run = E.times.astype("datetime64[ns]")
@@ -629,3 +650,262 @@ def fig_taylor_monthly_box_two_winds(E, ev10: dict, evcl: dict, out_dir=None, dp
                  f"{E.args.region} region, {_season_span(E)}", fontsize=11.5, y=0.97)
     fig.subplots_adjust(top=0.87, bottom=0.14, left=0.08, right=0.985)
     return _save(fig, E, out_dir, "taylor_monthly_box_two_winds", dpi)
+
+
+# ----------------------------------------------------------------------------
+# Slide figure: cloud duration and in-cloud wind speed at the ARM cell
+# ----------------------------------------------------------------------------
+DURATION_COLOR_OV = SITE_COLOR       # the duration histogram and its axis
+WIND_COLOR_OV = CLOUD_WIND_COLOR     # the wind histogram and its axis
+
+
+def resolve_duration_mode(duration_mode, args=None) -> str:
+    """Pick what the duration histogram counts, falling back to ``--duration-mode``."""
+    if duration_mode is None:
+        duration_mode = getattr(args, "duration_mode", DEFAULT_DURATION_MODE)
+    if duration_mode not in DURATION_MODES:
+        raise ValueError(f"duration_mode must be one of {DURATION_MODES}, got "
+                         f"{duration_mode!r}")
+    return duration_mode
+
+
+def resolve_wind_source(wind_source, args=None) -> str:
+    """Pick the wind for the slide figure, falling back to ``--wind-source``."""
+    if wind_source is None:
+        wind_source = getattr(args, "wind_source", DEFAULT_WIND_SOURCE)
+    if wind_source not in WIND_SOURCES:
+        raise ValueError(f"wind_source must be one of {WIND_SOURCES}, got "
+                         f"{wind_source!r}")
+    return wind_source
+
+
+def site_wind_at_liquid_hours(E, CL: dict | None, wind_source: str) -> dict:
+    """The wind speed at every liquid-containing hour of the ARM cell.
+
+    ``'10m'``: the single-level 10 m wind held in ``E`` -- every season of
+    the run. ``'cloud'``: the liquid-mass-weighted cloud-level wind from
+    :func:`cloud_level_wind`, which exists only for the seasons the
+    pressure-level archive covers; ``E`` must then be the run ``CL`` was
+    computed on. Returns ``{"speed_m_s": (n,), "month": (n,) calendar month
+    of each sample, "n_hours": int, "seasons": str, "label": str}``.
+    """
+    iy, ix = E.site_iy, E.site_ix
+    liq = E.liq[:, iy, ix]
+    month_of_hour = np.asarray(E.months)[E.mi]
+    if wind_source == "10m":
+        speed = np.hypot(E.u10, E.v10)[:, iy, ix][liq].astype(float)
+        month = month_of_hour[liq]
+        label = "10 m wind speed at liquid-containing hours"
+    else:
+        if CL is None:
+            raise ValueError(
+                "wind_source='cloud' needs CL from cloud_level_wind.cloud_level_wind(E) "
+                "on a run the pressure-level archive covers; pass CL= (and E_pl=), "
+                "or use wind_source='10m'")
+        U = CL["U_cl_m_s"][:, iy, ix]
+        if U.shape[0] != liq.shape[0]:
+            raise ValueError("CL is not aligned with E: compute both on the same run")
+        ok = liq & np.isfinite(U)
+        if not ok.any():
+            raise ValueError("no cloud-level wind at the ARM cell: is the wind "
+                             "archive present? See cloud_level_wind.download_command")
+        speed = U[ok].astype(float)
+        month = month_of_hour[ok]
+        label = "cloud-level wind speed at liquid-containing hours"
+    return {"speed_m_s": speed, "month": month, "n_hours": int(speed.size),
+            "seasons": _season_span(E), "label": label,
+            "source": wind_source}
+
+
+def fig_cloudDuration_andWind_forOV(E, ev: dict, E_pl=None, CL: dict | None = None,
+                                    wind_source: str | None = None,
+                                    duration_mode: str | None = None,
+                                    out_dir=None, dpi=None,
+                                    dur_xmax_h: float = 48.0, dur_bin_h: float = 1.0,
+                                    wind_xmax_m_s: float = 25.0, wind_bin_m_s: float = 1.0,
+                                    threshold_box: bool = True,
+                                    fill_alpha: float = 0.45):
+    """Cloud duration and in-cloud wind speed at the ARM cell, one panel.
+
+    Two histograms on one set of axes, each with ITS OWN x axis along the
+    bottom, coloured to match: the liquid-containing EVENT duration in ERA5
+    (dark blue, upper axis of the two) and the wind speed at the cell's
+    liquid-containing HOURS (teal, the lower, offset axis). The y axis is
+    the share of samples in each bin, in percent, so the two distributions
+    are on a common footing even though one counts events and the other
+    hours. Dashed lines mark the two medians.
+
+    ``duration_mode`` chooses what the dark-blue histogram counts (``None``
+    follows the run's ``--duration-mode``):
+
+    ``'event'``  one sample per liquid-containing EVENT at the cell -- a
+                 maximal run of consecutive liquid-containing hours -- with
+                 its duration in hours, from ``ev``
+                 (:func:`cloud_spatial_extent.taylor_events` on ``E``; only
+                 its ARM-cell events are used, censored ones included, since
+                 a run that touches a break is a lower bound on a real event
+                 and dropping it would remove the long clouds
+                 preferentially). Axis 0 to ``dur_xmax_h``.
+    ``'daily'``  one sample per calendar DAY with its liquid-containing
+                 hours, 0-24, days with none included at 0
+                 (:func:`cloud_spatial_extent.site_daily_liquid_hours`).
+                 This is the distribution behind the hours-per-day table;
+                 its mean is the table's pooled ``h / day``. Axis 0-24 h
+                 regardless of ``dur_xmax_h``.
+
+    ``wind_source`` chooses the wind (``None`` follows the run's
+    ``--wind-source``):
+
+    ``'cloud'``  the liquid-mass-weighted wind at cloud level from the
+                 pressure-level archive (:func:`cloud_level_wind`), which
+                 covers 2024/25-2025/26 only. Pass ``E_pl`` (the run on
+                 those seasons) and ``CL`` (computed on it). The duration
+                 histogram still comes from ``E``, so the two histograms then
+                 span DIFFERENT seasons; the legend says which.
+    ``'10m'``    the single-level 10 m wind in ``E`` itself -- every season,
+                 the same population as the durations, and a lower bound on
+                 the wind at cloud level under a stable Arctic boundary layer.
+
+    Precipitation filter, overcast gate and phase thresholds are those of
+    ``E``; the threshold box states them. Saved under
+    ``cloudDuration_andWind_OV_<mode>_<source>``.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MultipleLocator
+
+    duration_mode = resolve_duration_mode(duration_mode, E.args)
+    wind_source = resolve_wind_source(wind_source, E.args)
+    if wind_source == "cloud":
+        E_w = E_pl if E_pl is not None else E
+        wind = site_wind_at_liquid_hours(E_w, CL, "cloud")
+    else:
+        wind = site_wind_at_liquid_hours(E, None, "10m")
+
+    if duration_mode == "event":
+        sel = ev["is_site"]
+        dur_h = ev["length_h"][sel].astype(float)
+        if dur_h.size == 0:
+            raise ValueError("no liquid-containing events at the ARM cell")
+        dur_unit, dur_what = "events", "cloud duration"
+        dur_axis_label = "Liquid-containing cloud duration  [hours]"
+    else:
+        daily = cse.site_daily_liquid_hours(E)
+        dur_h = daily["hours"]
+        dur_xmax_h = 24.0                      # a day is the whole axis
+        dur_unit, dur_what = "days", "hours per day"
+        dur_axis_label = "Liquid-containing hours per day  [hours]"
+    speed = wind["speed_m_s"]
+
+    dur_med, spd_med = float(np.median(dur_h)), float(np.median(speed))
+    dur_beyond = 100.0 * np.mean(dur_h > dur_xmax_h)
+    spd_beyond = 100.0 * np.mean(speed > wind_xmax_m_s)
+
+    fig, ax = plt.subplots(figsize=(9.2, 5.6))
+    ax_w = ax.twiny()
+
+    # --- duration: integer hours, so bins are centred on each value. Event
+    # durations start at 1 h; daily hours start at 0, so that mode gets a
+    # bin centred on zero for the liquid-free days. -------------------------
+    dur_lo = 0.5 * dur_bin_h if duration_mode == "event" else -0.5 * dur_bin_h
+    dur_bins = np.arange(dur_lo, dur_xmax_h + dur_bin_h, dur_bin_h)
+    dur_note = (f", {dur_beyond:.0f}% beyond {dur_xmax_h:g} h" if dur_beyond >= 0.5
+                else "")
+    if duration_mode == "daily":
+        dur_note = (f", mean {dur_h.mean():.1f} h, "
+                    f"{100 * np.mean(dur_h == 0):.0f}% of days with none")
+    ax.hist(dur_h, bins=dur_bins, weights=np.full(dur_h.size, 100.0 / dur_h.size),
+            histtype="stepfilled", color=DURATION_COLOR_OV, alpha=fill_alpha,
+            edgecolor=DURATION_COLOR_OV, lw=1.4, zorder=3,
+            label=f"ERA5 liquid-containing {dur_what}, {_season_span(E)}: "
+                  f"{dur_h.size:,} {dur_unit}, median {dur_med:.0f} h{dur_note}")
+    ax.axvline(dur_med, color=DURATION_COLOR_OV, ls=(0, (5, 3)), lw=1.6, zorder=4)
+    # Each median line is labelled with its value AND unit, in its own colour:
+    # both x axes span the full width, so a bare line has two readings and
+    # only the colour says which axis it belongs to.
+    _med_txt = dict(xycoords=("data", "axes fraction"), textcoords="offset points",
+                    va="top", fontsize=10.5, zorder=7,
+                    bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
+    # Side of its own median line depends on wind_source. With the cloud-level
+    # wind, the duration label reads fine pushed right, so it stays to the
+    # left of its own line to clear the wind median (see below). With the
+    # 10 m wind, whose axis (0-25 m/s) spans nearly the same pixel width as
+    # the duration axis, the two labels are swapped instead so they still
+    # clear each other.
+    dur_ha, dur_dx = ("left", 4) if wind_source == "10m" else ("right", -4)
+    ax.annotate(f"median {dur_med:.0f} h", xy=(dur_med, 0.985), xytext=(dur_dx, 0),
+                color=DURATION_COLOR_OV, ha=dur_ha, **_med_txt)
+
+    # --- wind: continuous, so plain bins from zero -------------------------
+    wind_bins = np.arange(0.0, wind_xmax_m_s + wind_bin_m_s, wind_bin_m_s)
+    ax_w.hist(speed, bins=wind_bins, weights=np.full(speed.size, 100.0 / speed.size),
+              histtype="stepfilled", color=WIND_COLOR_OV, alpha=fill_alpha,
+              edgecolor=WIND_COLOR_OV, lw=1.4, zorder=3,
+              label=f"ERA5 {wind['label']}, {wind['seasons']}: "
+                    f"{speed.size:,} hours, median {spd_med:.1f} m s$^{{-1}}$"
+                    + (f", {spd_beyond:.0f}% beyond {wind_xmax_m_s:g} m s$^{{-1}}$"
+                       if spd_beyond >= 0.5 else ""))
+    ax_w.axvline(spd_med, color=WIND_COLOR_OV, ls=(0, (5, 3)), lw=1.6, zorder=4)
+    wind_ha, wind_dx = ("right", -4) if wind_source == "10m" else ("left", 4)
+    ax_w.annotate(f"median {spd_med:.1f} m s$^{{-1}}$", xy=(spd_med, 0.925), xytext=(wind_dx, 0),
+                  color=WIND_COLOR_OV, ha=wind_ha, **_med_txt)
+
+    # --- two x axes along the bottom, each in its histogram's colour --------
+    # The daily axis starts half a bin left of zero so the zero-day bar is
+    # not cut in half by the spine.
+    ax.set_xlim(dur_bins[0] if duration_mode == "daily" else 0.0, dur_xmax_h)
+    ax.xaxis.set_major_locator(MultipleLocator(6 if dur_xmax_h >= 36 else 3))
+    ax.set_xlabel(dur_axis_label, color=DURATION_COLOR_OV, fontsize=11)
+    ax.tick_params(axis="x", colors=DURATION_COLOR_OV, labelsize=10)
+    ax.spines["bottom"].set_color(DURATION_COLOR_OV)
+    ax.spines["bottom"].set_linewidth(1.6)
+
+    ax_w.set_xlim(0, wind_xmax_m_s)
+    ax_w.xaxis.set_ticks_position("bottom")
+    ax_w.xaxis.set_label_position("bottom")
+    ax_w.spines["bottom"].set_position(("outward", 52))
+    ax_w.spines["bottom"].set_color(WIND_COLOR_OV)
+    ax_w.spines["bottom"].set_linewidth(1.6)
+    ax_w.spines["top"].set_visible(False)
+    for sp in ("left", "right"):
+        ax_w.spines[sp].set_visible(False)
+    ax_w.xaxis.set_major_locator(MultipleLocator(5))
+    ax_w.set_xlabel(("Cloud-level" if wind_source == "cloud" else "10 m")
+                    + " wind speed at liquid-containing hours  [m s$^{-1}$]",
+                    color=WIND_COLOR_OV, fontsize=11)
+    ax_w.tick_params(axis="x", colors=WIND_COLOR_OV, labelsize=10)
+
+    ax.set_ylabel("Share of samples in bin  [%]", fontsize=11)
+    # Headroom above the tallest bar for the threshold box; the y axis is
+    # shared by the twin, so one limit governs both histograms.
+    top = 100.0 * max(np.histogram(dur_h, bins=dur_bins)[0].max() / dur_h.size,
+                      np.histogram(speed, bins=wind_bins)[0].max() / speed.size)
+    ax.set_ylim(0, 1.15 * top)
+    _tidy(ax)
+    ax.grid(False, axis="x")
+
+    # Legend mid-height on the right, where neither histogram reaches; the
+    # threshold box below it, top edge pinned to the 30% gridline.
+    # h1, l1 = ax.get_legend_handles_labels()
+    # h2, l2 = ax_w.get_legend_handles_labels()
+    # ax.legend(h1 + h2, l1 + l2, loc="center right", fontsize=8.5, framealpha=0.92)
+    if threshold_box:
+        # x in axes fraction (right edge), y in data units (% share of
+        # samples) so the box's top edge sits exactly on the 30% line
+        # regardless of how the histogram's own headroom (`top`, above)
+        # comes out for a given run -- unless 30% is above the axes, as it
+        # is for the daily histogram (tallest bar ~18%), in which case the
+        # box drops to just under the top of the axes rather than floating
+        # off the panel.
+        y_box = min(30.0, 0.97 * ax.get_ylim()[1])
+        ax.text(0.995, y_box, "\n".join(threshold_box_lines(E)),
+                transform=ax.get_yaxis_transform(), ha="right", va="top",
+                fontsize=8.5, linespacing=1.4, zorder=6,
+                bbox=dict(boxstyle="round,pad=0.45", facecolor="white",
+                          edgecolor="0.55", linewidth=0.8, alpha=0.94))
+
+    ax.set_title(f"{precip_banner(E.args)}\nUtqia\u0121vik grid cell "
+                 f"({E.site_lat:.2f} N, {E.site_lon:.2f} E), {E.args.region} region",
+                 fontsize=10.5)
+    fig.subplots_adjust(bottom=0.26)
+    return _save(fig, E, out_dir,
+                 f"cloudDuration_andWind_OV_{duration_mode}_{wind_source}", dpi)

@@ -221,3 +221,6 @@ daac_data_download_python
 
 # Claude Code working directories
 .claude/worktrees/
+
+# aws_pipeline batch outputs (figures + pickles of reduced results)
+ERA5/surface_energy_budget/aws_pipeline/results/

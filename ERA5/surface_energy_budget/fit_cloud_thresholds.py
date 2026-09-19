@@ -104,7 +104,8 @@ EXCLUDED_FIT_SEASONS: tuple[int, ...] = (2016, 2019, 2020, 2021)
 # ----------------------------------------------------------------------------
 # One pass over the archive
 # ----------------------------------------------------------------------------
-def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
+def extract_site_series(A, precip_rate_max_mm_hr: float | None = None,
+                        extra_vars: tuple[str, ...] = ()) -> dict:
     """Reduce the archive to a per-hour table for the ARM grid cell.
 
     This is the only expensive step, and it runs once. Everything the fit needs
@@ -115,6 +116,12 @@ def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
     Reuses ``A.ds`` and ``A.layout``, so the season selection, the site cell and
     the window bookkeeping are the same objects the figures used -- the fit
     cannot silently disagree with the plots about which hours exist.
+
+    ``extra_vars`` names further archive variables to carry along per hour,
+    stored raw under their ERA5 names (e.g. ``"msdwlwrf"`` for the downwelling
+    longwave flux, W m-2, for ``plot_dlr_by_phase``). They ride in the same
+    streaming pass at the cost of one more field per block, and take no part
+    in the classification or the denominators.
 
     Returns a dict of parallel arrays over KEPT hours, plus the denominators.
     """
@@ -138,8 +145,14 @@ def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
 
     (si_l, mi_l, tcc_l, ice_frac_l, has_cloud_l, rain_l, valid_l,
      lwp_l, iwp_l, time_l) = ([] for _ in range(10))
+    extra_l = {v: [] for v in extra_vars}
     times_all = np.asarray(ds["valid_time"].values)
     read_vars = ["tcc", "tclw", "tciw", "tp"]
+    missing = [v for v in extra_vars if v not in ds.data_vars]
+    if missing:
+        raise KeyError(f"extra_vars {missing} not in the archive; it holds "
+                       f"{sorted(ds.data_vars)}")
+    read_vars += [v for v in extra_vars if v not in read_vars]
     for i0, block in iter_time_blocks(ds, read_vars, args.block_hours,
                                       keep_mask=use_step):
         n_t = block.sizes["valid_time"]
@@ -177,6 +190,8 @@ def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
         has_cloud_l.append(has_cloud)
         valid_l.append(valid)
         rain_l.append(np.isfinite(rate) & (rate >= precip_rate_max_mm_hr))
+        for v in extra_vars:
+            extra_l[v].append(block[v].values[keep, i, j])
 
     cat = lambda parts: np.concatenate(parts)               # noqa: E731
     # layout["seasons"] lists every season in the ARCHIVE; the module's arrays
@@ -220,6 +235,8 @@ def extract_site_series(A, precip_rate_max_mm_hr: float | None = None) -> dict:
         "precip_rate_max": precip_rate_max_mm_hr,
         "min_lwp_g": min_lwp_g, "min_iwp_g": min_iwp_g,
     }
+    for v in extra_vars:                       # raw, in the archive's units
+        S[v] = cat(extra_l[v])
     # Denominators: valid hours per season, and per (season, month). Neither
     # depends on the free parameters, so both are computed once.
     S["den_season"] = np.bincount(si[valid], minlength=n_season).astype(float)

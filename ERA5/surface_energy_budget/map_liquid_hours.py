@@ -477,6 +477,94 @@ def _save(fig, M, out_dir, stem, dpi):
     return fig
 
 
+# ----------------------------------------------------------------------------
+# A thumbnail of where the domain is
+# ----------------------------------------------------------------------------
+def fig_domain_thumbnail(A, out_dir=None, dpi: int | None = 350,
+                         title: str | None = "averaging domain",
+                         lat_min: float = 66.0,
+                         central_longitude: float | None = None,
+                         box_color: str = "red", box_linewidth: float = 2.0,
+                         mark_site: bool = False, size_in: float = 3.0):
+    """The Arctic from above, with the run's domain outlined: a thumbnail to
+    put in the corner of a domain-wide figure so nobody has to ask which
+    region "the whole domain" is.
+
+    A North Polar Stereographic disc down to ``lat_min`` (66 N, about the
+    Arctic Circle, by default), rotated so that
+    the domain sits at the bottom (``central_longitude`` defaults to the
+    domain's central meridian), land in grey, ocean in pale blue, a light
+    graticule, and the domain's grid bounds -- read from ``A.ds``, so the
+    outline is the archive's, not a number typed in -- as a ``box_color``
+    outline whose parallels curve as they should. ``mark_site`` adds the ARM
+    site as a dot. ``title=None`` drops the caption. Any object with ``.ds``
+    and ``.args.region`` will do for ``A``.
+
+    Saved as ``<region>_domain_thumbnail.png``: it does not depend on the
+    seasons, so it carries no season tag.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.path as mpath
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    from plot_surface_class_timeseries import SITE_LAT, SITE_LON
+
+    lat = np.asarray(A.ds["latitude"].values, dtype=float)
+    lon = np.asarray(A.ds["longitude"].values, dtype=float)
+    lat0, lat1 = float(lat.min()), float(lat.max())
+    lon0, lon1 = float(lon.min()), float(lon.max())
+    if central_longitude is None:
+        central_longitude = 0.5 * (lon0 + lon1)
+
+    proj = ccrs.NorthPolarStereo(central_longitude=central_longitude)
+    fig = plt.figure(figsize=(size_in, size_in + (0.3 if title else 0.0)))
+    ax = fig.add_subplot(1, 1, 1, projection=proj)
+    ax.set_extent([-180, 180, lat_min, 90], ccrs.PlateCarree())
+    # Clip the square stereographic extent to its inscribed circle, the
+    # usual polar-map recipe: a boundary path in axes coordinates.
+    theta = np.linspace(0.0, 2.0 * np.pi, 240)
+    circle = mpath.Path(np.column_stack([0.5 + 0.5 * np.cos(theta),
+                                         0.5 + 0.5 * np.sin(theta)]))
+    ax.set_boundary(circle, transform=ax.transAxes)
+
+    ax.add_feature(cfeature.OCEAN.with_scale("110m"), facecolor="#dbe7f2",
+                   edgecolor="none", zorder=0)
+    ax.add_feature(cfeature.LAND.with_scale("110m"), facecolor="0.86",
+                   edgecolor="0.3", linewidth=0.5, zorder=1)
+    ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=False, linewidth=0.4,
+                 color="0.55", alpha=0.7, linestyle="-",
+                 xlocs=range(-180, 180, 45), ylocs=range(50, 90, 5), zorder=2)
+
+    # The domain as a ring of many points, so the two parallels draw as the
+    # arcs they are on this projection rather than as chords.
+    n = 60
+    ring_lon = np.concatenate([np.linspace(lon0, lon1, n), np.full(n, lon1),
+                               np.linspace(lon1, lon0, n), np.full(n, lon0)])
+    ring_lat = np.concatenate([np.full(n, lat0), np.linspace(lat0, lat1, n),
+                               np.full(n, lat1), np.linspace(lat1, lat0, n)])
+    ax.plot(ring_lon, ring_lat, transform=ccrs.PlateCarree(), color=box_color,
+            linewidth=box_linewidth, solid_capstyle="round", zorder=5)
+    if mark_site:
+        ax.plot(SITE_LON, SITE_LAT, transform=ccrs.PlateCarree(), marker="o",
+                markersize=3.5, color=box_color, markeredgecolor="white",
+                markeredgewidth=0.6, linestyle="none", zorder=6)
+    ax.spines["geo"].set_linewidth(0.8)
+    ax.spines["geo"].set_edgecolor("0.3")
+    if title:
+        ax.set_title(title, fontsize=11, color="0.25", pad=4)
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.02,
+                        top=0.90 if title else 0.98)
+
+    if out_dir is not None:
+        from pathlib import Path as _P
+        path = _P(out_dir) / f"{A.args.region}_domain_thumbnail.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi or A.args.dpi, bbox_inches="tight",
+                    pad_inches=0.05)
+        print(f"  -> {path}")
+    return fig
+
+
 def fig_season_panels(M: MapAnalysis, quantity: str = "hours", n_cols: int = 6,
                       out_dir=None, dpi=350, vmin=None, vmax=None,
                       panel_h: float = 4.4, panel_w: float | None = None,

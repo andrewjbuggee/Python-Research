@@ -23,8 +23,9 @@ Equation (1) of:
 | `plot_monthly_longwave_maps.py` | 3-row monthly grid: downwelling LW, net LW, sea ice. No ocean mask by default. |
 | `plot_monthly_lwd_maps.py` | 2×3 grid of downwelling-LW maps, one month per panel, with sea ice contoured. Season window and years to average are chosen the same way as in the Hovmoller. |
 | `plot_fall_seb_timeseries.py` | Freeze-up season: climatological net SEB over open ocean (median + IQR) with the region's ice-free fraction beneath it. |
-| `era5_aws.py` | Read ERA5 straight from the public NSF NCAR S3 bucket, no download. |
-| `era5_aws_analysis.ipynb` | Notebook running the same analysis against that remote data. |
+| `aws_pipeline/` | **`--storage aws`**: the NSF NCAR S3 bucket as a lazy, cached data root for every analysis module, plus EC2 scripts. See its README. |
+| `era5_aws.py` | Earlier eager S3 reader, superseded by `aws_pipeline/`. |
+| `era5_aws_analysis.ipynb` | Notebook for that earlier reader. |
 
 Note the analysis scripts keep the **native ERA5 positive-downward** convention,
 unlike `seb_terms.py` which flips the turbulent terms to Sledd's positive-upward.
@@ -125,6 +126,14 @@ Source: [ECMWF, surface fluxes of sensible heat — positive downwards](https://
 [latent heat](https://sites.ecmwf.int/era/40-atlas/docs/section_B/parameter_sfolhpd.html).
 
 ## Reading from AWS instead of downloading
+
+> **Current:** `aws_pipeline/` (Sep 2026) makes the bucket a drop-in
+> `--storage aws` / `prepare(storage="aws")` for every analysis module, lazy and
+> cached, verified bit-for-bit against the local files, with EC2 scripts for big
+> boxes. See [`aws_pipeline/README.md`](aws_pipeline/README.md). The notes below
+> describe the earlier eager reader `era5_aws.py`, which it supersedes; the
+> timings quoted there (12–15 s per file open, 500–700 s for 5 variables × 2 days)
+> no longer apply.
 
 ERA5 is also on a public NSF NCAR bucket — `s3://nsf-ncar-era5`, us-west-2,
 anonymous, no account: <https://registry.opendata.aws/nsf-ncar-era5/>.

@@ -160,6 +160,10 @@ def load_land_sea_mask(region: str, data_root: Path, grid_deg: float | None = No
     import xarray as xr
 
     base_region = strip_frequency_suffix(region)
+    if type(data_root).__name__ in ("S3DataRoot", "S3RegionDir"):   # --storage aws
+        from aws_pipeline import s3_storage
+
+        return s3_storage.load_land_sea_mask(base_region, grid_deg)
     path = mask_path(Path(data_root), base_region, grid_deg)
     if not path.exists():
         raise FileNotFoundError(
