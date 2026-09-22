@@ -410,8 +410,10 @@ def _fmt_count(n: float) -> str:
 # liquid-containing median as the reference -- what liquid cloud adds over an
 # ice-only sky, and over a clear one.
 DIFF_ANNOTATIONS: tuple[tuple[str, str, str], ...] = (
-    ("liquid", "ice", r"$\Delta\mathrm{DLR}_{\mathrm{glaciated}}$"),
-    ("liquid", "clear", r"$\Delta\mathrm{DLR}_{\mathrm{clrsky}}$"),
+    ("liquid", "ice", r"$\Delta\mathrm{DLR}_{\mathrm{glaciation}}$"),
+    ("liquid", "clear", r"$\Delta\mathrm{DLR}_{\mathrm{clear-sky}}$"),
+    # ("liquid", "ice", r"$\mathrm{CRE}_{\mathrm{liq \rightarrow ice}}^{\mathrm{LW}}$"),
+    # ("liquid", "clear", r"$\mathrm{CRE}_{\mathrm{liq \rightarrow clr}}^{\mathrm{LW}}$"),
 )
 
 
@@ -1955,8 +1957,8 @@ def print_diff_methods_table(A, D: DomainDLR,
 DIFF_COLORS: dict[str, str] = {"liq-ice": lwph.GENIE_ICE_COLOR,
                                "liq-clr": CLEAR_COLOR}
 DIFF_LABELS: dict[str, str] = {
-    "liq-ice": r"$\Delta\mathrm{DLR}_{\mathrm{glaciated}}$",
-    "liq-clr": r"$\Delta\mathrm{DLR}_{\mathrm{clrsky}}$",
+    "liq-ice": r"$\Delta\mathrm{DLR}_{\mathrm{glaciation}}$",
+    "liq-clr": r"$\Delta\mathrm{DLR}_{\mathrm{clear-sky}}$",
 }
 
 
@@ -2105,7 +2107,7 @@ def fig_monthly_dlr_box_by_class_forOV_ver2(
         ax.set_title(f"{CLASS_LABELS[cname]}: {DIFF_LABELS['liq-ice']} (blue), "
                      f"{DIFF_LABELS['liq-clr']} (grey)", loc="left",
                      color=CLASS_COLORS[cname], fontweight="bold",
-                     fontsize=class_title_fontsize - 3, pad=3)
+                     fontsize=class_title_fontsize, pad=3)
         ax.tick_params(axis="x", labelbottom=ax is diff_axes[-1])
     if np.isfinite(d_lo) and np.isfinite(d_hi):
         span = max(d_hi - d_lo, 1.0)

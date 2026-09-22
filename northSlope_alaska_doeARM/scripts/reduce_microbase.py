@@ -193,7 +193,10 @@ def main() -> int:
         try:
             red = reduce_day(raw)
             enc = {v: {"zlib": True, "complevel": 4} for v in red.data_vars if red[v].ndim == 2}
-            red.to_netcdf(out_path, encoding=enc)
+            # atomic write: a reader (the notebook's merge step) must never see a half-written file
+            tmp_path = out_path.with_suffix(".nc.tmp")
+            red.to_netcdf(tmp_path, encoding=enc)
+            tmp_path.rename(out_path)
         finally:
             if not a.keep_raw:
                 raw.unlink(missing_ok=True)

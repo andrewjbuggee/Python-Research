@@ -13,3 +13,6 @@ build/
 dist/
 .pytest_cache/
 .ipynb_checkpoints/
+
+# empty Jupyter config dir used by scripts/make_dlr_microphysics_notebook.py --execute
+.jupyter_empty/

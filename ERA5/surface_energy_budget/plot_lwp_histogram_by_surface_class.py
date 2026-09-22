@@ -5731,11 +5731,25 @@ def print_era5_vs_obs_mean_pct_diff(A: Analysis, obs_path=DEFAULT_OBS_FILE,
         print(f"    -- : {d['not_in_obs']} ERA5 season(s) not in the "
               f"observation file")
 
+    # Average total liquid-containing hours over ALL seasons on each side,
+    # for a direct ERA5-vs-ARM comparison independent of the per-season
+    # pairing above. ERA5's average is over its own full record (every
+    # season in `A`); the ARM average is `mean_h` itself -- the record mean
+    # already resolved by resolve_obs_liquid_mean() over the FULL obs file
+    # (not just the seasons ERA5 shares), following the same
+    # exclude_incomplete rule as the reference line/column above.
+    era5_mean_all = float(np.mean(e_liq))
+    print(f"\n  Average liquid-containing cloud hours per season, all "
+          f"seasons:")
+    print(f"    ERA5: {era5_mean_all:>10,.0f} h  ({len(e_liq)} seasons)")
+    print(f"    ARM:  {mean_h:>10,.0f} h  ({d['source']})")
+
     return {"labels": list(labels), "era5_liq_h": e_liq,
             "obs_liq_h": o_liq, "obs_incomplete": o_inc,
             "pct_diff_season": pct_season,
             "obs_mean_h": mean_h, "obs_mean_source": d["source"],
-            "pct_diff_mean": pct_mean}
+            "pct_diff_mean": pct_mean,
+            "era5_mean_all_seasons_h": era5_mean_all}
 
 
 def fig_monthly_era5_vs_obs_build(A: Analysis, out_dir=None,
