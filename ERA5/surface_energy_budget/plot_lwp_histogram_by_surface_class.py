@@ -218,6 +218,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import csv
 import sys
 import warnings
 from pathlib import Path
@@ -3920,6 +3921,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "season and month, yellow cells excluded -- and "
                              "'digitized' reads the six means read off her "
                              "figure by eye.")
+    parser.add_argument("--monthly-obs-csv", default=None, metavar="PATH",
+                        help=f"Table for --monthly-obs-source noprecip, "
+                             f"Genie's precipitation-filtered monthly counts "
+                             f"(default {DEFAULT_MONTHLY_OBS_NOPRECIP_CSV.name}).")
     parser.add_argument("--monthly-obs-xlsx", default=None, metavar="PATH",
                         help=f"Spreadsheet for --monthly-obs-source xlsx "
                              f"(default {DEFAULT_MONTHLY_OBS_XLSX}).")
@@ -4518,6 +4523,22 @@ OBS_LEGEND_MEANS = {"with_liquid": 1689, "ice_only": 857, "liq_precip": 282,
                     "ice_precip": 255, "clear_sky": 898, "others": 36,
                     "missing": 358}
 
+# Genie's ver3 liquid-containing category (2026-09-21): the same
+# non-precipitating hours with the LWP <= 0 retrievals removed, about 386 h
+# per season lower. Only that category was re-supplied, so the rest of the
+# table is the ver2 one; the removed hours sit in `others`, which keeps the
+# derived `missing` column and the incomplete-season flags unchanged. See
+# build_genie_seasonal_hours.py, which writes both files.
+DEFAULT_OBS_FILE_VER3 = (Path(__file__).parent
+                         / "genie_arm_seasonal_hours_ver3.txt")
+
+# Expected record means per observation file, for the guard below. A file not
+# listed here is checked against OBS_LEGEND_MEANS.
+OBS_LEGEND_MEANS_BY_FILE: dict[str, dict[str, float]] = {
+    DEFAULT_OBS_FILE_VER3.name: {**OBS_LEGEND_MEANS, "with_liquid": 1303,
+                                 "others": 422},
+}
+
 # How far the observation files can be wrong, in hours, as a property of WHERE
 # THEY CAME FROM rather than of the figure drawing them.
 #
@@ -4583,9 +4604,14 @@ def load_observations(path=DEFAULT_OBS_FILE, check: bool = True) -> dict:
     out.update({c: arr[:, i] for i, c in enumerate(OBS_COLUMNS)})
 
     if check:
-        bad = [(c, arr[:, i].mean(), OBS_LEGEND_MEANS[c])
+        # Each file has its own expected means: the ver3 table's
+        # liquid-containing and others rows differ from the ver2 table's by
+        # construction, and checking it against ver2's would cry wolf.
+        want_means = OBS_LEGEND_MEANS_BY_FILE.get(Path(path).name,
+                                                  OBS_LEGEND_MEANS)
+        bad = [(c, arr[:, i].mean(), want_means[c])
                for i, c in enumerate(OBS_COLUMNS)
-               if abs(arr[:, i].mean() - OBS_LEGEND_MEANS[c]) > 100]
+               if abs(arr[:, i].mean() - want_means[c]) > 100]
         for c, got, want in bad:
             print(f"  !! {path}: {c} averages {got:,.0f} h but the source "
                   f"figure's legend says {want:,.0f} h", file=sys.stderr)
@@ -5495,7 +5521,7 @@ def _era5_vs_obs_mean_series(A: Analysis, obs_path, obs_liquid_mean,
                 not_in_obs=int(np.sum(~np.isfinite(o_liq))))
 
 
-def fig_era5_vs_obs_simple_forOV(A: Analysis, obs_path=DEFAULT_OBS_FILE,
+def fig_era5_vs_obs_simple_forOV(A: Analysis, obs_path=DEFAULT_OBS_FILE_VER3,
                                  out_dir=None, dpi: int | None = None,
                                  surface_class: str = "arm_site",
                                  obs_liquid_mean=None,
@@ -5532,6 +5558,11 @@ def fig_era5_vs_obs_simple_forOV(A: Analysis, obs_path=DEFAULT_OBS_FILE,
       several trial values can sit side by side.
     * **Stacked bars by default** (``bar_style``), ice on top of liquid, so
       each season is one bar and the line meets the liquid segment directly.
+    * **Genie's ver3 observations** (``obs_path``, default
+      :data:`DEFAULT_OBS_FILE_VER3`): the liquid-containing category with
+      the LWP <= 0 retrievals removed, about 386 h per season lower than the
+      ver2 table every other figure still reads. Pass
+      ``obs_path=DEFAULT_OBS_FILE`` to compare against ver2.
 
     ``threshold_box=False`` drops the corner box giving the two thresholds.
     Everything else -- ``obs_liquid_mean``, ``exclude_incomplete``,
@@ -5643,7 +5674,7 @@ def fig_era5_vs_obs_simple_forOV(A: Analysis, obs_path=DEFAULT_OBS_FILE,
                        suffix=suffix)
 
 
-def print_era5_vs_obs_mean_pct_diff(A: Analysis, obs_path=DEFAULT_OBS_FILE,
+def print_era5_vs_obs_mean_pct_diff(A: Analysis, obs_path=DEFAULT_OBS_FILE_VER3,
                                     surface_class: str = "arm_site",
                                     obs_liquid_mean=None,
                                     exclude_incomplete: bool | None = None
@@ -5675,8 +5706,10 @@ def print_era5_vs_obs_mean_pct_diff(A: Analysis, obs_path=DEFAULT_OBS_FILE,
     like-for-like average -- and its ARM column reproduces the line value
     when the line is the derived mean.
 
-    Same arguments and defaults as the figure, so the ARM mean printed here is
-    the line drawn there. Returns the numbers as a dict for reuse.
+    Same arguments and defaults as the figure -- including the ver3
+    observation file, :data:`DEFAULT_OBS_FILE_VER3` -- so the ARM mean
+    printed here is the line drawn there. Returns the numbers as a dict for
+    reuse.
     """
     d = _era5_vs_obs_mean_series(A, obs_path, obs_liquid_mean,
                                  exclude_incomplete, surface_class)
@@ -6096,8 +6129,45 @@ def monthly_phase_binary(A: Analysis, surface_class: str = "arm_site",
 # digitized  genie_arm_monthly_hours.txt, the six monthly MEANS read off her
 #            figure by eye before the spreadsheet arrived. Kept so the two can
 #            be set against each other; carries a +/-30 h read-off band.
-MONTHLY_OBS_SOURCES: tuple[str, ...] = ("xlsx", "digitized")
+MONTHLY_OBS_SOURCES: tuple[str, ...] = ("xlsx", "digitized", "noprecip")
 DEFAULT_MONTHLY_OBS_SOURCE = "xlsx"
+
+# Genie's monthly liquid-containing counts with PRECIPITATING SCENES REMOVED
+# (her SLC_counts_byMonth_for_years_2014-2025_precipitationFiltered.csv,
+# 2026-09-21), copied here as the xlsx is. Seasons down, months across, in
+# counts of 30 s samples; a blank cell is a month she supplies no value for.
+# Liquid-containing only -- no ice-only counterpart was supplied.
+DEFAULT_MONTHLY_OBS_NOPRECIP_CSV = (Path(__file__).parent
+                                    / "genie_arm_monthly_hours_noprecip.csv")
+
+# Which sources INCLUDE precipitating scenes. This is the pairing rule for
+# the monthly figures: an ERA5 run with --no-precip belongs against a source
+# that is False here, an unfiltered run against one that is True. The
+# spreadsheet and the digitised means both include precipitation; the CSV
+# above is Genie's own precipitation-filtered product.
+MONTHLY_OBS_INCLUDES_PRECIP: dict[str, bool] = {
+    "xlsx": True, "digitized": True, "noprecip": False,
+}
+
+# Which sources carry every season (needed by the box-and-whisker figures)
+# and which carry an ice-only category.
+MONTHLY_OBS_HAS_SEASONS: dict[str, bool] = {
+    "xlsx": True, "digitized": False, "noprecip": True,
+}
+MONTHLY_OBS_HAS_ICE: dict[str, bool] = {
+    "xlsx": True, "digitized": True, "noprecip": False,
+}
+
+
+def resolve_monthly_obs_source(source, args) -> str:
+    """The monthly observation source: the argument, else the run's
+    ``--monthly-obs-source``, else the module default."""
+    if source is None:
+        source = getattr(args, "monthly_obs_source", DEFAULT_MONTHLY_OBS_SOURCE)
+    if source not in MONTHLY_OBS_SOURCES:
+        raise ValueError(f"unknown monthly obs source {source!r}; choose from "
+                         f"{list(MONTHLY_OBS_SOURCES)}")
+    return source
 
 # A copy of SLCCounts_monthly.xlsx as supplied by Genie Lorenzo Pearson, kept
 # beside the code so the notebook does not depend on a path in ~/Documents.
@@ -6265,27 +6335,120 @@ def load_monthly_observations_xlsx(path=DEFAULT_MONTHLY_OBS_XLSX,
     }
 
 
+def load_monthly_observations_noprecip(
+        path=DEFAULT_MONTHLY_OBS_NOPRECIP_CSV, check: bool = True) -> dict:
+    """Read Genie's PRECIPITATION-FILTERED monthly liquid-containing counts.
+
+    Her ``SLC_counts_byMonth_for_years_2014-2025_precipitationFiltered.csv``:
+    a header row of month numbers, then one row per season labelled
+    ``2014/15`` .. ``2024/25``, holding COUNTS of 30 s samples (divided by
+    120 here for hours).
+
+    WHICH SEASON-MONTHS ARE MISSING. Three things mark one, and all three
+    are carried as NaN and listed in ``excluded_months``, exactly as the
+    spreadsheet's yellow fill is:
+
+    * a BLANK cell -- one month, Dec 2018;
+    * a count of ZERO, which no month in the present file has, since a whole
+      month with no liquid-containing cloud at all is an instrument gap
+      rather than a sky;
+    * membership of ``GENIE_EXCLUDED_MONTHS``, the months Genie highlighted
+      as missing data in her monthly spreadsheet. This file supplies numbers
+      for five of them (Oct 2020, Dec 2020, Nov 2021, Feb 2023, Oct 2023),
+      but the underlying record is the same one, so the flags still apply --
+      confirmed by Andrew, 2026-09-22. Two of those five are the shortest
+      months in the file (Oct 2020 at 57 h, Dec 2020 at 32 h), which is what
+      a partly observed month looks like.
+
+    Returns the same keys as :func:`load_monthly_observations_xlsx`, so the
+    box-and-whisker figures can take either. Two differences, both because
+    only the liquid-containing category was supplied:
+
+    * ``ice_only`` and ``per_season_ice_only`` are all NaN. Asking those
+      figures for ``category="ice_only"`` with this source raises.
+    * The category EXCLUDES precipitating scenes, so it pairs with an ERA5
+      run built with ``no_precip=True`` -- the opposite of the spreadsheet.
+      ``MONTHLY_OBS_INCLUDES_PRECIP`` records that, and the figures check it.
+    """
+    rows = [r for r in csv.reader(Path(path).open(encoding="utf-8-sig")) if r]
+    if len(rows) < 2:
+        raise ValueError(f"{path} holds no data rows")
+    months = [int(v) for v in rows[0][1:] if v.strip()]
+    wraps = months[0] > months[-1]
+    flagged = set(tuple(x) for x in GENIE_EXCLUDED_MONTHS)
+    seasons, liq_rows, exc_rows = [], [], []
+    for r in rows[1:]:
+        if not r[0].strip():
+            continue
+        y = int(r[0].split("/")[0])                     # '2014/15' -> 2014
+        seasons.append(y)
+        vals = r[1:len(months) + 1]
+        if len(vals) != len(months):
+            raise ValueError(f"{path}: season {r[0]!r} has {len(vals)} values "
+                             f"for {len(months)} months")
+        hours, exc = [], []
+        for m, v in zip(months, vals):
+            cal_year = y + 1 if (wraps and m < months[0]) else y
+            blank = v.strip() == ""
+            h = np.nan if blank else float(v) / 120.0
+            hours.append(h)
+            exc.append(blank or h == 0.0 or (cal_year, m) in flagged)
+        liq_rows.append(hours)
+        exc_rows.append(exc)
+    liq = np.array(liq_rows)
+    exc = np.array(exc_rows, dtype=bool)
+    liq = np.where(exc, np.nan, liq)      # hours, NaN where the month is missing
+    nan_all = np.full(liq.shape, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        mean_l = np.nanmean(liq, axis=0)
+        sd_l = np.nanstd(liq, axis=0)
+    if check and not np.isfinite(liq).any():
+        raise ValueError(f"{path}: every cell is blank")
+
+    # Calendar (year, month) pairs, the form GENIE_EXCLUDED_MONTHS uses.
+    excluded_months = [((y + 1) if (wraps and m < months[0]) else y, m)
+                       for si, y in enumerate(seasons)
+                       for mi, m in enumerate(months) if exc[si, mi]]
+    return {
+        "months": months,
+        "with_liquid": mean_l, "ice_only": np.full(len(months), np.nan),
+        "seasons": seasons,
+        "per_season_with_liquid": liq, "per_season_ice_only": nan_all,
+        "excluded": exc, "excluded_months": tuple(sorted(excluded_months)),
+        "sd_with_liquid": sd_l, "sd_ice_only": np.full(len(months), np.nan),
+        "n_per_month": (~exc).sum(axis=0),
+        "source": "noprecip", "path": str(path), "uncertainty_h": 0.0,
+    }
+
+
 def load_monthly_observations(path=None, source=None, args=None,
                               sheet=DEFAULT_MONTHLY_OBS_XLSX_SHEET) -> dict:
     """The monthly observations, from whichever source is selected.
 
-    ``source`` is ``"xlsx"`` or ``"digitized"``; ``None`` follows
-    ``--monthly-obs-source`` on ``args``, else the module default. ``path``
-    defaults per source. Both sources return the keys every consumer reads --
-    ``months``, ``with_liquid``, ``ice_only``, ``source``, ``uncertainty_h`` --
-    and the xlsx source adds the per-season detail described in
+    ``source`` is ``"xlsx"``, ``"digitized"`` or ``"noprecip"``; ``None``
+    follows ``--monthly-obs-source`` on ``args``, else the module default.
+    ``path`` defaults per source. Every source returns the keys every
+    consumer reads -- ``months``, ``with_liquid``, ``ice_only``, ``source``,
+    ``uncertainty_h`` -- and the two per-season sources (``xlsx``,
+    ``noprecip``) add the detail described in
     :func:`load_monthly_observations_xlsx`.
+
+    The sources differ in what they include: ``xlsx`` and ``digitized`` are
+    ALL SKY, ``noprecip`` has Genie's precipitation filter applied. See
+    ``MONTHLY_OBS_INCLUDES_PRECIP``.
     """
-    if source is None:
-        source = getattr(args, "monthly_obs_source", DEFAULT_MONTHLY_OBS_SOURCE)
-    if source not in MONTHLY_OBS_SOURCES:
-        raise ValueError(f"unknown monthly obs source {source!r}; choose from "
-                         f"{list(MONTHLY_OBS_SOURCES)}")
+    source = resolve_monthly_obs_source(source, args)
     if source == "xlsx":
         if path is None:
             path = getattr(args, "monthly_obs_xlsx", None) or \
                 DEFAULT_MONTHLY_OBS_XLSX
         return load_monthly_observations_xlsx(path, sheet)
+    if source == "noprecip":
+        if path is None:
+            path = getattr(args, "monthly_obs_csv", None) or \
+                DEFAULT_MONTHLY_OBS_NOPRECIP_CSV
+        return load_monthly_observations_noprecip(path)
     return load_monthly_observations_digitized(
         path or DEFAULT_MONTHLY_OBS_FILE)
 
@@ -6597,7 +6760,10 @@ def _monthly_stem(args, obs_source: str | None = None) -> str:
     if obs_source is None:
         obs_source = getattr(args, "monthly_obs_source",
                              DEFAULT_MONTHLY_OBS_SOURCE)
-    if obs_source != DEFAULT_MONTHLY_OBS_SOURCE:
+    # A filtered run against the filtered source would read
+    # ..._noprecip_noprecip; the two tags say the same thing about a matched
+    # pair, so one is enough.
+    if obs_source != DEFAULT_MONTHLY_OBS_SOURCE and not stem.endswith(f"_{obs_source}"):
         stem += f"_{obs_source}"
     return stem
 
@@ -6908,6 +7074,11 @@ BOX_CATEGORIES = {
 }
 
 
+# Exclusion-mismatch notes already printed, so a three-frame build says it
+# once. Cleared by hand if a session wants to hear it again.
+_MONTHLY_EXCLUSION_NOTES: set[str] = set()
+
+
 def _monthly_box_data(A, obs, category, surface_class, exclude_months):
     """Per-season, per-month values for ERA5 and the observations, aligned.
 
@@ -6917,21 +7088,40 @@ def _monthly_box_data(A, obs, category, surface_class, exclude_months):
     the two sides -- a distribution built over different seasons on each side
     would not be a comparison of anything.
     """
-    if obs.get("source") != "xlsx":
+    if not MONTHLY_OBS_HAS_SEASONS.get(obs.get("source"), False):
         raise ValueError(
             "the box-and-whisker figure needs every season on the observation "
-            "side; only the spreadsheet source has them (obs_source='xlsx')")
+            "side; only the per-season sources have them (obs_source='xlsx' "
+            "or 'noprecip')")
     if category not in BOX_CATEGORIES:
         raise ValueError(f"category must be one of {list(BOX_CATEGORIES)}")
+    if category == "ice_only" and not MONTHLY_OBS_HAS_ICE[obs["source"]]:
+        raise ValueError(
+            f"{obs['path']} supplies liquid-containing counts only; there is "
+            f"no ice-only category to compare against. Use "
+            f"category='liquid_containing', or an obs_source that has both.")
+    # A season-month is used only if NEITHER side calls it missing: the
+    # months flagged on the ERA5 side (``exclude_months``, normally
+    # GENIE_EXCLUDED_MONTHS) and any the observation file itself lacks. The
+    # union goes to both sides, so the two are always over one population.
+    # With the spreadsheet the two lists are identical and nothing changes;
+    # the precipitation-filtered CSV adds Dec 2018, which it leaves blank.
     want = set(tuple(x) for x in (exclude_months or ()))
     have = set(obs["excluded_months"])
-    if want != have:
-        raise ValueError(
-            f"the months excluded on the ERA5 side {sorted(want)} do not match "
-            f"the yellow cells in {obs['path']} {sorted(have)}")
+    extra = sorted(have - want)
+    if extra:
+        msg = (f"  note: {Path(obs['path']).name} is also missing "
+               f"{len(extra)} season-month(s) {extra}; dropped from both "
+               f"sides.")
+        # Said once per distinct pairing: a three-frame slide build calls
+        # this three times and the repeat carries no information.
+        if msg not in _MONTHLY_EXCLUSION_NOTES:
+            _MONTHLY_EXCLUSION_NOTES.add(msg)
+            print(msg)
+    eff_exclude = tuple(sorted(want | have))
 
     months, liq, ice, _mh = monthly_phase_binary(A, surface_class,
-                                                 exclude_months)
+                                                 eff_exclude)
     era5_all = liq if category == "liquid_containing" else ice
     key = "per_season_with_liquid" if category == "liquid_containing" \
         else "per_season_ice_only"
@@ -6951,6 +7141,11 @@ def _monthly_box_data(A, obs, category, surface_class, exclude_months):
                      for y in seasons])
     obs_v = np.array([[obs_all[s_of_obs[y], o_idx[m]] for m in shared]
                       for y in seasons])
+    # Belt and braces after the union above: a NaN either side drops the
+    # season-month from both, so the count under each month means one thing.
+    both = np.isfinite(era5) & np.isfinite(obs_v)
+    era5 = np.where(both, era5, np.nan)
+    obs_v = np.where(both, obs_v, np.nan)
     return shared, seasons, era5, obs_v
 
 
@@ -7226,12 +7421,21 @@ def fig_monthly_box_era5_vs_obs_forOV(A: Analysis, obs_path=None, out_dir=None,
     if build not in (None, "obs", "both"):
         raise ValueError(f"build must be None, 'obs' or 'both'; got {build!r}")
     args = A.args
-    if args.no_precip and not allow_precip_mismatch:
+    src = resolve_monthly_obs_source(obs_source, args)
+    obs_has_precip = MONTHLY_OBS_INCLUDES_PRECIP[src]
+    # The pairing rule: a filtered run belongs against a filtered source.
+    if obs_has_precip == bool(args.no_precip) and not allow_precip_mismatch:
+        era5_txt = ("EXCLUDES precipitating scenes" if args.no_precip
+                    else "INCLUDES precipitation")
+        obs_txt = ("INCLUDE precipitation" if obs_has_precip
+                   else "EXCLUDE precipitating scenes")
+        want = "an unfiltered" if obs_has_precip else "a no_precip=True"
         raise ValueError(
-            "the spreadsheet's categories include precipitating cases; pass "
-            "allow_precip_mismatch=True to draw a filtered run against them "
-            "with the mismatch stated on the figure.")
-    obs = load_monthly_observations(obs_path, source=obs_source, args=args)
+            f"this ERA5 run {era5_txt} but the {src!r} observations "
+            f"{obs_txt}: the two populations differ. Pass {want} run, pick "
+            f"the other obs_source, or pass allow_precip_mismatch=True to "
+            f"draw it anyway with the mismatch stated on the figure.")
+    obs = load_monthly_observations(obs_path, source=src, args=args)
     _code, series_label = resolve_series_code(A.col, surface_class)
     months, seasons, era5, obs_v = _monthly_box_data(
         A, obs, category, surface_class, exclude_months)
@@ -7346,21 +7550,42 @@ def fig_monthly_box_era5_vs_obs_forOV(A: Analysis, obs_path=None, out_dir=None,
         [f"{calendar.month_abbr[m]}\n(n = {n_e[j]})" for j, m in enumerate(months)],
         fontsize=tick_fontsize)
 
-    _drop, dropped_months = excluded_month_mask(A.used, months, args,
-                                                exclude_months or ())
+    # The note lists every season-month the boxes actually drop -- the ERA5
+    # exclusion list AND any month the observation file leaves blank, since
+    # _monthly_box_data keeps only what both sides have. With the
+    # spreadsheet the two lists are the same and this reads as it always did.
+    _drop, dropped_months = excluded_month_mask(
+        A.used, months, args,
+        tuple(sorted(set(tuple(x) for x in (exclude_months or ()))
+                     | set(obs["excluded_months"]))))
     drop_note = ""
     if dropped_months:
         drop_txt = ", ".join(f"{calendar.month_abbr[m]} {y}"
                              for y, m in sorted(dropped_months))
-        drop_note = (f"season-months excluded from BOTH sides (ARM instrument "
-                     f"problems): {drop_txt}")
-    if args.no_precip:
-        pair = "all sky observations, obs: Genie's spreadsheet"
+        why = ("ARM instrument problems" if set(obs["excluded_months"]) <=
+               set(tuple(x) for x in (exclude_months or ()))
+               else "ARM instrument problems, or absent from the "
+                    "observation file")
+        drop_note = (f"season-months excluded from BOTH sides ({why}): "
+                     f"{drop_txt}")
+    obs_name = ("Genie's spreadsheet" if obs["source"] == "xlsx"
+                else "Genie's precipitation-filtered counts"
+                if obs["source"] == "noprecip" else "Genie's digitised means")
+    if obs_has_precip and not args.no_precip:
+        pair = f"all sky, precipitation included on both sides, obs: {obs_name}"
+        warn = ""
+    elif not obs_has_precip and args.no_precip:
+        pair = (f"precipitating scenes EXCLUDED from both sides, "
+                f"ERA5: {precip_label(args)}, obs: {obs_name}")
+        warn = ""
+    elif args.no_precip:
+        pair = f"all sky observations, obs: {obs_name}"
         warn = (f"\nERA5 {precip_label(args)}, but the observations INCLUDE "
                 f"precipitation — the two populations differ")
     else:
-        pair = "all sky, precipitation included on both sides, obs: Genie's spreadsheet"
-        warn = ""
+        pair = f"all sky ERA5, obs: {obs_name}"
+        warn = ("\nThe observations EXCLUDE precipitating scenes but ERA5 "
+                "includes them — the two populations differ")
     fig.suptitle(f"Monthly {cat_label} cloud hours across seasons, ERA5 against "
                  f"ARM observations — {series_label}\n{args.region}   |   "
                  f"{len(seasons)} seasons {seasons[0]}/{(seasons[0]+1) % 100:02d}"

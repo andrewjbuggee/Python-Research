@@ -3716,6 +3716,64 @@ def fig_monthly_response_simple(A: "Analysis", forcer: str = "lwd",
         normalize=False, signed=True)
 
 
+# Marker-size key for the r^2-scaled slide figure: the marker area at
+# r^2 = 1, and the r^2 values the legend shows. Sledd et al. (2025)
+# Figure 2a uses the same three.
+DEFAULT_R2_SIZE_MAX = 150.0
+DEFAULT_R2_LEGEND_VALUES: tuple[float, ...] = (0.1, 0.5, 1.0)
+
+
+def _r2_label(v: float) -> str:
+    """``0.1``, ``0.5``, ``1.0`` -- a bare ``1`` would read as a different
+    kind of number beside the fractions, so keep one decimal at least."""
+    txt = f"{v:g}"
+    return txt if "." in txt else f"{txt}.0"
+
+
+def fig_monthly_response_simple_normalized_ver2(
+        A: "Analysis", forcer: str = "lwd", out_dir=None,
+        dpi: int | None = None, population: str | None = None,
+        slots: tuple[str, ...] = SIMPLE_MONTHLY_SLOTS,
+        min_hours: float = 5000.0, label_fs: float = 12.0,
+        layout: str = "column", figsize: tuple[float, float] | None = None,
+        convention: str | None = None, palette: str | None = None,
+        ocean_note: bool = True, signed: bool = True,
+        r2_size_max: float = DEFAULT_R2_SIZE_MAX,
+        r2_legend_values=DEFAULT_R2_LEGEND_VALUES):
+    """:func:`fig_monthly_response_simple_normalized` with the markers scaled
+    by how well each regression fits.
+
+    Every marker's AREA is ``r2_size_max`` times the r^2 of the regression
+    that produced that month's response -- 100 at r^2 = 1, and nothing at
+    all at r^2 = 0, so a month whose fit explains none of the variance
+    states its value without asserting it. The fixed-marker version draws
+    every point at 72 regardless, which gives a poorly constrained month the
+    same weight on the eye as a tight one. The line still joins the months.
+
+    The r^2 is of the underlying regression of that TERM on the forcer --
+    ``r2_f_lwu`` and friends from :func:`monthly_partition`, the same
+    quantity :func:`fig_monthly_response` sizes its markers by and the same
+    one Sledd et al. (2025) Figure 2a shows. It is NOT the r^2 of the
+    normalised share, which is a ratio of fitted slopes and has no residual
+    of its own.
+
+    The legend gains a size key at ``r2_legend_values`` (0.1, 0.5 and 1.0,
+    as Sledd's does), drawn as grey circles after the term entries. Because
+    a scatter with varying sizes has no single size to show, the term
+    entries are drawn as fixed-size proxies.
+
+    Everything else -- ``signed``, ``convention``, ``palette``, ``layout``,
+    the axes and the subtitle -- behaves as in
+    :func:`fig_monthly_response_simple_normalized`. Saved with an
+    ``_r2size`` tag so it never overwrites that figure.
+    """
+    return _monthly_simple_core(
+        A, forcer, out_dir, dpi, population, slots, min_hours, label_fs,
+        layout, figsize, convention, palette, ocean_note,
+        normalize=True, signed=signed, r2_marker=True,
+        r2_size_max=r2_size_max, r2_legend_values=r2_legend_values)
+
+
 def fig_monthly_response_simple_normalized(
         A: "Analysis", forcer: str = "lwd", out_dir=None,
         dpi: int | None = None, population: str | None = None,
@@ -3760,9 +3818,19 @@ def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
                          population, slots, min_hours: float,
                          label_fs: float, layout: str, figsize,
                          convention, palette, ocean_note: bool,
-                         normalize: bool, signed: bool):
-    """Shared body of the two slide figures; see their docstrings."""
+                         normalize: bool, signed: bool,
+                         r2_marker: bool = False,
+                         r2_size_max: float = DEFAULT_R2_SIZE_MAX,
+                         r2_legend_values=DEFAULT_R2_LEGEND_VALUES):
+    """Shared body of the slide figures; see their docstrings.
+
+    ``r2_marker`` scales every marker by the r^2 of the regression behind
+    it (``r2_size_max`` at r^2 = 1, nothing at r^2 = 0) and adds a size key
+    to the legend at ``r2_legend_values``; see
+    :func:`fig_monthly_response_simple_normalized_ver2`.
+    """
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
 
     if layout not in ("column", "row"):
         raise ValueError(f"layout must be 'column' or 'row', got {layout!r}")
@@ -3789,6 +3857,7 @@ def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
                              figsize=figsize, sharex=not row)
     axes = np.atleast_1d(axes)
     x = np.arange(len(WINTER_MONTHS))
+    legend_keys: list[str] = []          # terms actually drawn on the first axes
     for ax, name in zip(axes, slots):
         slot = SLOT_ORDER.index(name)
         r = monthly_partition(A, slot, forcer, pop)
@@ -3809,10 +3878,19 @@ def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
             _l, col, mk = style[k]
             if not np.isfinite(y).any():
                 continue
+            if ax is axes[0]:
+                legend_keys.append(k)
             ax.plot(x, y, color=col, lw=2.2, zorder=3)
-            ax.scatter(x, y, s=72, color=col, marker=mk, edgecolor="#222222",
+            # With r2_marker, the marker AREA carries the r^2 of the
+            # regression behind that month's response: r^2 = 1 draws at
+            # r2_size_max, r^2 = 0 draws nothing at all, so a month whose
+            # fit explains none of the variance makes no claim on the eye.
+            # The line still joins the months, as Sledd's Figure 2a does.
+            sz = (r2_size_max * np.nan_to_num(r[f"r2_{k}"], nan=0.0)
+                  if r2_marker else 72)
+            ax.scatter(x, y, s=sz, color=col, marker=mk, edgecolor="#222222",
                        linewidth=0.6, zorder=4,
-                       label=lab if ax is axes[0] else None)
+                       label=lab if (ax is axes[0] and not r2_marker) else None)
             lo, hi = min(lo, np.nanmin(y)), max(hi, np.nanmax(y))
         ax.axhline(0.0, color="#333333", lw=0.9)
         # Reference lines where a single term would carry the whole forcing
@@ -3883,7 +3961,24 @@ def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
             y_head = f"response to a 1 W m$^{{-2}}$ change in {f_lab}"
             y_tail = "(fraction, energy leaving the surface)"
         title = f"Month-by-month response of the surface terms to {f_lab}"
-    handles, labels = axes[0].get_legend_handles_labels()
+    if r2_marker:
+        # Proxy handles, because a scatter whose sizes vary has no one size
+        # to show: the term entries get a fixed marker, and the size key
+        # after them is what reads r^2. Marker size is in points while the
+        # scatter's s is in points squared, hence the square root.
+        handles = [Line2D([0], [0], color=style[k][1], marker=style[k][2],
+                          lw=2.2, markersize=8.0, markeredgecolor="#222222",
+                          markeredgewidth=0.6,
+                          label=MONTHLY_STYLE_SIMPLE[k][0])
+                   for k in legend_keys]
+        handles += [Line2D([0], [0], lw=0, color="none", marker="o",
+                           markerfacecolor="#555555", markeredgecolor="none",
+                           markersize=float(np.sqrt(r2_size_max * v)),
+                           label=f"$r^2$ = {_r2_label(v)}")
+                    for v in r2_legend_values]
+        labels = [h.get_label() for h in handles]
+    else:
+        handles, labels = axes[0].get_legend_handles_labels()
     if row:
         # Side by side, the shared y-label has a short figure to sit against,
         # so it takes two lines; the legend has the whole width, so one row.
@@ -3913,6 +4008,9 @@ def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
                 + ("_signed" if signed else "_abs"))
     if row:
         stem += "_wide"
+    if r2_marker:
+        # Its own name, so the fixed-marker figure is never overwritten.
+        stem += "_r2size"
     return _save(fig, A, stem, out_dir, dpi)
 
 

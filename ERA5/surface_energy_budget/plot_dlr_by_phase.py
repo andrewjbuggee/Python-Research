@@ -1231,6 +1231,12 @@ def fig_monthly_dlr_box_domain_forOV(A, D: DomainDLR, out_dir=None,
 # and the open water in between, in the order they stack on the figure.
 DEFAULT_BOX_CLASSES: tuple[str, ...] = ("land", "open_ocean", "sea_ice")
 
+# The table has room for more than a figure does, so it reports every
+# surface class, in CLASS_ORDER. Coastal is a mixed land/sea box, describable
+# by neither side, so read its block as the blend it is rather than as a
+# surface type.
+DEFAULT_TABLE_CLASSES: tuple[str, ...] = CLASS_ORDER
+
 
 def fig_monthly_dlr_box_by_class(A, D: DomainDLR, out_dir=None,
                                  dpi: int | None = None,
@@ -1908,15 +1914,24 @@ def print_cre_check(A, D: DomainDLR, precip_filter: bool | None = None,
 
 
 def print_diff_methods_table(A, D: DomainDLR,
-                             classes: tuple[str, ...] = ("open_ocean", "sea_ice"),
+                             classes: tuple[str, ...] = DEFAULT_TABLE_CLASSES,
                              methods: tuple[str, ...] = DIFF_METHODS,
                              precip_filter: bool | None = None,
                              **kwargs) -> dict:
     """The methods side by side: per class and month, the median of the box
     values each method gives for liquid minus ice and liquid minus clear
     [W m-2], with the matched method's coverage (share of liquid hours that
-    found an ice, or clear, match in their clear-sky bin). ``kwargs`` go to
-    :func:`dlr_differences`. Returns the numbers."""
+    found an ice, or clear, match in their clear-sky bin).
+
+    One block per surface class: land, open ocean, marginal ice zone and
+    pack ice by default (``DEFAULT_TABLE_CLASSES``; ``classes`` takes any
+    names from ``CLASS_ORDER``, including ``"coastal"``). The smaller
+    classes are the ones to read with the thresholds in mind -- a month
+    where a class has too few cell-hours for a state prints ``--`` rather
+    than a number, and the matched method's coverage says how much of the
+    liquid population its comparison rests on. ``kwargs`` go to
+    :func:`dlr_differences`. Returns the numbers.
+    """
     out = {}
     for cname in classes:
         res = {m: dlr_differences(A, D, cname, m, precip_filter, **kwargs)

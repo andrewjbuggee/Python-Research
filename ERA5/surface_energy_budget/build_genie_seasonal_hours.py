@@ -16,6 +16,39 @@ Genie supplied, kept beside the code under ``genie_obs_source/``:
     The original (2026-09-01) table in hours, with six categories. Only its
     PRECIPITATING liquid and ice, clear-sky and others rows are used; its
     ``With Liquid`` and ``Ice Only`` rows are superseded by the ver2 files.
+``liquid_containing_clouds_yearly_totals_noPrecip_lwp_greaterThan0_ver3.csv``
+    The ver3 liquid-containing counts (2026-09-21): the same non-precipitating
+    category with the retrievals of LWP <= 0 removed. It supersedes the ver2
+    liquid file for the TALK figures only -- see "Two tables" below.
+
+Two tables
+==========
+This script writes both, and neither overwrites the other:
+
+``genie_arm_seasonal_hours.txt``       ver2 liquid, read by every figure
+``genie_arm_seasonal_hours_ver3.txt``  ver3 liquid, read by the ``_forOV``
+                                       comparison figure and its table
+
+Only the liquid-containing category was re-supplied, so the ver3 table takes
+its ice-only, precipitating, clear-sky rows from the same places as ver2.
+
+WHERE THE REMOVED HOURS GO, AND WHY IT MATTERS. The LWP <= 0 filter removes
+about 386 h per season (20-32%) from the liquid-containing category. Those
+hours were OBSERVED -- the instrument was running and saw cloud; the
+microwave retrieval returned a non-positive liquid path -- so they must not
+fall into the derived ``missing`` column, which stands for instrument
+downtime. Deriving ``missing`` from the ver3 liquid row without accounting
+for them would put every season over the 5%-of-window incomplete threshold
+(11 of 11, against 3 of 11 now) and leave the derived record mean with
+nothing to average.
+
+They are therefore added to ``others``, Genie's catch-all for cloud in none
+of the four phase categories, which leaves the six-category sum -- and so
+``missing``, and so the incomplete-season flags -- exactly as they are for
+ver2. THIS IS AN INFERENCE, not a statement from Genie: she re-supplied the
+liquid category alone, and some of those hours might belong in ice-only
+under her classification. Nothing plotted depends on ``others``; the
+inference matters only in that it keeps ``missing`` honest.
 
 Why the precipitating rows can be carried over: for every season, the ver2
 liquid + ice sum equals the original ``With Liquid + Ice Only`` sum to
@@ -47,6 +80,7 @@ import numpy as np
 HERE = Path(__file__).parent
 SRC = HERE / "genie_obs_source"
 OUT = HERE / "genie_arm_seasonal_hours.txt"
+OUT_VER3 = HERE / "genie_arm_seasonal_hours_ver3.txt"
 
 # Genie's ARM data are 30 s samples, so 120 samples make one hour.
 SAMPLES_PER_HOUR = 120.0
@@ -86,6 +120,18 @@ def season_window_hours(seasons) -> np.ndarray:
                      for y in seasons])
 
 
+def write_table(path: Path, seasons, liq_h, ice_h, liq_precip, ice_precip,
+                clear, others, missing, header: str) -> None:
+    """One table file: the header, then a row per season."""
+    lines = [header]
+    for i, y in enumerate(seasons):
+        lines.append(f"{y:<8}{liq_h[i]:>12.2f}{ice_h[i]:>10.2f}"
+                     f"{liq_precip[i]:>12.0f}{ice_precip[i]:>12.0f}"
+                     f"{clear[i]:>11.0f}{others[i]:>8.2f}{missing[i]:>9.2f}\n")
+    path.write_text("".join(lines))
+    print(f"wrote {path}  ({len(seasons)} seasons)")
+
+
 def main() -> None:
     seasons, orig = read_original_csv(
         SRC / "liquid-containing-clouds-total-hours-per-season.csv")
@@ -93,8 +139,16 @@ def main() -> None:
         SRC / "liquid_containing_clouds_yearly_totals_ver2.csv") / SAMPLES_PER_HOUR
     ice_h = read_counts_csv(
         SRC / "ice_only_clouds_yearly_totals_ver2.csv") / SAMPLES_PER_HOUR
+    liq3_h = read_counts_csv(
+        SRC / "liquid_containing_clouds_yearly_totals_noPrecip_lwp_greaterThan0"
+              "_ver3.csv") / SAMPLES_PER_HOUR
     n = len(seasons)
     assert liq_h.size == n and ice_h.size == n, "season counts differ"
+    assert liq3_h.size == n, "the ver3 file has a different number of seasons"
+    # The filter can only remove hours from the category it refines.
+    assert np.all(liq3_h <= liq_h + SUM_TOL_H), (
+        "the ver3 liquid-containing hours exceed ver2 in some season; the "
+        "LWP > 0 filter cannot add hours")
 
     # The justification for carrying the other rows over -- see the module
     # docstring. Fails loudly if a future file breaks the pattern.
@@ -163,16 +217,68 @@ def main() -> None:
 # ---------------------------------------------------------------------------
 # season  with_liquid  ice_only  liq_precip  ice_precip  clear_sky  others  missing
 """
-    lines = [header]
-    for i, y in enumerate(seasons):
-        lines.append(f"{y:<8}{liq_h[i]:>12.2f}{ice_h[i]:>10.2f}"
-                     f"{liq_precip[i]:>12.0f}{ice_precip[i]:>12.0f}"
-                     f"{clear[i]:>11.0f}{others[i]:>8.0f}{missing[i]:>9.2f}\n")
-    OUT.write_text("".join(lines))
-    print(f"wrote {OUT}  ({n} seasons)")
+    write_table(OUT, seasons, liq_h, ice_h, liq_precip, ice_precip, clear,
+                others, missing, header)
     print(f"  with_liquid mean {liq_h.mean():.1f} h   ice_only mean "
           f"{ice_h.mean():.1f} h   max |ver2 - original| sum gap "
           f"{gap.max():.2f} h")
+
+    # ---- the ver3 table ----------------------------------------------------
+    # The hours the LWP > 0 filter removes move from with_liquid to others,
+    # so the six categories still sum to what they did and `missing` -- and
+    # with it the incomplete-season flags -- is untouched. See the module
+    # docstring for why that matters.
+    removed = liq_h - liq3_h
+    others3 = others + removed
+    missing3 = (season_window_hours(seasons)
+                - (liq3_h + ice_h + liq_precip + ice_precip + clear + others3))
+    assert np.allclose(missing3, missing, atol=1e-6), (
+        "moving the removed hours into others changed the missing column")
+
+    header3 = f"""\
+# DOE ARM Utqiagvik seasonal cloud hours -- GENIE'S EXACT NUMBERS, ver3 liquid
+# ============================================================================
+#
+# GENERATED by build_genie_seasonal_hours.py from the files under
+# genie_obs_source/ -- edit those and re-run, do not edit this file.
+#
+# THE SAME TABLE AS genie_arm_seasonal_hours.txt, with one row replaced:
+#
+#   with_liquid  liquid_containing_clouds_yearly_totals_noPrecip_
+#                lwp_greaterThan0_ver3.csv                        (2026-09-21)
+#
+# ver3 is the non-precipitating liquid-containing category with the
+# retrievals of LWP <= 0 removed. It is LOWER than ver2 in every season, by
+# {removed.mean():.0f} h on average ({100 * (removed / liq_h).min():.0f}-{100 * (removed / liq_h).max():.0f}% per season):
+#
+#   record mean with_liquid   ver2 {liq_h.mean():.1f} h  ->  ver3 {liq3_h.mean():.1f} h
+#   mean over the 8 complete seasons  {liq_h[[0, 1, 3, 4, 7, 8, 9, 10]].mean():.1f} h  ->  {liq3_h[[0, 1, 3, 4, 7, 8, 9, 10]].mean():.1f} h
+#
+# Every other row is ver2's, since only the liquid category was re-supplied.
+#
+# THE REMOVED HOURS ARE IN 'others', NOT IN 'missing'. They were observed --
+# the instrument saw cloud and the retrieval returned a non-positive liquid
+# path -- so they are not downtime. Adding them to others keeps the
+# six-category sum, and with it the derived missing column and the
+# incomplete-season flags (2016/17, 2019/20, 2020/21), identical to the ver2
+# table. That placement is an INFERENCE: Genie re-supplied the liquid
+# category alone, and some of those hours might be ice-only under her
+# classification. Nothing plotted reads 'others'.
+#
+# Record means (all {n} seasons):
+#   with_liquid {liq3_h.mean():.1f} | ice_only {ice_h.mean():.1f}
+#   liq_precip {liq_precip.mean():.1f} | ice_precip {ice_precip.mean():.1f}
+#   clear_sky {clear.mean():.1f} | others {others3.mean():.1f}
+#   missing {missing3.mean():.1f}
+#
+# Hours are per season for the single ARM site; seasons are START years.
+# ---------------------------------------------------------------------------
+# season  with_liquid  ice_only  liq_precip  ice_precip  clear_sky  others  missing
+"""
+    write_table(OUT_VER3, seasons, liq3_h, ice_h, liq_precip, ice_precip,
+                clear, others3, missing3, header3)
+    print(f"  ver3 with_liquid mean {liq3_h.mean():.1f} h   "
+          f"({removed.mean():.0f} h/season moved to others)")
 
 
 if __name__ == "__main__":
