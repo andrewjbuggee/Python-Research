@@ -84,7 +84,7 @@ precision; 1.5% of the 0.1 mm/hr precipitation-filter threshold).
 
 Local cache
 -----------
-``ERA5_S3_CACHE`` (default ``~/.cache/era5_s3``) holds:
+``ERA5_CACHE`` (default ``~/.cache/era5_s3``; ``ERA5_S3_CACHE`` also accepted) holds:
   listings/   the S3 directory listing of every month touched
   meta/       per file: shape, chunking, filters, CF attrs, chunk byte offsets
   chunks/     per (file, HDF5 chunk, spatial window[, levels]): the decoded
@@ -93,7 +93,7 @@ The chunk cache is what turns the bucket into an on-demand local archive: only
 what the analysis actually touched is stored, at the window's size (a Barrow
 cold season of every SEB variable is ~1 GB), and any later run over the same
 box and period costs no S3 traffic. Point ``ERA5_S3_CACHE`` at the external
-drive for a large box, or set ``ERA5_S3_CHUNK_CACHE=off`` to disable that layer.
+drive for a large box, or set ``ERA5_CHUNK_CACHE=off`` to disable that layer.
 """
 
 from __future__ import annotations
@@ -123,8 +123,18 @@ from xarray.core import indexing
 # ----------------------------------------------------------------------------
 # Bucket constants
 # ----------------------------------------------------------------------------
-BUCKET = "nsf-ncar-era5"
-AWS_REGION = "us-west-2"
+# Where the bytes come from: the AWS mirror or NCAR's GLADE disk. Same archive,
+# same file names; see sources.py. Everything below is source-agnostic.
+try:  # imported as aws_pipeline.era5_s3 (the normal case)
+    from . import sources
+except ImportError:  # aws_pipeline/ itself on sys.path
+    import sources  # type: ignore[no-redef]
+
+BUCKET = sources.BUCKET
+AWS_REGION = sources.AWS_REGION
+source = sources.source
+set_source = sources.set_source
+describe_sources = sources.describe_sources
 
 # The ERA5 0.25 deg regular grid as stored in every file of the bucket:
 # latitude 90 -> -90 (721 rows, descending); longitude 0 -> 359.75 (1440 cols).
@@ -281,16 +291,29 @@ SEB_STANDARD: tuple[str, ...] = (
 # ----------------------------------------------------------------------------
 # Tunables
 # ----------------------------------------------------------------------------
-DEBUG = bool(os.environ.get("ERA5_S3_DEBUG"))
+def _env(*names: str, default: str | None = None) -> str | None:
+    """First of ``names`` that is set.
 
-# fsspec block size for the h5py METADATA reads. HDF5 metadata is a handful of
-# small scattered reads, so this only sets how much is over-fetched around
-# them; 1 MiB "bytes" caching measured best (open ~0.6 s from a laptop).
-FS_BLOCK_SIZE = 2 ** 20
-FS_CACHE_TYPE = "bytes"
+    The settings below were named ``ERA5_S3_*`` when S3 was the only source.
+    They govern both sources now, so the ``ERA5_*`` spelling is accepted too
+    and is the one documented; the older names keep working.
+    """
+    for n in names:
+        v = os.environ.get(n)
+        if v is not None:
+            return v
+    return default
 
-CACHE_DIR = Path(os.environ.get("ERA5_S3_CACHE", Path.home() / ".cache" / "era5_s3")).expanduser()
-CHUNK_CACHE_ON = os.environ.get("ERA5_S3_CHUNK_CACHE", "on").lower() not in ("off", "0", "false", "no")
+
+DEBUG = bool(_env("ERA5_DEBUG", "ERA5_S3_DEBUG"))
+
+FS_BLOCK_SIZE = sources.FS_BLOCK_SIZE
+FS_CACHE_TYPE = sources.FS_CACHE_TYPE
+
+CACHE_DIR = Path(_env("ERA5_CACHE", "ERA5_S3_CACHE",
+                      default=str(Path.home() / ".cache" / "era5_s3"))).expanduser()
+CHUNK_CACHE_ON = _env("ERA5_CHUNK_CACHE", "ERA5_S3_CHUNK_CACHE",
+                      default="on").lower() not in ("off", "0", "false", "no")
 
 # Files of a group are re-listed when the month is this recent, because NCAR
 # appends to the current months as ERA5T is replaced by final ERA5.
@@ -303,7 +326,7 @@ FETCH_RETRIES = 4
 # groups lag the analysis groups by a month; a request into the future):
 # "error" (default) or "nan". ``ERA5_S3_MISSING=nan`` for a run that must go
 # on regardless; the adapter forwards it to every open_dataset call.
-MISSING_DEFAULT = os.environ.get("ERA5_S3_MISSING", "error").lower()
+MISSING_DEFAULT = _env("ERA5_MISSING", "ERA5_S3_MISSING", default="error").lower()
 
 
 def n_workers() -> int:
@@ -313,7 +336,7 @@ def n_workers() -> int:
     default of 8 keeps tens of HTTP ranges in flight. Raise it on an EC2
     instance, where decompression rather than the link becomes the limit.
     """
-    env = os.environ.get("ERA5_S3_WORKERS")
+    env = _env("ERA5_WORKERS", "ERA5_S3_WORKERS")
     if env:
         return max(1, int(env))
     return max(1, min(8, os.cpu_count() or 4))
@@ -322,19 +345,13 @@ def n_workers() -> int:
 # ----------------------------------------------------------------------------
 # Filesystem + listings
 # ----------------------------------------------------------------------------
-_FS = None
-_FS_LOCK = threading.Lock()
-
-
 def filesystem():
-    """Anonymous s3fs handle, one per interpreter. Imported lazily."""
-    global _FS
-    with _FS_LOCK:
-        if _FS is None:
-            import fsspec
-
-            _FS = fsspec.filesystem("s3", anon=True, default_block_size=FS_BLOCK_SIZE)
-        return _FS
+    """The S3 filesystem handle (only meaningful when the source IS S3)."""
+    src = source()
+    if not isinstance(src, sources.S3Source):
+        raise RuntimeError(f"the active source is {src.name}, not s3; "
+                           f"use aws_pipeline.sources.source() instead")
+    return src.filesystem()
 
 
 # e5.oper.an.sfc.128_031_ci.ll025sc.2024100100_2024103123.nc
@@ -347,10 +364,17 @@ _NAME_RE = re.compile(
 
 
 @dataclass(frozen=True)
-class S3File:
-    """One object in the bucket and what its name says it holds."""
+class ArchiveFile:
+    """One file of the archive and what its name says it holds.
 
-    key: str            # full "bucket/group/YYYYMM/name.nc"
+    ``key`` is whatever the active source addresses it by: an S3 key
+    ``bucket/group/YYYYMM/name.nc`` or a GLADE path
+    ``/glade/.../ds633.0/group/YYYYMM/name.nc``. Everything else -- and both
+    on-disk caches, which key off ``name`` and ``size_bytes`` -- is identical
+    between the two, so a cache built against one source is valid for the other.
+    """
+
+    key: str
     group: str
     short: str          # NCAR short name, e.g. 'ci'
     param_id: int       # ECMWF paramId (table 128 -> num; else table*1000+num)
@@ -371,18 +395,21 @@ def _parse_stamp(s: str) -> np.datetime64:
     return np.datetime64(f"{s[:4]}-{s[4:6]}-{s[6:8]}T{s[8:10]}", "h")
 
 
-_LISTING_MEM: dict[tuple[str, int, int], tuple[S3File, ...]] = {}
+_LISTING_MEM: dict[tuple[str, int, int], tuple[ArchiveFile, ...]] = {}
 _LISTING_LOCK = threading.Lock()
 
 
-def list_month(group: str, year: int, month: int, refresh: bool = False) -> tuple[S3File, ...]:
-    """Every file of ``group`` for one month, from memory, disk cache, or S3."""
-    key = (group, year, month)
+def list_month(group: str, year: int, month: int, refresh: bool = False) -> tuple[ArchiveFile, ...]:
+    """Every file of ``group`` for one month, from memory, disk cache, or the source."""
+    src = source()
+    key = (src.name, group, year, month)
     with _LISTING_LOCK:
         if key in _LISTING_MEM and not refresh:
             return _LISTING_MEM[key]
 
-    cache = CACHE_DIR / "listings" / f"{group}_{year:04d}{month:02d}.json"
+    # Per-source: the cached entries hold source-specific keys (S3 keys vs
+    # GLADE paths), even though they describe the same files.
+    cache = CACHE_DIR / "listings" / src.cache_tag() / f"{group}_{year:04d}{month:02d}.json"
     recent = (date.today() - date(year, month, 1)).days < RELIST_IF_YOUNGER_THAN_DAYS
     entries = None
     if cache.exists() and not refresh and not recent:
@@ -391,15 +418,13 @@ def list_month(group: str, year: int, month: int, refresh: bool = False) -> tupl
         except json.JSONDecodeError:
             entries = None
     if entries is None:
-        fs = filesystem()
-        prefix = f"{BUCKET}/{group}/{year:04d}{month:02d}/"
-        try:
-            raw = fs.ls(prefix, detail=True)
-        except FileNotFoundError:
-            raw = []
-        entries = [{"name": r["name"], "size": int(r.get("size") or 0)} for r in raw]
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(entries))
+        entries = src.list_month_entries(group, year, month)
+        # An EMPTY listing is never cached. A wrong or not-yet-mounted archive
+        # root lists nothing for every month, and persisting that would make
+        # the mistake survive the fix -- silently, as "this month has no data".
+        if entries:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(entries))
 
     files = []
     for e in entries:
@@ -407,7 +432,7 @@ def list_month(group: str, year: int, month: int, refresh: bool = False) -> tupl
         if not m:
             continue
         table, num = int(m["table"]), int(m["num"])
-        files.append(S3File(
+        files.append(ArchiveFile(
             key=e["name"], group=group, short=m["short"],
             param_id=num if table == 128 else table * 1000 + num,
             t0=_parse_stamp(m["t0"]), t1=_parse_stamp(m["t1"]),
@@ -419,12 +444,16 @@ def list_month(group: str, year: int, month: int, refresh: bool = False) -> tupl
     return out
 
 
+#: Historical name, kept so existing scripts and notebooks keep importing.
+S3File = ArchiveFile
+
+
 def _prev_month(ym: tuple[int, int]) -> tuple[int, int]:
     y, m = ym
     return (y - 1, 12) if m == 1 else (y, m - 1)
 
 
-def files_for(canonical: str, months: Iterable[tuple[int, int]]) -> list[S3File]:
+def files_for(canonical: str, months: Iterable[tuple[int, int]]) -> list[ArchiveFile]:
     """All files holding ``canonical`` over ``months``, in time order.
 
     For forecast groups the month BEFORE each requested month is listed too,
@@ -450,12 +479,12 @@ def files_for(canonical: str, months: Iterable[tuple[int, int]]) -> list[S3File]
 # ----------------------------------------------------------------------------
 # Predicted per-file time axes
 # ----------------------------------------------------------------------------
-def fc_n_init(f: S3File) -> int:
+def fc_n_init(f: ArchiveFile) -> int:
     """Initialisations in a forecast file: the name's t1 is the NEXT file's first."""
     return int((f.t1 - f.t0).astype(int)) // FC_INIT_STEP_H
 
 
-def predicted_times(f: S3File) -> np.ndarray:
+def predicted_times(f: ArchiveFile) -> np.ndarray:
     """Valid times a file holds, from its name alone (``datetime64[h]``).
 
     analysis  : every hour t0..t1 inclusive (monthly or daily file).
@@ -476,7 +505,7 @@ def predicted_times(f: S3File) -> np.ndarray:
     return np.array([f.t0])
 
 
-def n_steps_stored(f: S3File) -> int:
+def n_steps_stored(f: ArchiveFile) -> int:
     """Length of the file's leading (time or initialisation) axis."""
     if f.layout == LAYOUT_FORECAST:
         return fc_n_init(f)
@@ -624,11 +653,11 @@ class FileMeta:
                                   if v is None or len(v) == 3})   # drop pre-filter_mask entries
 
 
-def _meta_path(f: S3File) -> Path:
+def _meta_path(f: ArchiveFile) -> Path:
     return CACHE_DIR / "meta" / f.group / f"{f.name}.json"
 
 
-def _save_meta(meta: FileMeta, f: S3File) -> None:
+def _save_meta(meta: FileMeta, f: ArchiveFile) -> None:
     p = _meta_path(f)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
@@ -649,8 +678,7 @@ def _h5_open(key: str):
             old.close()
         except Exception:  # noqa: BLE001 - best effort on eviction
             pass
-    fobj = filesystem().open(key, block_size=FS_BLOCK_SIZE, cache_type=FS_CACHE_TYPE)
-    h = h5py.File(fobj, "r")
+    h = h5py.File(source().open_h5(key), "r")
     _H5_OPEN[key] = h
     return h
 
@@ -671,7 +699,7 @@ def _attr_float(attrs, name: str) -> float | None:
     return None if v is None else float(np.asarray(v).ravel()[0])
 
 
-def _verify_axes(h, f: S3File) -> None:
+def _verify_axes(h, f: ArchiveFile) -> None:
     """Check the file's own coordinates against the name-derived prediction.
 
     A failure means the archive is not as regular as assumed for this file,
@@ -711,7 +739,7 @@ def _verify_axes(h, f: S3File) -> None:
         )
 
 
-def file_meta(f: S3File) -> FileMeta:
+def file_meta(f: ArchiveFile) -> FileMeta:
     """Metadata for ``f`` from memory, the disk cache, or one h5py open."""
     with _H5_LOCK:
         m = _META_MEM.get(f.key)
@@ -756,7 +784,7 @@ def file_meta(f: S3File) -> FileMeta:
         return m
 
 
-def chunk_locations(f: S3File, meta: FileMeta, coords: list[tuple[int, ...]]) -> list[tuple[int, int, int] | None]:
+def chunk_locations(f: ArchiveFile, meta: FileMeta, coords: list[tuple[int, ...]]) -> list[tuple[int, int, int] | None]:
     """Byte ranges of the chunks at grid coords ``coords`` (chunk-index units).
 
     Looked up through h5py's B-tree walk once and remembered in the file's
@@ -853,7 +881,7 @@ def _cf_decode(values: np.ndarray, meta: FileMeta) -> np.ndarray:
 class ReadSpec:
     """Everything one read task needs, independent of xarray."""
 
-    f: S3File
+    f: ArchiveFile
     lo: int                        # stored-step range [lo, hi) on the leading axis
     hi: int                        # (time steps, or initialisations for forecast files)
     window: Window
@@ -861,7 +889,7 @@ class ReadSpec:
     factor: float
 
 
-def _chunk_cache_path(f: S3File, chunk_coord: tuple[int, ...], window: Window,
+def _chunk_cache_path(f: ArchiveFile, chunk_coord: tuple[int, ...], window: Window,
                       level_idx: tuple[int, ...] | None) -> Path:
     lev = "all" if level_idx is None else hashlib.sha1(
         ",".join(map(str, level_idx)).encode()).hexdigest()[:10]
@@ -871,26 +899,26 @@ def _chunk_cache_path(f: S3File, chunk_coord: tuple[int, ...], window: Window,
 
 
 def _fetch_ranges(key: str, locs: list[tuple[int, int]]) -> list[bytes]:
-    """Concurrent multi-range GET with retries on transient failures."""
-    fs = filesystem()
+    """Read the chunk byte ranges, retrying transient failures.
+
+    On S3 this is one concurrent multi-range GET; on GLADE a sequence of
+    ``pread`` calls. Retries matter for the network source and are harmless
+    for the local one (a genuinely missing file raises on the first attempt
+    and again on the last).
+    """
+    src = source()
     delay = 2.0
     for attempt in range(1, FETCH_RETRIES + 1):
         try:
-            blobs = fs.cat_ranges([key] * len(locs), [a for a, _ in locs],
-                                  [a + n for a, n in locs], on_error="return")
-            blobs = list(blobs)
-            bad = [b for b in blobs if isinstance(b, BaseException)]
-            if not bad:
-                short = [i for i, (b, (_, n)) in enumerate(zip(blobs, locs)) if len(b) != n]
-                if not short:
-                    return blobs
-                raise OSError(f"{len(short)} range(s) returned the wrong length")
-            raise bad[0]
-        except Exception as exc:  # noqa: BLE001 - network layer raises many types
+            return src.read_ranges(key, locs)
+        except FileNotFoundError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the I/O layers raise many types
             if attempt == FETCH_RETRIES:
                 raise
-            print(f"  S3 fetch of {key.rsplit('/', 1)[-1][:50]} failed ({type(exc).__name__}: "
-                  f"{str(exc)[:80]}); retry {attempt}/{FETCH_RETRIES - 1} in {delay:.0f}s",
+            print(f"  {src.name} read of {key.rsplit('/', 1)[-1][:50]} failed "
+                  f"({type(exc).__name__}: {str(exc)[:80]}); retry "
+                  f"{attempt}/{FETCH_RETRIES - 1} in {delay:.0f}s",
                   file=sys.stderr, flush=True)
             _time.sleep(delay)
             delay *= 2
@@ -1104,7 +1132,7 @@ class VarIndex:
     """Where every step of one variable's global time axis lives on S3."""
 
     canonical: str
-    files: list[S3File]
+    files: list[ArchiveFile]
     file_of_step: np.ndarray      # int32 [n_time], -1 where no file covers it
     local_of_step: np.ndarray     # int32 [n_time], flat valid-time index inside that file
     factor: float = 1.0
@@ -1306,15 +1334,17 @@ def _months_of(axis: np.ndarray) -> list[tuple[int, int]]:
 
 def build_var_index(canonical: str, axis: np.ndarray, missing: str = "error") -> VarIndex:
     """Map every hour of ``axis`` to (file, flat index) for one variable."""
-    source, factor = canonical, 1.0
+    # NB: not named `source` -- that is the module-level function naming the
+    # active archive, used in the error below.
+    src_var, factor = canonical, 1.0
     if canonical in DERIVED_VARS:
-        source, factor = DERIVED_VARS[canonical][0], DERIVED_VARS[canonical][1]
-    if source in UNAVAILABLE_ON_S3:
-        raise KeyError(f"{canonical!r} is not in the NCAR bucket")
-    if source not in NCAR_VARS:
-        raise KeyError(f"no S3 mapping for {canonical!r}; add it to NCAR_VARS")
+        src_var, factor = DERIVED_VARS[canonical][0], DERIVED_VARS[canonical][1]
+    if src_var in UNAVAILABLE_ON_S3:
+        raise KeyError(f"{canonical!r} is not in the NCAR ERA5 archive")
+    if src_var not in NCAR_VARS:
+        raise KeyError(f"no archive mapping for {canonical!r}; add it to NCAR_VARS")
 
-    files = files_for(source, _months_of(axis)) if axis.size else []
+    files = files_for(src_var, _months_of(axis)) if axis.size else []
     file_of = np.full(axis.size, -1, dtype="int32")
     local_of = np.full(axis.size, -1, dtype="int32")
     for fi, f in enumerate(files):
@@ -1329,7 +1359,8 @@ def build_var_index(canonical: str, axis: np.ndarray, missing: str = "error") ->
         gaps = axis[file_of < 0]
         raise FileNotFoundError(
             f"{canonical!r}: {n_missing:,} of {axis.size:,} requested hours have "
-            f"no file in s3://{BUCKET} (first {gaps[0]}, last {gaps[-1]}). The "
+            f"no file in {source().describe()} (first {gaps[0]}, last "
+            f"{gaps[-1]}). The "
             f"bucket lags real time by 3-4 months (forecast groups one month more "
             f"than the analysis groups); set ERA5_S3_MISSING=nan or pass "
             f"missing='nan' to keep going with NaN there."
@@ -1451,17 +1482,18 @@ def open_dataset(
 
     ds = xr.Dataset(data_vars, coords=coords)
     ds.attrs.update({
-        "source": f"s3://{BUCKET} (NSF NCAR ERA5, anonymous), lazy via aws_pipeline.era5_s3",
+        "source": f"{source().describe()}, lazy via aws_pipeline.era5_s3",
         "convention": "ERA5: surface fluxes positive downward",
         "area_north_west_south_east_deg": f"[{north_deg}, {west_deg}, {south_deg}, {east_deg}]",
         "windows": [f"{s}..{e}" for s, e in wins],
     })
     if verbose:
-        print(f"  S3 window : {window.n_lat} lat x {window.n_lon} lon "
+        print(f"  ERA5 from : {source().describe()}")
+        print(f"  window    : {window.n_lat} lat x {window.n_lon} lon "
               f"({north_deg}..{south_deg}N, {west_deg}..{east_deg}E)")
-        print(f"  S3 time   : {axis.size:,} hourly steps in {len(wins)} window(s), "
+        print(f"  time      : {axis.size:,} hourly steps in {len(wins)} window(s), "
               f"{axis[0]} .. {axis[-1]}")
-        print(f"  S3 files  : {n_files} across {len(variables)} variables "
+        print(f"  files     : {n_files} across {len(variables)} variables "
               f"(catalogued in {_time.time() - t_build:.1f} s, nothing read yet; "
               f"{n_workers()} reader threads; chunk cache "
               f"{'at ' + str(CACHE_DIR / 'chunks') if CHUNK_CACHE_ON else 'OFF'})")
@@ -1488,7 +1520,7 @@ def open_land_sea_mask(north_deg: float, west_deg: float, south_deg: float,
         name="lsm",
         attrs={"units": "(0 - 1)", "long_name": "Land-sea mask",
                "standard_name": "land_binary_mask", "GRIB_paramId": f.param_id,
-               "GRIB_shortName": "lsm", "source": f"s3://{f.key}"},
+               "GRIB_shortName": "lsm", "source": f.key},
     )
     return da
 
@@ -1496,20 +1528,49 @@ def open_land_sea_mask(north_deg: float, west_deg: float, south_deg: float,
 # ----------------------------------------------------------------------------
 # Cost estimate
 # ----------------------------------------------------------------------------
-# Compressed bytes per unit (whole-globe chunks for the forecast and
-# pressure-level groups regardless of window size); per analysis tile-day
-# assumes a window covered by <=2 lon tiles.
-BYTES_PER_UNIT = {LAYOUT_ANALYSIS: 1.0e6, LAYOUT_FORECAST: 18e6, LAYOUT_ANALYSIS_PL: 40e6}
+# Measured compressed sizes of ONE HDF5 chunk, per group (2026-09-18):
+#   analysis       27 h x 139 lat x 277 lon tile, 0.2-0.6 MB  -> 0.45 MB mean
+#   forecast       whole globe x 12 forecast hours            -> 18.7 MB
+#   pressure level whole globe x 37 levels, one hour          -> 7.5 MB (clwc)
+#                                                                to 65 MB (u, v)
+CHUNK_BYTES = {LAYOUT_ANALYSIS: 0.45e6, LAYOUT_FORECAST: 18.7e6, LAYOUT_ANALYSIS_PL: 40e6}
+# Chunk extent along the leading (time or initialisation) axis, in valid hours.
+CHUNK_HOURS = {LAYOUT_ANALYSIS: 27, LAYOUT_FORECAST: 12, LAYOUT_ANALYSIS_PL: 1}
 # Laptop link measured 2026-09-18 with concurrent range requests: ~25 MB/s.
 LAPTOP_MB_S = 25.0
+# In-region on EC2 the reads are network-bound at a few hundred MB/s. NOT
+# measured (no AWS account was available): an order-of-magnitude figure for
+# planning, not a promise.
+EC2_MB_S = 500.0
+
+
+def n_spatial_chunks(window: Window, layout: str) -> int:
+    """HDF5 chunks the window spans in (lat, lon) for one leading-axis chunk.
+
+    The forecast and pressure-level groups store one whole-globe slab, so the
+    answer is 1 however small the box. The analysis groups are tiled
+    139 x 277, so a Barrow strip spans 2 tiles and a pan-Arctic band spans 6 --
+    only 3x more, which is why box size is a minor cost term and the
+    whole-globe groups dominate.
+    """
+    if layout != LAYOUT_ANALYSIS:
+        return 1
+    c_lat, c_lon = 139, 277
+    n_lat_tiles = (window.lat_slice.stop - 1) // c_lat - window.lat_slice.start // c_lat + 1
+    tiles = set()
+    for run in window.lon_runs:
+        tiles.update(range(run.start // c_lon, (run.stop - 1) // c_lon + 1))
+    return n_lat_tiles * len(tiles)
 
 
 def estimate_cost(windows: Sequence[tuple], variables: Sequence[str] = SEB_STANDARD,
-                  month_align: bool = True) -> dict:
-    """Rough transfer volume for a request, by variable and in total.
+                  month_align: bool = True, window: Window | None = None) -> dict:
+    """Transfer volume for a request, by variable and in total.
 
-    The window size barely matters for the flux and pressure-level groups
-    (whole-globe chunks), which is the main thing this is here to show.
+    ``window`` (from :func:`make_window`) makes the analysis-group estimate
+    exact in tiles; without it a 2-tile Barrow-width box is assumed. The flux
+    and pressure-level groups are whole-globe chunks, so their cost does not
+    depend on the box at all -- the main thing this is here to show.
     """
     wins = normalise_windows(windows, month_align=month_align)
     n_hours = sum(int((e - s).astype(int)) + 1 for s, e in wins)
@@ -1517,34 +1578,54 @@ def estimate_cost(windows: Sequence[tuple], variables: Sequence[str] = SEB_STAND
     for name in variables:
         src = DERIVED_VARS[name][0] if name in DERIVED_VARS else name
         layout = GROUP_LAYOUT[NCAR_VARS[src].group]
-        units = {LAYOUT_ANALYSIS: n_hours / 24, LAYOUT_FORECAST: n_hours / 12,
-                 LAYOUT_ANALYSIS_PL: n_hours}[layout]
-        b = units * BYTES_PER_UNIT[layout]
-        per_var[name] = {"layout": layout, "bytes": b}
+        n_spatial = n_spatial_chunks(window, layout) if window is not None else (
+            2 if layout == LAYOUT_ANALYSIS else 1)
+        b = (n_hours / CHUNK_HOURS[layout]) * n_spatial * CHUNK_BYTES[layout]
+        per_var[name] = {"layout": layout, "bytes": b, "spatial_chunks": n_spatial}
         total_b += b
     return {"hours": n_hours, "per_variable": per_var, "GB": total_b / 1e9,
-            "laptop_hours": total_b / 1e6 / LAPTOP_MB_S / 3600}
+            "laptop_hours": total_b / 1e6 / LAPTOP_MB_S / 3600,
+            "ec2_hours": total_b / 1e6 / EC2_MB_S / 3600}
 
 
 def describe_cost(windows: Sequence[tuple], variables: Sequence[str] = SEB_STANDARD,
-                  month_align: bool = True) -> str:
-    c = estimate_cost(windows, variables, month_align=month_align)
+                  month_align: bool = True, window: Window | None = None) -> str:
+    c = estimate_cost(windows, variables, month_align=month_align, window=window)
     by_layout: dict[str, float] = {}
     for v in c["per_variable"].values():
         by_layout[v["layout"]] = by_layout.get(v["layout"], 0.0) + v["bytes"]
-    lines = [f"  {c['hours']:,} hourly steps x {len(variables)} variables: ~{c['GB']:.0f} GB "
-             f"from S3 if every variable is read (~{c['laptop_hours']:.1f} h at "
-             f"{LAPTOP_MB_S:.0f} MB/s; minutes in-region on EC2); a second pass is free "
-             f"from the chunk cache"]
+    # The transfer-rate framing only means something for the network source.
+    # Off GLADE the same bytes are a local read, and quoting a laptop link
+    # would misrepresent the cost by two orders of magnitude.
+    try:
+        local = source().name == "glade"
+    except Exception:  # noqa: BLE001 - a cost estimate must not fail on this
+        local = False
+    if local:
+        lines = [f"  {c['hours']:,} hourly steps x {len(variables)} variables: ~{c['GB']:.0f} GB "
+                 f"to read and decompress from GLADE if every variable is read "
+                 f"(~{c['GB'] * 1000 / 250 / 3600:.1f} core-hours of gzip decode at "
+                 f"~250 MB/s per core, threaded across {n_workers()}); a second pass is "
+                 f"free from the chunk cache"]
+    else:
+        lines = [f"  {c['hours']:,} hourly steps x {len(variables)} variables: ~{c['GB']:.0f} GB "
+                 f"from S3 if every variable is read (~{c['laptop_hours']:.1f} h at "
+                 f"{LAPTOP_MB_S:.0f} MB/s from a laptop, ~{c['ec2_hours']:.1f} h in-region on "
+                 f"EC2); a second pass is free from the chunk cache"]
     for k, b in sorted(by_layout.items(), key=lambda kv: -kv[1]):
-        lines.append(f"    {k:<12} {b / 1e9:6.1f} GB")
+        n = next(v["spatial_chunks"] for v in c["per_variable"].values() if v["layout"] == k)
+        lines.append(f"    {k:<12} {b / 1e9:6.1f} GB"
+                     + (f"   ({n} tile(s) per 27 h)" if k == LAYOUT_ANALYSIS
+                        else "   (whole-globe chunks: independent of box size)"))
     return "\n".join(lines)
 
 
 __all__ = [
     "BUCKET", "NCAR_VARS", "DERIVED_VARS", "UNAVAILABLE_ON_S3", "SEB_STANDARD",
     "PRESSURE_LEVEL_VARS", "LEVELS_ALL_HPA", "CACHE_DIR",
+    "ArchiveFile", "source", "set_source", "describe_sources",
     "open_dataset", "open_land_sea_mask", "season_windows", "normalise_windows",
-    "make_window", "estimate_cost", "describe_cost", "list_month", "files_for",
+    "make_window", "estimate_cost", "describe_cost", "n_spatial_chunks",
+    "list_month", "files_for",
     "predicted_times", "shutdown_pool", "n_workers",
 ]

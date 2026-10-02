@@ -119,6 +119,17 @@ DEFAULT_PRESSURE_SUFFIX = "_pressure"
 DEFAULT_WIND_SUFFIX = "_pressure_wind"
 
 
+def _is_remote_storage(args) -> bool:
+    """True for every --storage value aws_pipeline serves (aws/glade/ncar/s3).
+
+    Checked by membership, not equality: "glade" must not fall through to the
+    local-directory glob and fail after the expensive streaming pass.
+    """
+    from seb_analysis_common import AWS_STORAGES
+
+    return getattr(args, "storage", None) in AWS_STORAGES
+
+
 # ----------------------------------------------------------------------------
 # Locating and opening the archives
 # ----------------------------------------------------------------------------
@@ -162,8 +173,8 @@ def open_archive(files: list[str]):
 
 def wind_archive_available(E, data_root=None,
                            wind_suffix: str = DEFAULT_WIND_SUFFIX) -> bool:
-    if getattr(E.args, "storage", None) == "aws":
-        return True          # the bucket holds u and v for every month
+    if _is_remote_storage(E.args):
+        return True          # the archive holds u and v for every month
     d = archive_dir(E, wind_suffix, data_root)
     return d.is_dir() and bool(files_for_times(d, E.times))
 
@@ -213,9 +224,10 @@ def cloud_level_wind(E, data_root=None, pressure_suffix: str = DEFAULT_PRESSURE_
     liquid" figures can be drawn before the download exists.
     """
     n_t, n_y, n_x = E.liq.shape
-    if getattr(E.args, "storage", None) == "aws":
-        # --storage aws: lazy pressure-level datasets from the NCAR bucket over
-        # the run's own hours, same variables/levels as the local archives.
+    if _is_remote_storage(E.args):
+        # A remote archive (GLADE or the AWS mirror): lazy pressure-level
+        # datasets over the run's own hours, same variables and levels as the
+        # local archives would hold.
         from aws_pipeline import s3_storage
 
         ds_c, ds_w = s3_storage.pressure_level_datasets(

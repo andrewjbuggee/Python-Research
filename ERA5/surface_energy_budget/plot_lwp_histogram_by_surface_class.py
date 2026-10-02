@@ -3841,6 +3841,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help=f"mm hr-1 of tp at or above which a scene counts "
                              f"as precipitating (default "
                              f"{DEFAULT_PRECIP_RATE_MAX_MM_HR:g}).")
+    parser.add_argument("--exclude-no-phase", action="store_true",
+                        default=DEFAULT_EXCLUDE_NO_PHASE,
+                        help="Drop the 'no phase' hours -- overcast, but with "
+                             "neither LWP nor IWP above --min-lwp/--min-iwp -- "
+                             "from the ice-only hours of the two-category "
+                             "(liquid containing / ice only) figures. Off by "
+                             "default: they are folded into ice only so the "
+                             "two categories sum to the overcast total. Files "
+                             "drawn with it on carry ' - nophase-excluded'.")
     parser.add_argument("--residual-mode", choices=RESIDUAL_MODES,
                         default=DEFAULT_RESIDUAL_MODE,
                         help="Units of the lower panel on the three "
@@ -4220,11 +4229,72 @@ def _save_stack(fig, A, out_dir, stem, dpi, suffix: str = ""):
     """Write a season-stack figure, matching the naming the other figures use."""
     if out_dir is None:
         return fig
+    suffix += _no_phase_suffix(A)
     path = Path(out_dir) / f"{A.args.region}_{stem}_{A.tag}{suffix}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=dpi or A.args.dpi, bbox_inches="tight")
     print(f"  -> {path}")
     return fig
+
+
+# ----------------------------------------------------------------------------
+# The "no phase" hours in the two-category figures
+# ----------------------------------------------------------------------------
+# An overcast hour (tcc >= --min-cloud-fraction) whose LWP and IWP are BOTH at
+# or below their floors carries no cloud water the phase scheme can classify,
+# and lands in the "none" category. The binary figures (season_phase_binary,
+# monthly_phase_binary) fold it into ICE ONLY by default, so liquid + ice sums
+# to the overcast total. At the ARM cell, 2014/15-2024/25, precipitation
+# filtered, that is 12 hours, 11 of them in Feb-Mar 2020: tcc ~ lcc ~ 1 with
+# tclw and tciw stored as exactly 0 (below the 2^-15 kg m-2 storage quantum,
+# 0.0305 g m-2) -- near-surface cloud ERA5 carries no condensate for.
+#
+# --exclude-no-phase drops them from ice only instead. The clear-sky
+# remainder is unchanged either way: it is computed from the overcast total,
+# so excluded "none" hours do not silently become clear sky.
+DEFAULT_EXCLUDE_NO_PHASE = False
+NO_PHASE_EXCLUDED_SUFFIX = " - nophase-excluded"
+
+
+def no_phase_in_ice(A: Analysis) -> bool:
+    """True when the binary figures fold the "none" hours into ice only.
+
+    Read from ``A.args`` at draw time, so ``A.args.exclude_no_phase = True``
+    switches an already-loaded run without re-reading the archive.
+    """
+    return not bool(getattr(A.args, "exclude_no_phase", DEFAULT_EXCLUDE_NO_PHASE))
+
+
+def _no_phase_suffix(A: Analysis) -> str:
+    """File-name suffix marking a figure drawn with the "none" hours dropped."""
+    return "" if no_phase_in_ice(A) else NO_PHASE_EXCLUDED_SUFFIX
+
+
+def no_phase_hours(A: Analysis, surface_class: str = "arm_site") -> dict:
+    """The "none" hours per season for one series, and whether they are in ice.
+
+    Returns ``{"labels": [...], "hours": (n_season,), "total": float,
+    "in_ice": bool}``. Same normalisation as the bars, so at the ARM cell
+    (one cell, complete seasons) the hours are plain hours.
+    """
+    labels, hours, _cloudy, _sh = season_phase_hours(A)
+    code, _ = resolve_series_code(A.col, surface_class)
+    h = hours[:, code, SEASON_STACK_ORDER.index("none")]
+    return {"labels": labels, "hours": h, "total": float(np.nansum(h)),
+            "in_ice": no_phase_in_ice(A)}
+
+
+def print_no_phase_hours(A: Analysis, surface_class: str = "arm_site") -> dict:
+    """Print the "none" hours per season and where the figures put them."""
+    r = no_phase_hours(A, surface_class)
+    where = ("FOLDED INTO the ice-only bars" if r["in_ice"]
+             else "EXCLUDED from the ice-only bars (--exclude-no-phase)")
+    print(f"'No phase' hours (overcast, LWP and IWP both at or below the floors), "
+          f"{surface_class}: {r['total']:,.0f} h in total -- {where}")
+    for lab, h in zip(r["labels"], r["hours"]):
+        if h > 0:
+            print(f"    {lab}: {h:,.0f} h")
+    return r
 
 
 def season_phase_hours(A: Analysis):
@@ -4415,7 +4485,9 @@ def season_phase_binary(A: Analysis):
     column. Ice-only is unchanged. The small "no phase" residual is folded into
     ice-only rather than dropped, so the two categories still sum to the
     overcast total -- it is overcast time carrying no cloud water above the
-    minimum paths, which no instrument would call liquid.
+    minimum paths, which no instrument would call liquid. ``--exclude-no-phase``
+    (``A.args.exclude_no_phase``) drops it instead; ``clear`` is the
+    non-overcast remainder either way.
 
     Returns ``(labels, liquid, ice, clear, season_h)``, each hours array shaped
     ``(n_season, n_class)``.
@@ -4423,9 +4495,11 @@ def season_phase_binary(A: Analysis):
     labels, hours, cloudy, season_h = season_phase_hours(A)
     i = {p: SEASON_STACK_ORDER.index(p) for p in SEASON_STACK_ORDER}
     liquid = hours[..., i["liquid"]] + hours[..., i["mixed"]]
-    ice = hours[..., i["ice"]] + hours[..., i["none"]]
+    none = hours[..., i["none"]]
+    ice = hours[..., i["ice"]] + (none if no_phase_in_ice(A) else 0.0)
+    # From the overcast total, so dropped "none" hours do not become clear.
     clear = np.clip(np.asarray(season_h, dtype=float)[:, None]
-                    - (liquid + ice), 0.0, None)
+                    - (liquid + hours[..., i["ice"]] + none), 0.0, None)
     return labels, liquid, ice, clear, season_h
 
 
@@ -4904,6 +4978,8 @@ def threshold_box_lines(A: Analysis) -> list[str]:
     else:
         floor = min(pk["liquid_lwp_min_g"], pk["mixed_lwp_min_g"])
         lines.append(f"liquid containing: LWP > {floor:g} g m$^{{-2}}$")
+    if not no_phase_in_ice(A):
+        lines.append("no-phase hours excluded from ice only")
     return lines
 
 
@@ -5268,7 +5344,8 @@ def _write_build_frames(A: Analysis, fig_fn, stem: str, out_dir, dpi,
         for k, (name, fig, bbox) in enumerate(
                 (("obs", fig_obs, bbox_pair), ("both", fig_both, bbox_pair),
                  ("full", fig_full, bbox_full)), 1):
-            path = out / f"{A.args.region}_{stem}_{A.tag} - build{k}-{name}.png"
+            path = out / (f"{A.args.region}_{stem}_{A.tag}{_no_phase_suffix(A)}"
+                          f" - build{k}-{name}.png")
             fig.savefig(path, dpi=dpi or A.args.dpi, bbox_inches=bbox)
             print(f"  -> {path}")
     return fig_obs, fig_both, fig_full
@@ -6106,7 +6183,10 @@ def monthly_phase_binary(A: Analysis, surface_class: str = "arm_site",
     scale = month_h[None, :] if month_h2 is None else month_h2
     i = {p: PHASE_ORDER_ACC.index(p) for p in PHASE_ORDER_ACC}
     liq = (frac[:, :, code, i["liquid"]] + frac[:, :, code, i["mixed"]]) * scale
-    ice = (frac[:, :, code, i["ice"]] + frac[:, :, code, i["none"]]) * scale
+    # "none" folded into ice only unless --exclude-no-phase (see
+    # season_phase_binary).
+    none = frac[:, :, code, i["none"]] if no_phase_in_ice(A) else 0.0
+    ice = (frac[:, :, code, i["ice"]] + none) * scale
     if exclude_months:
         drop, _hit = excluded_month_mask(A.used, col["months"], A.args,
                                          exclude_months)

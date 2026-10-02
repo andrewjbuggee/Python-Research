@@ -1,0 +1,62 @@
+#!/bin/bash -l
+#PBS -N era5_stage
+#PBS -q casper
+#PBS -j oe
+#
+# One stage of the Ocean Visions figure set, via aws_pipeline/run_analysis.py.
+# Not submitted by hand -- submit.sh fills in -A, select, walltime and the
+# -v variables below, because the right size differs per stage.
+#
+# Variables passed with qsub -v:
+#   STAGES   one or more of: lwph dlr extent maps flux thumb, joined by '+'
+#            (e.g. lwph+dlr+thumb) -- PBS -v is comma separated and inconsistent
+#            about embedded spaces
+#   REGION   a name in era5_seb_variables.REGIONS, or box:N,W,S,E
+#   YEARS    season START years, e.g. 2014-2024
+#   SEASON   MM-DD:MM-DD                      (default 10-01:03-31)
+#   OUTDIR   where figures and pickles go
+#   EXTRA    anything else appended to the run_analysis.py command line
+set -euo pipefail
+
+source "$HOME/.era5_casper_env"
+module load conda
+conda activate "${ERA5_CONDA_ENV}"
+
+# Reader threads = the cores this job actually reserved. PBS exports the
+# count; fall back to 8. Charging is cores x walltime, so an oversized
+# ncpus costs real allocation even while idle -- submit.sh sizes it per stage.
+# Reader threads = the cores this job reserved. Also pin the BLAS/OpenMP pools:
+# numpy would otherwise start one thread per PHYSICAL core (34-62 on Casper)
+# inside a job that reserved 4, oversubscribing them.
+export ERA5_WORKERS="${NCPUS:-4}"
+export OMP_NUM_THREADS="${NCPUS:-4}"
+export OPENBLAS_NUM_THREADS="${NCPUS:-4}"
+export MKL_NUM_THREADS="${NCPUS:-4}"
+mkdir -p "$TMPDIR" "$MPLCONFIGDIR" "$OUTDIR"
+STAGES="${STAGES//+/ }"
+YEARS="${YEARS//+/,}"          # submit.sh escapes commas: PBS -v is comma separated
+REGION="${REGION//+/,}"        # e.g. box:82,-175,65,-110
+
+echo "==== $(date -u +%Y-%m-%dT%H:%M:%SZ)  job ${PBS_JOBID:-interactive} ===="
+echo "host      : $(hostname)"
+echo "stages    : ${STAGES}"
+echo "region    : ${REGION}   years ${YEARS}   season ${SEASON:-10-01:03-31}"
+echo "cores     : ${NCPUS:-?}   reader threads ${ERA5_WORKERS}"
+echo "archive   : ${ERA5_GLADE_ROOT:-<auto>}  (ERA5_SOURCE=${ERA5_SOURCE})"
+echo "cache     : ${ERA5_CACHE}"
+echo "out       : ${OUTDIR}"
+python -c "import numpy,xarray,h5py;print(f'  numpy {numpy.__version__}  xarray {xarray.__version__}  h5py {h5py.__version__}')"
+
+cd "$SEB_DIR/aws_pipeline"
+time python run_analysis.py \
+    --storage glade \
+    --region "${REGION}" \
+    --years "${YEARS}" \
+    --season "${SEASON:-10-01:03-31}" \
+    --stages ${STAGES} \
+    --out "${OUTDIR}" \
+    --dpi "${DPI:-350}" \
+    ${FLUX_YEARS:+--flux-years "${FLUX_YEARS//+/,}"} \
+    ${EXTRA:-}
+
+echo "==== done $(date -u +%Y-%m-%dT%H:%M:%SZ) ===="

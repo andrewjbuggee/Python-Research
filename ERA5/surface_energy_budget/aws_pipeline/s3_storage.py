@@ -62,7 +62,19 @@ try:  # imported as aws_pipeline.s3_storage (the normal case)
 except ImportError:  # aws_pipeline/ itself on sys.path
     import era5_s3  # type: ignore[no-redef]
 
+# Storage values that mean "the remote ERA5 archive". They differ only in
+# which SOURCE the bytes come from (aws_pipeline/sources.py):
+#   "aws"   -> auto: GLADE when this machine has it (Casper), else S3. The
+#              notebook therefore needs no edit between laptop and Casper.
+#   "glade" / "ncar" -> force the NCAR GLADE copy; fail loudly if absent.
+#   "s3"    -> force the AWS mirror even on Casper (for a parity check).
 AWS_STORAGE = "aws"
+REMOTE_STORAGES: dict[str, str | None] = {
+    "aws": None,          # None = leave ERA5_SOURCE/auto-detection alone
+    "glade": "glade",
+    "ncar": "glade",
+    "s3": "s3",
+}
 
 # ARM North Slope of Alaska site (Utqiagvik). Same numbers as
 # plot_surface_class_timeseries.SITE_LAT / SITE_LON; duplicated here so this
@@ -223,7 +235,10 @@ class S3DataRoot:
         return S3RegionDir(self, str(region))
 
     def __str__(self) -> str:
-        return f"s3://{era5_s3.BUCKET}"
+        try:
+            return era5_s3.source().describe()
+        except Exception:  # noqa: BLE001 - a printable name must never raise
+            return "the NSF NCAR ERA5 archive"
 
     def __repr__(self) -> str:
         return f"S3DataRoot({self.spec.describe() if self.spec else 'no time spec'})"
@@ -266,7 +281,7 @@ class S3RegionDir:
     def __str__(self) -> str:
         n, w, s, e = self.box
         spec = self.root.spec
-        return (f"s3://{era5_s3.BUCKET} region={self.region} box=[{n}, {w}, {s}, {e}] "
+        return (f"{self.root} region={self.region} box=[{n}, {w}, {s}, {e}] "
                 + (spec.describe() if spec else "(no time window yet)"))
 
     __repr__ = __str__
@@ -286,7 +301,14 @@ def is_s3_root(data_root) -> bool:
 
 
 def is_s3_storage(args) -> bool:
-    return getattr(args, "storage", None) == AWS_STORAGE
+    return getattr(args, "storage", None) in REMOTE_STORAGES
+
+
+def _apply_storage_source(storage: str) -> None:
+    """Pin the byte source implied by a storage value (no-op for ``aws``)."""
+    spec = REMOTE_STORAGES.get(storage)
+    if spec is not None:
+        era5_s3.set_source(spec)
 
 
 # ----------------------------------------------------------------------------
@@ -307,7 +329,8 @@ def resolve_region_dir(args) -> S3RegionDir:
     """
     global _CURRENT_SPEC
     if getattr(args, "data_root", None) is not None:
-        raise ValueError("--data-root has no meaning with --storage aws")
+        raise ValueError(f"--data-root has no meaning with --storage {args.storage}")
+    _apply_storage_source(args.storage)
     spec = TimeSpec.from_args(args)
     if spec is None:
         raise ValueError(
@@ -353,7 +376,7 @@ def load_seb_data(region: str, start=None, end=None, data_root=None, windows=Non
     n, w, s, e = region_box(region)
     wins = _windows_for(data_root, start, end, windows)
     if verbose:
-        print(f"  S3 region : {region} -> box [{n}, {w}, {s}, {e}], {len(wins)} window(s)")
+        print(f"  region    : {region} -> box [{n}, {w}, {s}, {e}], {len(wins)} window(s)")
 
     if suffix == PRESSURE_SUFFIX:
         levels = [float(p) for p in pv.LEVEL_SETS["troposphere"]]
@@ -371,7 +394,8 @@ def load_seb_data(region: str, start=None, end=None, data_root=None, windows=Non
                                   month_align=False, verbose=verbose)
         if verbose:
             _warn_if_site_outside(ds, region)
-            print(era5_s3.describe_cost(wins, era5_s3.SEB_STANDARD, month_align=False))
+            print(era5_s3.describe_cost(wins, era5_s3.SEB_STANDARD, month_align=False,
+                                        window=era5_s3.make_window(n, w, s, e)))
     return ds
 
 
@@ -414,7 +438,7 @@ def pressure_level_datasets(E, pressure_suffix: str = PRESSURE_SUFFIX,
                          verbose=False)[["clwc"]]
     ds_w = load_seb_data(region + wind_suffix, windows=wins, data_root=S3DataRoot(),
                          verbose=False)[["u", "v"]]
-    print(f"  S3 pressure levels: clwc on {ds_c.sizes['pressure_level']} levels, "
+    print(f"  pressure levels: clwc on {ds_c.sizes['pressure_level']} levels, "
           f"u/v on {ds_w.sizes['pressure_level']} levels, {ds_c.sizes['valid_time']:,} hours")
     return ds_c, ds_w
 
@@ -461,7 +485,7 @@ def _warn_if_site_outside(ds, region: str) -> None:
 
 
 __all__ = [
-    "AWS_STORAGE", "S3DataRoot", "S3RegionDir", "TimeSpec", "is_s3_root", "is_s3_storage",
+    "AWS_STORAGE", "REMOTE_STORAGES", "S3DataRoot", "S3RegionDir", "TimeSpec", "is_s3_root", "is_s3_storage",
     "register_region", "region_box", "available_regions", "resolve_data_root",
     "resolve_region_dir", "load_seb_data", "region_time_index", "load_land_sea_mask",
     "pressure_level_datasets", "site_in_domain", "strip_suffixes",

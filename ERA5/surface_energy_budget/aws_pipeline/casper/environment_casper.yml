@@ -1,0 +1,31 @@
+# Private conda environment for Casper, used only when setup_casper.sh runs with
+# ERA5_ENV_MODE=own. The default is NCAR's NPL, which already has everything.
+#
+# Versions follow NCAR's own ERA5/GDEX example environment rather than the
+# laptop's, so behaviour matches what the cluster's other tooling expects:
+# numpy 1.26 (NPL ships 1.x), zarr pinned below 3 in case the GDEX Zarr stores
+# are read later (they are Zarr v2 on disk).
+name: era5-seb
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy>=1.26,<2        # matches NPL; >=2 would defeat the point of this pin
+  - xarray>=2025.1
+  - pandas>=2.2,<3
+  - scipy>=1.14,<1.17
+  - matplotlib>=3.9,<3.11
+  - cartopy>=0.24,<0.26
+  - netcdf4>=1.7,<1.8
+  - h5py>=3.12,<3.15
+  - dask>=2025.1,<2026
+  - zarr<3
+  - openpyxl
+  - scikit-learn
+  - papermill
+  - nbconvert
+  - ipykernel
+  - jupyterlab
+  # only needed if you ever point ERA5_SOURCE at the AWS mirror from Casper
+  - s3fs>=2025.3,<2026
+  - fsspec>=2025.3,<2026

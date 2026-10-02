@@ -91,7 +91,11 @@ def parse_season(text: str) -> tuple[tuple[int, int], tuple[int, int]]:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     src = p.add_argument_group("data source and domain")
-    src.add_argument("--storage", default="aws", choices=["aws", "local", "external"])
+    # "aws" auto-detects the byte source (GLADE on Casper, else the AWS
+    # mirror); "glade"/"ncar" and "s3" force one. Taken from the shared list so
+    # a new storage value cannot be accepted here and rejected downstream.
+    src.add_argument("--storage", default="aws",
+                     choices=sorted(set(list(s3_storage.REMOTE_STORAGES) + ["local", "external"])))
     src.add_argument("--region", default="barrow",
                      help="a name in era5_seb_variables.REGIONS, or box:N,W,S,E")
     src.add_argument("--box", nargs=4, type=float, metavar=("N", "W", "S", "E"),
@@ -173,9 +177,10 @@ def main(argv=None) -> int:
     print(f"  seasons {years[0]}..{years[-1]} ({len(years)}), window "
           f"{season_start[0]:02d}-{season_start[1]:02d} .. {season_end[0]:02d}-{season_end[1]:02d}; "
           f"stages {stages}; block_hours {block_hours}; out {out}")
-    if args.storage == "aws":
-        wins = era5_s3.season_windows(years, season_start, season_end)
-        print(era5_s3.describe_cost(wins))
+    if args.storage in s3_storage.REMOTE_STORAGES:
+        wins = era5_s3.normalise_windows(
+            era5_s3.season_windows(years, season_start, season_end), month_align=False)
+        print(era5_s3.describe_cost(wins, month_align=False, window=win))
     print("=" * 78)
 
     # Import here so --help is instant and a local-only machine without
@@ -245,8 +250,10 @@ def main(argv=None) -> int:
             figure(lwph.fig_monthly_box_era5_vs_obs_build_forOV, A_allsky, out_dir=fig_dir,
                    category="liquid_containing")
             save("A_allsky", A_allsky)
+            # Same threshold the notebook's cell 9 uses for A_sweep
+            # (ICE_FRACTION_MIN_COMPARISON), so the two routes agree.
             A_sweep = lwph.prepare(**common, block_hours=block_hours,
-                                   ice_fraction_min=args.ice_fraction_min,
+                                   ice_fraction_min=args.ice_fraction_min_site,
                                    sweep_lwp_min=0.1, sweep_lwp_max=20.0, sweep_points=21,
                                    sweep_spacing="linear", show_ice_only=False)
             figure(lwph.fig_liquid_retention_by_knob, A_sweep, out_dir=fig_dir)
@@ -273,9 +280,11 @@ def main(argv=None) -> int:
             cse.fig_taylor_hist(E, ev, out_dir=fig_dir)
             E_pl = CL = None
             if args.cloud_level_wind:
+                # Same threshold the notebook uses for E_pl (its
+                # ICE_FRACTION_MIN_COMPARISON), so the two routes agree.
                 E_pl = cse.prepare_extent(**{**common, "years": pl_years}, **precip,
                                           block_hours=block_hours,
-                                          ice_fraction_min=args.ice_fraction_min)
+                                          ice_fraction_min=args.ice_fraction_min_site)
                 CL = clw.cloud_level_wind(E_pl)
                 clw.fig_cloudDuration_andWind_forOV(E, ev, E_pl=E_pl, CL=CL, out_dir=fig_dir)
             clw.fig_cloudDuration_andWind_forOV(E, ev, wind_source="10m", out_dir=fig_dir)
@@ -285,12 +294,16 @@ def main(argv=None) -> int:
             if CL is not None:
                 save("CL", CL, drop=())
         elif stage == "maps":
+            # Same threshold the notebook's cell 19 uses for M_all/M_np
+            # (ICE_FRACTION_MIN_COMPARISON), so --all and --notebook agree.
+            # NB the notebook's cell-4 comment still says figures 5-6 use the
+            # 0.85 "domain" value; its code does not. See the README.
             M_all = mlh.prepare_maps(**common, block_hours=block_hours,
-                                     ice_fraction_min=args.ice_fraction_min)
+                                     ice_fraction_min=args.ice_fraction_min_site)
             runs = [("all sky", M_all)]
             if precip:
                 M_np = mlh.prepare_maps(**common, **precip, block_hours=block_hours,
-                                        ice_fraction_min=args.ice_fraction_min)
+                                        ice_fraction_min=args.ice_fraction_min_site)
                 runs.append(("precipitation filtered", M_np))
                 removed = 1.0 - M_np.counts["cloudy"].sum() / M_all.counts["cloudy"].sum()
                 print(f"\n  the filter removes {100 * removed:.1f}% of overcast cell-hours across the domain")
@@ -311,7 +324,10 @@ def main(argv=None) -> int:
         dt = time.time() - t0
         manifest["stages"][stage] = {"seconds": round(dt, 1)}
         print(f"##### stage {stage} done in {dt / 60:.1f} min #####")
-        (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        # One file per job: with --all the stages run as separate PBS jobs
+        # sharing --out, and a single manifest.json would be overwritten by
+        # whichever finished last.
+        (out / f"manifest_{'_'.join(stages)}.json").write_text(json.dumps(manifest, indent=2))
 
     print(f"\nall stages done in {(time.time() - t_all) / 60:.1f} min; figures in {fig_dir}")
     era5_s3.shutdown_pool()

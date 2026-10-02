@@ -1,0 +1,76 @@
+#!/bin/bash -l
+#PBS -N era5_notebook
+#PBS -q casper
+#PBS -j oe
+#
+# Execute ocean_visions_figures.ipynb unchanged, with the domain and seasons
+# supplied through the OV_* environment variables the notebook now reads.
+# submit.sh fills in -A, select and walltime.
+#
+# qsub -v: REGION YEARS SEASON OUTDIR [PL_REGION] [PL_YEARS] [FLUX_YEARS] [MAP_SEASON]
+set -euo pipefail
+
+source "$HOME/.era5_casper_env"
+module load conda
+conda activate "${ERA5_CONDA_ENV}"
+
+# Reader threads = the cores this job reserved. Also pin the BLAS/OpenMP pools:
+# numpy would otherwise start one thread per PHYSICAL core (34-62 on Casper)
+# inside a job that reserved 4, oversubscribing them.
+export ERA5_WORKERS="${NCPUS:-4}"
+export OMP_NUM_THREADS="${NCPUS:-4}"
+export OPENBLAS_NUM_THREADS="${NCPUS:-4}"
+export MKL_NUM_THREADS="${NCPUS:-4}"
+mkdir -p "$TMPDIR" "$MPLCONFIGDIR" "$OUTDIR"
+
+# --- what the notebook reads (see its cell 4) ------------------------------
+# submit.sh escapes commas as '+' because PBS -v is comma separated.
+YEARS="${YEARS//+/,}"; PL_YEARS="${PL_YEARS//+/,}"; FLUX_YEARS="${FLUX_YEARS//+/,}"
+REGION="${REGION//+/,}"; PL_REGION="${PL_REGION//+/,}"
+
+export OV_REPO_ROOT="$REPO_ROOT"          # the tree has no .git after an rsync
+export OV_STORAGE=aws                     # "aws" = the remote archive; ERA5_SOURCE
+                                          # pins it to GLADE, so nothing leaves the cluster
+export OV_REGION="${REGION}"
+export OV_YEARS="${YEARS}"
+export OV_SEASON_START="${SEASON_START:-10-01}"
+export OV_SEASON_END="${SEASON_END:-03-31}"
+export OV_SAVE_DIR="${OUTDIR}/figures"
+export OV_DPI="${DPI:-350}"
+# Figure 4's cloud-level wind is a single-cell diagnostic at the ARM site but
+# allocates full-domain arrays, so keep it on the Barrow box even when the rest
+# of the notebook runs pan-Arctic.
+export OV_PL_REGION="${PL_REGION:-barrow}"
+export OV_PL_YEARS="${PL_YEARS:-2024,2025}"
+export OV_FLUX_YEARS="${FLUX_YEARS:-2014-2025}"
+export OV_MAP_SEASON="${MAP_SEASON:-2024}"
+# Keep the streaming footprint at the Barrow scale the module defaults were
+# sized for: 720 h x 136,800 cells x 8 B is 788 MB per float64 temporary, and
+# the sweep pass holds dozens of them.
+export OV_BLOCK_HOURS="${BLOCK_HOURS:-}"
+
+NB="$REPO_ROOT/Presentations_and_papers/Ocean_Visions/ocean_visions_figures.ipynb"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT_NB="${OUTDIR}/ocean_visions_${REGION}_${STAMP}.ipynb"
+
+echo "==== $(date -u +%Y-%m-%dT%H:%M:%SZ)  job ${PBS_JOBID:-interactive} ===="
+echo "notebook  : $NB"
+echo "region    : ${OV_REGION}   years ${OV_YEARS}   PL region ${OV_PL_REGION}"
+echo "cores     : ${NCPUS:-?}    archive ${ERA5_GLADE_ROOT:-<auto>}"
+echo "executed  : $OUT_NB"
+echo "figures   : $OV_SAVE_DIR"
+
+# An EMPTY JUPYTER_CONFIG_DIR: a stale nbextensions config in the user config
+# breaks nbconvert with ModuleNotFoundError before the first cell runs.
+export JUPYTER_CONFIG_DIR="${TMPDIR}/jupyter_empty"
+mkdir -p "$JUPYTER_CONFIG_DIR"
+
+cd "$(dirname "$NB")"
+if python -c "import papermill" 2>/dev/null; then
+    time papermill "$NB" "$OUT_NB" --log-output --no-progress-bar
+else
+    time python -m nbconvert --to notebook --execute "$NB" \
+        --output "$(basename "$OUT_NB")" --output-dir "$OUTDIR" \
+        --ExecutePreprocessor.timeout=-1
+fi
+echo "==== done $(date -u +%Y-%m-%dT%H:%M:%SZ) ===="

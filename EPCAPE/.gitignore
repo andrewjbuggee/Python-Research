@@ -1,0 +1,12 @@
+# downloaded and processed data (recreate with download_arm.py / combine_product.py)
+data/
+*.part
+
+# never commit credentials
+.arm_credentials
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store

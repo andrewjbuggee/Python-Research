@@ -53,6 +53,10 @@ DEFAULT_STORAGE = "local"
 # Imported lazily so local runs never touch s3fs; the branches below are the
 # ONLY places the analysis side knows the bucket exists.
 AWS_STORAGE = "aws"
+# Every storage value served by aws_pipeline: "aws" auto-detects the byte
+# source (NCAR GLADE when present, else the AWS mirror); "glade"/"ncar" and
+# "s3" force one. See aws_pipeline/sources.py.
+AWS_STORAGES = ("aws", "glade", "ncar", "s3")
 
 
 def _aws():
@@ -162,14 +166,16 @@ def add_data_source_args(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("data source")
     group.add_argument(
         "--storage",
-        choices=sorted(STORAGE_ROOTS) + [AWS_STORAGE],
+        choices=sorted(STORAGE_ROOTS) + list(AWS_STORAGES),
         default=DEFAULT_STORAGE,
         help=(
             "Where to read from. 'local' is the data/ directory beside these "
             "scripts; 'external' is EXTERNAL_ROOT in download_era5_seb.py. These "
             "are the same two roots the downloader writes to. 'aws' reads the "
-            "public NSF NCAR ERA5 bucket directly (aws_pipeline/) for any region "
-            "box; it needs --years with a season, or --start/--end, to bound the "
+            "remote NSF NCAR ERA5 archive (aws_pipeline/) for any region box -- "
+            "from GLADE when this machine has it (Casper), else the public AWS "
+            "mirror; 'glade'/'ncar' and 's3' force one of those. The remote "
+            "sources need --years with a season, or --start/--end, to bound the "
             f"request. (default: {DEFAULT_STORAGE})"
         ),
     )
@@ -199,7 +205,7 @@ def resolve_data_root(storage: str = DEFAULT_STORAGE, data_root: Path | None = N
     """
     if data_root is not None:
         return Path(data_root).expanduser().resolve()
-    if storage == AWS_STORAGE:
+    if storage in AWS_STORAGES:
         return _aws().resolve_data_root()
     root = STORAGE_ROOTS[storage]
     if storage == "external":
@@ -214,7 +220,7 @@ def resolve_region_dir(args: argparse.Namespace) -> Path:
     disk for something that was downloaded to the external drive is the obvious
     mistake this option introduces.
     """
-    if args.storage == AWS_STORAGE:
+    if args.storage in AWS_STORAGES:
         # Validates the region and derives the time window from args; the
         # window rides on the returned object's .parent into load_seb_data.
         return _aws().resolve_region_dir(args)

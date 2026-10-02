@@ -1,10 +1,18 @@
-# ERA5 from the NCAR S3 bucket — `--storage aws`
+# ERA5 from the remote archive — `--storage aws`
 
 The same analysis code, the same `prepare()` calls, the same notebook — with the
-data read on demand from the public NSF NCAR ERA5 mirror on AWS instead of
-`data/<region>/`. Nothing in the analysis modules is duplicated; the only change
-outside this directory is one `if storage == "aws"` branch in each of the three
-functions every `prepare()` already calls.
+data read on demand from the NSF NCAR ERA5 archive instead of `data/<region>/`.
+Nothing in the analysis modules is duplicated; the only change outside this
+directory is one `if storage == "aws"` branch in each of the three functions
+every `prepare()` already calls.
+
+**Two places hold that archive, and this reads either.** On a laptop it streams
+from the public AWS mirror (`s3://nsf-ncar-era5`, anonymous, no account). On
+NCAR's Casper it reads the same files off GLADE local disk
+(`/gdex/data/d633000`, the dataset formerly called `ds633.0`). The layout and
+file names are identical, so one reader serves both and the choice is
+automatic — see [`sources.py`](sources.py) and [`casper/`](casper/README.md).
+Verified bit-identical between the two on all four file layouts.
 
 ```python
 import plot_lwp_histogram_by_surface_class as lwph
@@ -41,6 +49,8 @@ required rather than defaulted.
 | `run_analysis.py` | Batch driver: the Ocean Visions figure set (stages `lwph dlr extent maps flux thumb`) for any box/season/storage, saving figures and pickled reduced results. Identical invocation on the laptop and on EC2. |
 | `verify_against_local.py` | `variables`: cell-by-cell comparison of every variable against `data/<region>/`; `analysis`: `lwph.prepare` local vs aws for a season. |
 | `quickstart_aws.ipynb` | A short notebook: open the bucket, look at a window, run one figure, estimate a job. |
+| `sources.py` | Where the bytes come from: `S3Source` (AWS mirror) or `GladeSource` (NCAR GLADE). `ERA5_SOURCE=auto\|glade\|s3` selects; `auto` uses GLADE when present. `describe_sources()` reports what a machine can reach. |
+| `casper/` | **NSF NCAR Casper**: `preflight.py`, `setup_casper.sh`, `submit.sh`, the PBS job scripts, rsync both ways. See its README. |
 | `remote/` | EC2 (us-west-2): `launch_instance.sh`, `bootstrap.sh`, `sync_code.sh`, `run_job.sh`, `fetch_results.sh`, `jupyter_tunnel.sh`, `instance.sh`, `environment.yml`. |
 
 Hooks outside this directory (each a few lines, inert unless `storage == "aws"`):
@@ -209,10 +219,29 @@ instance type before a long job.
 
 | variable | default | meaning |
 |---|---|---|
+| `ERA5_SOURCE` | `auto` | `glade`, `s3`/`aws`, or `auto` (GLADE if this machine has it) |
+| `ERA5_GLADE_ROOT` | autodetected | overrides the ds633.0/d633000 path on GLADE |
+| `ERA5_MISSING` / `ERA5_S3_MISSING` | `error` | `nan` to continue past hours the archive lacks |
 | `ERA5_S3_CACHE` | `~/.cache/era5_s3` | listings, per-file metadata, chunk cache |
 | `ERA5_S3_CHUNK_CACHE` | `on` | `off` disables the decoded-chunk cache |
 | `ERA5_S3_WORKERS` | min(8, CPUs) | concurrent fetch+decode threads |
 | `ERA5_S3_DEBUG` | unset | `1` prints one line per read (bytes, seconds, cache hits) |
+
+## Running it at NCAR
+
+On Casper the archive is on local disk, so there is no transfer cost at all —
+only compute, which is what a **Data Analysis allocation** pays for. The whole
+Casper pipeline (preflight, environment setup, PBS jobs sized per stage, and a
+runner for the notebook itself) is in [`casper/`](casper/README.md).
+
+Two facts shape it: Casper charges **wall-clock × cores requested** with no
+memory charge, and the wall-clock ceiling is **24 hours**. A complete
+pan-Arctic 11-season pass of the notebook is ~34 CPU-hours, so `submit.sh --all`
+splits it into four right-sized jobs rather than one that would time out.
+
+The notebook takes its domain and seasons from `OV_*` environment variables
+(defaults unchanged), so the identical file runs on the laptop over Barrow and
+on Casper over the Arctic Circle.
 
 ## Relation to `era5_aws.py`
 
