@@ -178,6 +178,13 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
     site_mask, site_lat, site_lon = site_cell_mask(ds)
     n_day, n_slot, n_cat = dates.size, len(SLOT_NAMES), len(CATS)
     counts = np.zeros((n_day, n_slot, n_cat), dtype=np.int64)
+    # The same counts PER HOUR, for per-time-step normalisations (the number
+    # of cells in an ocean class changes every hour). int32 is ample: one hour
+    # holds at most 41 x 61 = 2,501 cells. ~6 MB for eleven seasons.
+    n_kept = int(use_step.sum())
+    hourly = np.zeros((n_kept, n_slot, n_cat), dtype=np.int32)
+    kept_idx_of_step = np.cumsum(use_step) - 1        # step -> row of `hourly`
+    hour_time = times[use_step]
     n_unclassified = 0
 
     # Output slot of each module class code. Unclassified cells go to a
@@ -197,6 +204,8 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
         if not keep.any():
             continue
         day = day_of_step[sl][keep]                              # (t,)
+        rows = kept_idx_of_step[sl][keep]                        # (t,) rows of hourly
+        n_t = rows.size
 
         # --- surface class of every cell-hour ------------------------------
         classes = classify_cells(lsm, block["siconc"].values, args.lsm_tol,
@@ -238,11 +247,25 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
             # UTQ: the one site cell, added on top of its class slot.
             counts[:, I_UTQ, ci] += np.bincount(
                 day[m[:, site_mask][:, 0]], minlength=n_day)
+            # Per hour: the same bincount with the hour, not the day, as the
+            # leading index.
+            flat_h = (np.arange(n_t)[:, None, None] * (n_slot + 1) + slot).ravel()
+            ch = np.bincount(flat_h[m.ravel()], minlength=n_t * (n_slot + 1))
+            hourly[rows, :, ci] = ch.reshape(n_t, n_slot + 1)[:, :n_slot]
+            hourly[rows, I_UTQ, ci] = m[:, site_mask][:, 0]
 
     if n_unclassified:
         print(f"  !! {n_unclassified:,} unclassified cell-hours (not in any class)")
     months = dates.astype("datetime64[M]").astype(int) % 12 + 1
-    return {"counts": counts, "dates": dates, "day_season": day_season,
+    # The daily table must be exactly the hourly one summed by day.
+    hour_day = day_of_step[use_step]
+    daily_from_hourly = np.zeros_like(counts)
+    np.add.at(daily_from_hourly, hour_day, hourly.astype(np.int64))
+    if not np.array_equal(daily_from_hourly, counts):
+        raise AssertionError("hourly counts do not sum to the daily counts")
+    return {"counts": counts, "hourly": hourly, "hour_day": hour_day,
+            "hour_time": hour_time,
+            "dates": dates, "day_season": day_season,
             "day_month": months, "seasons": list(used),
             "keep_idx": list(keep_idx), "n_unclassified": n_unclassified,
             "site_lat": site_lat, "site_lon": site_lon,
