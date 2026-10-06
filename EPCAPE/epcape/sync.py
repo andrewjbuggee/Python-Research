@@ -55,15 +55,42 @@ def netcdf_variables(path: Path) -> Dict[str, Tuple[str, ...]]:
         return {name: tuple(var.dimensions) for name, var in nc.variables.items()}
 
 
-def resolve_variables(requested: Sequence[str], available: Dict[str, Tuple[str, ...]]) -> List[str]:
-    """The requested variables plus, where they exist: time/location support
-    variables, each variable's qc_ companion, and coordinate variables."""
-    missing = [v for v in requested if v not in available]
-    if missing:
+def match_variables(requested: Sequence[str], available: Dict[str, Tuple[str, ...]],
+                    *, required: bool = True) -> List[str]:
+    """The names in `available` that `requested` refers to.
+
+    An exact match wins; otherwise a unique case-insensitive match is accepted,
+    because ARM documentation tables sometimes capitalise names differently from
+    the files (e.g. "Lwp" in a table for the variable "lwp"). With required=True a
+    name with no match raises ValueError; with required=False it is skipped."""
+    by_lower: Dict[str, List[str]] = {}
+    for name in available:
+        by_lower.setdefault(name.lower(), []).append(name)
+    matched: List[str] = []
+    missing: List[str] = []
+    for name in requested:
+        if name in available:
+            matched.append(name)
+        elif len(by_lower.get(name.lower(), [])) == 1:
+            matched.append(by_lower[name.lower()][0])
+        else:
+            missing.append(name)
+    if missing and required:
         raise ValueError(
             f"Not in this datastream: {', '.join(missing)}.\n"
             f"Available variables: {', '.join(sorted(available))}"
         )
+    return matched
+
+
+def resolve_variables(requested: Sequence[str], available: Dict[str, Tuple[str, ...]],
+                      optional: Sequence[str] = ()) -> List[str]:
+    """The requested variables plus, where they exist: `optional` variables,
+    time/location support variables, each variable's qc_ companion, and
+    coordinate variables. A requested variable that does not exist is an error;
+    an optional one that does not exist is skipped."""
+    names = match_variables(requested, available, required=True)
+    names += [n for n in match_variables(optional, available, required=False) if n not in names]
     chosen: List[str] = []
 
     def add(name: str) -> None:
@@ -72,7 +99,7 @@ def resolve_variables(requested: Sequence[str], available: Dict[str, Tuple[str, 
 
     for name in SUPPORT_VARIABLES:
         add(name)
-    for name in requested:
+    for name in names:
         add(name)
         add(f"qc_{name}")
         for dim in available[name]:
@@ -107,7 +134,9 @@ def sync_product(
     # Read the variable list from one complete file before asking the server
     # for hundreds of subsets, so a misspelled variable fails once, up front.
     probe, full_bytes = _probe(client, machine, product.datastream, names, log)
-    variables = resolve_variables(product.variables, netcdf_variables(probe))
+    probe_vars = netcdf_variables(probe)
+    variables = resolve_variables(product.variables, probe_vars, product.optional_variables)
+    core = match_variables(product.variables, probe_vars)  # names as spelled in the files
     log(f"Variables requested from ARM's server: {', '.join(variables)}")
 
     manifest = _load_manifest(dest)
@@ -121,7 +150,7 @@ def sync_product(
     manifest["citation"] = citation(product.datastream, start, end) or manifest.get("citation")
 
     result = _download_all(client, names, dest, variables, overwrite, workers, manifest, start, end, log,
-                           core=product.variables, full_dir=machine.full_dir(product.datastream))
+                           core=core, full_dir=machine.full_dir(product.datastream))
     result.full_file_bytes = full_bytes
     return result
 

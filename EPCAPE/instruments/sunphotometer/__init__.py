@@ -1,0 +1,1 @@
+"""Cimel sunphotometer (CSPHOT) products."""

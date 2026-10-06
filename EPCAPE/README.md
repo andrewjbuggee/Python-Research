@@ -122,6 +122,61 @@ cite each datastream's DOI.
 - Files that ARM Live can't serve are listed at the end. Those have to be
   ordered through ARM Data Discovery.
 
+## Analysis code layout
+
+Downloading and combining (above) is shared infrastructure in `epcape/`.
+Science code is organised so it is easy to find later:
+
+```
+epcape/                       shared: config, download, combine, plus
+  products.py                   load_product(): one Dataset per product (builds the combined file if needed)
+  qc.py                         decode ARM qc_ bit fields into "bad sample" masks
+  units.py, stats.py            unit conversion from file attributes; paired-comparison statistics
+  filters.py, plotting.py       named-criteria filter "funnels"; fixed instrument colours and figure style
+  derived.py                    save_derived(): MATLAB-ready netCDF with settings + git commit in attributes
+instruments/<instrument>/     products that come from ONE instrument
+  mfrsr/mfrsrcldod.py           MFRSRCLDOD tau and r_e (load, standardize, selection criteria)
+  sunphotometer/sphotcod.py     SPHOTCOD tau, r_e, LWP
+  mwr/mwrlos.py                 MWRLOS LWP and PWV
+  */plots.py                    one-day quicklooks
+variables/<variable>/         products that estimate ONE variable from SEVERAL instruments (none yet)
+comparisons/<topic>/          analyses that set several products side by side
+  cloud_optical_properties/     MFRSR vs sunphotometer vs MWR: tau, r_e, LWP
+    compare_cloud_optical_properties.ipynb   <- start here
+```
+
+Rules the code follows:
+
+- Notebooks never read daily ARM files directly; they call
+  `load_product`, so the same notebook runs on a laptop (downloaded files),
+  on ARM JupyterHub/Cumulus (`EPCAPE_MACHINE=arm_jupyterhub`, archive read in
+  place), or on the UCSD cluster.
+- Each instrument module documents its retrieval assumptions with
+  citations, and returns its selection criteria as named masks. The
+  notebook prints how many samples each criterion removes.
+- Derived files go to `<data folder>/processed/derived/` with every setting
+  recorded in their attributes. They are not in git, so back them up;
+  everything else can be re-downloaded.
+
+The three cloud-property products in `config.yaml` are `cod_mfrsr_M1`,
+`cod_sphot_M1` and `lwp_mwr_M1`. Their ancillary fields are listed under
+`optional_variables` (kept when present), because their exact names could not
+be checked against an EPCAPE file when the products were added. Variable
+names are matched case-insensitively.
+
+**ARM orders delivered as symbolic links.** An order staged for ARM's own
+computing contains symlinks into `/data/archive/...`. These resolve on ARM
+JupyterHub/Cumulus and nowhere else. On a laptop such a folder looks full in
+Finder but holds no data (`ls -l` shows `->`). Use `download_arm.py` (or a
+standard Data Discovery download) to get real files.
+
+To test the analysis without real data:
+
+```bash
+python tests/synthetic_cloud_vaps.py /tmp/epcape_synth
+EPCAPE_DATA_ROOT=/tmp/epcape_synth jupyter lab comparisons/cloud_optical_properties/
+```
+
 ## Tests
 
 ```bash
@@ -132,4 +187,5 @@ The tests run offline against a mock ARM Live server with synthetic files that
 follow ARM's `ceil.b1` data object design. They cover subsetting, resume,
 retries on busy servers and dropped connections, wrong tokens, unavailable
 files, a mid-campaign variable change, a mounted-archive mode, and the MATLAB
-view of the output.
+view of the output. `tests/test_cloud_products.py` covers the analysis layer
+(QC decoding, units, window statistics, an end-to-end run on synthetic files).

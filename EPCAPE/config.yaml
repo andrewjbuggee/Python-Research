@@ -52,3 +52,38 @@ products:
     description: Ceilometer cloud-base heights, Mt. Soledad (S2)
     datastream: epcceilS2.b1
     variables: [first_cbh, second_cbh, third_cbh, detection_status, status_flag, vertical_visibility]
+
+  # ---- Cloud optical properties at the Scripps Pier (M1) -------------------
+  # `variables` must exist in every file (a misspelling stops the download
+  # before any bulk transfer and lists what exists). `optional_variables` are
+  # kept when present and skipped otherwise: ancillary fields whose exact
+  # names or presence vary between VAP versions and could not be checked
+  # against an EPCAPE file when this was written. Names are matched
+  # case-insensitively.
+
+  cod_mfrsr_M1:
+    description: Cloud optical depth and effective radius from the MFRSR (MFRSRCLDOD, Min & Harrison 1996), Scripps Pier (M1)
+    datastream: epcmfrsrcldod1minM1.c1
+    # DOE/SC-ARM-TR-047 (Turner et al. 2021), Table 2
+    variables: [optical_depth_instantaneous, optical_depth_average,
+                effective_radius_instantaneous, effective_radius_average]
+    optional_variables: [cldtaui_toterror, cldtaua_toterror, reffi_toterror, reffa_toterror,
+                         cosine_solar_zenith_angle, lwp, lwp_source, lwp_uncertainty,
+                         cloudfraction, cloudbasebestestimate, ir_temp, surface_albedo, pwv]
+
+  cod_sphot_M1:
+    description: Cloud optical depth, effective radius and LWP from the Cimel sunphotometer cloud mode (SPHOTCOD, Chiu et al. 2012), Scripps Pier (M1)
+    datastream: epcsphotcod2chiuM1.c1
+    # DOE/SC-ARM-TR-317 (Ma et al. 2025), Table 4
+    variables: [cloud_optical_depth, effective_radius, liquid_water_path]
+    optional_variables: [cloud_optical_depth_std, effective_radius_std, liquid_water_path_std,
+                         number_of_solutions, retrieval_flag, solar_zenith_angle,
+                         modis_white_sky_albedo, modis_wavelength,
+                         radiance_0440, radiance_0870, radiance_1640]
+
+  lwp_mwr_M1:
+    description: Liquid water path and water vapour along the line of sight from the 2-channel microwave radiometer (MWRLOS), Scripps Pier (M1)
+    datastream: epcmwrlosM1.b1
+    # DOE/SC-ARM-TR-016 (Morris 2019), Tables 1, 3 and 4
+    variables: [liq, vap]
+    optional_variables: [tbsky23, tbsky31, wet_window, sky_ir_temp, actel, actaz]

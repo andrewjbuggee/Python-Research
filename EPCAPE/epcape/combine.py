@@ -159,7 +159,7 @@ def combine_product(
     for f in files:
         for name, dims in netcdf_variables(f).items():
             available.setdefault(name, dims)
-    variables = resolve_variables(product.variables, available)
+    variables = resolve_variables(product.variables, available, product.optional_variables)
     manifest = {}
     if (directory / MANIFEST).is_file():
         try:

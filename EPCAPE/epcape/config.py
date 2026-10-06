@@ -102,6 +102,9 @@ class Product:
     datastream: str
     variables: List[str] = field(default_factory=list)
     description: str = ""
+    # Kept when the datastream has them, skipped silently when it does not
+    # (ancillary fields whose names or presence vary between VAP versions).
+    optional_variables: List[str] = field(default_factory=list)
 
 
 def get_product(name: str, cfg: Optional[dict] = None) -> Product:
@@ -120,4 +123,5 @@ def get_product(name: str, cfg: Optional[dict] = None) -> Product:
         datastream=str(p["datastream"]).strip(),
         variables=[str(v).strip() for v in (p.get("variables") or [])],
         description=str(p.get("description", "")),
+        optional_variables=[str(v).strip() for v in (p.get("optional_variables") or [])],
     )

@@ -10,3 +10,5 @@ dependencies:
   - requests
   - pyyaml
   - pytest
+  - matplotlib     # figures in instruments/ and comparisons/
+  - ipykernel      # run the analysis notebooks in this environment
