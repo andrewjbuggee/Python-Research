@@ -1,6 +1,10 @@
-# downloaded and processed data (recreate with download_arm.py / combine_product.py)
+# downloaded and processed data (recreate with download_data/download_arm.py and
+# download_data/combine_product.py, or comparisons/seasonal_averages/download_data.py)
 data/
 *.part
+
+# collaborators' files (Kavin's data for the BAMS overview paper); not ours to version
+Kavin_data_for_BAMS_paper/
 
 # never commit credentials
 .arm_credentials

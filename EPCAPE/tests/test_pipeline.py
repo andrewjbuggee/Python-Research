@@ -16,11 +16,11 @@ import pytest
 import xarray as xr
 
 from conftest import END, REPO, START, TOKEN, USER
-from EPCAPE.armlive import ArmLiveClient, ArmLiveError
-from EPCAPE.combine import combine_product
-from EPCAPE.config import Machine, Product, active_machine
-from EPCAPE.credentials import get_credentials
-from EPCAPE.sync import sync_datastream, sync_product
+from EPCAPE.download_data.armlive import ArmLiveClient, ArmLiveError
+from EPCAPE.download_data.combine import combine_product
+from EPCAPE.download_data.config import Machine, Product, active_machine
+from EPCAPE.download_data.credentials import get_credentials
+from EPCAPE.download_data.sync import sync_datastream, sync_product
 
 VARS = ["first_cbh", "second_cbh", "third_cbh", "detection_status", "status_flag", "vertical_visibility"]
 PRODUCT = Product("cbh_test", "epcceilM1.b1", VARS, "test cloud-base heights")
@@ -313,19 +313,19 @@ def test_command_line_end_to_end(env, server):
     def run(*args):
         return subprocess.run([sys.executable, *args], cwd=REPO, env=run_env, capture_output=True, text=True, timeout=300)
 
-    listing = run("download_arm.py", "--list")
+    listing = run("download_data/download_arm.py", "--list")
     assert listing.returncode == 0 and "cbh_ceil_M1" in listing.stdout and "cbh_ceil_S2" in listing.stdout
 
-    dry = run("download_arm.py", "cbh_ceil_M1", "--start", str(START), "--end", str(END), "--dry-run")
+    dry = run("download_data/download_arm.py", "cbh_ceil_M1", "--start", str(START), "--end", str(END), "--dry-run")
     assert dry.returncode == 0 and f"lists {N_FILES}" in dry.stdout
 
-    down = run("download_arm.py", "cbh_ceil_M1", "--start", str(START), "--end", str(END), "--workers", "3")
+    down = run("download_data/download_arm.py", "cbh_ceil_M1", "--start", str(START), "--end", str(END), "--workers", "3")
     assert down.returncode == 0, down.stdout + down.stderr
-    assert f"Done: {N_FILES} downloaded" in down.stdout and "combine_product.py cbh_ceil_M1" in down.stdout
+    assert f"Done: {N_FILES} downloaded" in down.stdout and "download_data/combine_product.py cbh_ceil_M1" in down.stdout
 
-    comb = run("combine_product.py", "cbh_ceil_M1", "--start", str(START), "--end", str(END))
+    comb = run("download_data/combine_product.py", "cbh_ceil_M1", "--start", str(START), "--end", str(END))
     assert comb.returncode == 0, comb.stdout + comb.stderr
     assert "Wrote" in comb.stdout and (env / "data" / "processed" / "cbh_ceil_M1_20230215_20230224.nc").is_file()
 
-    missing = run("combine_product.py", "cbh_ceil_S2", "--start", str(START), "--end", str(END))
-    assert missing.returncode == 2 and "python download_arm.py cbh_ceil_S2" in missing.stderr
+    missing = run("download_data/combine_product.py", "cbh_ceil_S2", "--start", str(START), "--end", str(END))
+    assert missing.returncode == 2 and "python download_data/download_arm.py cbh_ceil_S2" in missing.stderr

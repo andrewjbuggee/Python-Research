@@ -8,7 +8,7 @@ dict describing what was kept. Units are in the names (``_m``, ``_gm2``,
 Quality control
 ---------------
 Every ARM variable that has a ``qc_<var>`` companion is screened with
-``EPCAPE.qc.qc_is_zero``: a sample is kept only if its QC value is exactly 0,
+``EPCAPE.analysis_tools.qc.qc_is_zero``: a sample is kept only if its QC value is exactly 0,
 i.e. it passed every test, including those ARM assesses as "Indeterminate".
 Variables without a QC field are used as distributed; the notebook prints
 which ones those are (``qc_report``).
@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from EPCAPE import qc, units
+from EPCAPE.analysis_tools import qc, units
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ the pipeline recovers them:
   * a 40-minute rain/wet-window event corrupts the MWR on one day
 
 Usage:  python tests/synthetic_cloud_vaps.py <data_root> [--start 2023-07-01] [--days 6] [--seed 7]
-Files go to <data_root>/arm/<datastream>/, where epcape.combine looks for
+Files go to <data_root>/arm/<datastream>/, where EPCAPE.download_data.combine looks for
 complete files.
 """
 
@@ -393,8 +393,21 @@ def write_day(
     tau_s = (tau_ts * 1.15 * (1 + rng.normal(0, 0.08, off_s.size))).astype("f4")
     re_s = (re_ts + rng.normal(0, 2.5, off_s.size)).astype("f4")
     lwp_s = ((2.0 / 3.0) * tau_s * re_s).astype("f4")
-    flag = np.where(rng.random(off_s.size) < 0.1, 1, 0).astype("i4")
-    nsol = np.where(flag == 0, rng.integers(3, 6, off_s.size), 0).astype("i4")
+    # Real EPCAPE structure (checked 2026-10-06): retrievals have a `gain` dimension
+    # (0 = A aureole gain, 1 = K sky gain, 2 = mean of A and K) and retrieval_flag
+    # is a bit-packed ARM QC field. A is made noisier than K, as in the real data.
+    n = off_s.size
+    tau_A = tau_s * (1 + rng.normal(0, 0.06, n))
+    tau_K = tau_s * (1 + rng.normal(0, 0.02, n))
+    tau_g = np.stack([tau_A, tau_K, 0.5 * (tau_A + tau_K)], axis=1).astype("f4")
+    re_g = np.stack([re_s * (1 + rng.normal(0, 0.06, n)), re_s * (1 + rng.normal(0, 0.02, n)), re_s], axis=1)
+    re_g = re_g.astype("f4")
+    lwp_g = ((2.0 / 3.0) * tau_g * re_g).astype("f4")
+    # bit 5 (16): spectral-signature test, 40% of samples; bit 6 (32): < 15 solutions, 10%
+    u = rng.random((n, 3))
+    flag = np.where(u < 0.40, 16, np.where(u < 0.50, 32, 0)).astype("i4")
+    nsol = np.where(flag & 32, 10, 40).astype("i4")
+    tau_s, re_s, lwp_s = tau_g, re_g, lwp_g
     ds = root / "arm" / "epcsphotcod2chiuM1.c1"
     ds.mkdir(parents=True, exist_ok=True)
     first = start + dt.timedelta(seconds=float(off_s[0])) if off_s.size else start
@@ -411,6 +424,7 @@ def write_day(
         )
         nc.createDimension("time", None)
         nc.createDimension("modis_channel", 7)
+        nc.createDimension("gain", 3)
         offsets = off_s - (first - start).total_seconds()
         _time_vars(nc, first, offsets)
         _var(
@@ -430,12 +444,26 @@ def write_day(
             units="nm",
             long_name="Central wavelength of modis_channel",
         )
-        alb = np.tile(np.array([0.05, 0.12, 0.04, 0.05, 0.10, 0.07, 0.04], "f4"), (off_s.size, 1))
+        _var(
+            nc,
+            "gain",
+            "i4",
+            ("gain",),
+            [0, 1, 2],
+            long_name="Coordinate variable for gain",
+            units="1",
+            flag_values=np.array([0, 1, 2], "i4"),
+            flag_meanings="A_(Aureole_Gain) K_(Sky_Gain) Mean_of_A_and_K",
+        )
+        # one albedo set per daily file (no time dimension), changing from day to day
+        alb = (np.array([0.05, 0.20, 0.04, 0.05, 0.10, 0.07, 0.04], "f4") * (1 + 0.1 * day_index)).astype(
+            "f4"
+        )
         _var(
             nc,
             "modis_white_sky_albedo",
             "f4",
-            ("time", "modis_channel"),
+            ("modis_channel",),
             alb,
             units="unitless",
             long_name="Area average of white sky albedo for modis_channel",
@@ -467,9 +495,42 @@ def write_day(
             ("liquid_water_path", lwp_s, "g/m2", "Liquid water path"),
             ("liquid_water_path_std", 0.2 * lwp_s, "g/m2", "Standard deviation of liquid water path"),
         ]:
-            _var(nc, name, "f4", ("time",), data, long_name=ln, units=units, _fill=np.float32(MISSING))
-        _var(nc, "number_of_solutions", "i4", ("time",), nsol, long_name="Number of Solutions", units="count")
-        _var(nc, "retrieval_flag", "i4", ("time",), flag, long_name="Quality check results", units="unitless")
+            if np.ndim(data) == 1:
+                data = np.repeat(np.asarray(data, "f4")[:, None], 3, axis=1)
+            _var(nc, name, "f4", ("time", "gain"), data, long_name=ln, units=units, _fill=np.float32(MISSING))
+        _var(
+            nc,
+            "number_of_solutions",
+            "i4",
+            ("time", "gain"),
+            nsol,
+            long_name="Number of Solutions",
+            units="count",
+        )
+        _var(
+            nc,
+            "retrieval_flag",
+            "i4",
+            ("time", "gain"),
+            flag,
+            long_name="Quality check results",
+            units="1",
+            flag_method="bit",
+            bit_1_description="Sun and sky collimator radiances differ by > 20%",
+            bit_1_assessment="Bad",
+            bit_2_description="440 > 870 but spectral differences consistent with cloud over vegetated surface",
+            bit_2_assessment="Bad",
+            bit_3_description="abs(NIR-RED) < abs(1020-NIR), violating cloud signature",
+            bit_3_assessment="Bad",
+            bit_4_description="abs(NIR-RED) < abs(RED-Blue), violating cloud signature",
+            bit_4_assessment="Bad",
+            bit_5_description="Simultaneous violations found in Bit3 and Bit 4",
+            bit_5_assessment="Bad",
+            bit_6_description="Number of solutions < 15",
+            bit_6_assessment="Bad",
+            bit_7_description="Missing data",
+            bit_7_assessment="Bad",
+        )
         _location(nc)
 
 

@@ -2,9 +2,9 @@
 """Merge a product's daily ARM files into one netCDF in <data folder>/processed/.
 
 Examples
-  python combine_product.py cbh_ceil_M1
-  python combine_product.py cbh_ceil_M1 --start 2023-06-01 --end 2023-08-31
-  python combine_product.py cbh_ceil_M1 --out ~/Desktop/cbh.nc
+  python download_data/combine_product.py cbh_ceil_M1
+  python download_data/combine_product.py cbh_ceil_M1 --start 2023-06-01 --end 2023-08-31
+  python download_data/combine_product.py cbh_ceil_M1 --out ~/Desktop/cbh.nc
 
 Input is taken from, in order of preference and most complete coverage: a
 mounted ARM archive, the product's subset folder, or complete files.
@@ -15,12 +15,13 @@ import argparse
 import sys
 from pathlib import Path
 
-# The EPCAPE folder is itself the Python package, so its parent folder must be on
-# sys.path for `import EPCAPE` to work when this script is run from inside it.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The EPCAPE folder is itself the Python package, so the folder that contains it
+# (two levels above this file, EPCAPE/download_data/<script>.py) must be on
+# sys.path for `import EPCAPE` to work however the script is launched.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from EPCAPE.combine import combine_product
-from EPCAPE.config import active_machine, as_date, campaign_dates, get_product, load_config
+from EPCAPE.download_data.combine import combine_product
+from EPCAPE.download_data.config import active_machine, as_date, campaign_dates, get_product, load_config
 
 
 def main(argv=None) -> int:
@@ -32,9 +33,15 @@ def main(argv=None) -> int:
     parser.add_argument("product", help="product name from config.yaml")
     parser.add_argument("--start", help="first day, YYYY-MM-DD (default: campaign start)")
     parser.add_argument("--end", help="last day, inclusive (default: campaign end)")
-    parser.add_argument("--source", choices=["auto", "archive", "subset", "full"], default="auto",
-                        help="which local files to read (default: auto)")
-    parser.add_argument("--out", help="output file (default: <data folder>/processed/<product>_<start>_<end>.nc)")
+    parser.add_argument(
+        "--source",
+        choices=["auto", "archive", "subset", "full"],
+        default="auto",
+        help="which local files to read (default: auto)",
+    )
+    parser.add_argument(
+        "--out", help="output file (default: <data folder>/processed/<product>_<start>_<end>.nc)"
+    )
     args = parser.parse_args(argv)
 
     try:

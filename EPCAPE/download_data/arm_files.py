@@ -3,6 +3,7 @@
 ARM names files <datastream>.<YYYYMMDD>.<hhmmss>.<ext>, e.g.
 epcceilM1.b1.20230215.000002.nc, where the date/time is the first sample.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -56,7 +57,8 @@ def list_local(directory: Path, start: dt.date, end: dt.date, datastream: Option
     if not directory.is_dir():
         return []
     files = [
-        p for p in directory.iterdir()
+        p
+        for p in directory.iterdir()
         if p.is_file()
         and p.suffix in NETCDF_EXTENSIONS
         and (datastream is None or p.name.startswith(datastream + "."))

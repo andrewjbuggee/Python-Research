@@ -25,11 +25,11 @@ machine-specific lives in `config.yaml`.
 ## Test run: cloud-base height for the whole campaign
 
 ```bash
-python download_arm.py cbh_ceil_M1      # ~365 daily files, cloud-base variables only
-python combine_product.py cbh_ceil_M1   # one file: data/processed/cbh_ceil_M1_20230215_20240214.nc
+python download_data/download_arm.py cbh_ceil_M1      # ~365 daily files, cloud-base variables only
+python download_data/combine_product.py cbh_ceil_M1   # one file: data/processed/cbh_ceil_M1_20230215_20240214.nc
 ```
 
-`download_arm.py` asks ARM's server to extract only the product's variables
+`download_data/download_arm.py` asks ARM's server to extract only the product's variables
 from each daily file (`first_cbh`, `second_cbh`, `third_cbh`,
 `detection_status`, `status_flag`, `vertical_visibility`, their `qc_`
 companions, time and location). The 16 s × 770-gate backscatter profiles, which
@@ -37,7 +37,7 @@ make up most of each complete file, are never transferred. The script prints
 the actual sizes when it finishes.
 
 Rerunning either command is safe. Downloads resume, and files already on disk
-are skipped. `combine_product.py` ends with a coverage and statistics summary
+are skipped. `download_data/combine_product.py` ends with a coverage and statistics summary
 (days without data, percent of samples with a cloud base, median heights) as a
 sanity check.
 
@@ -63,13 +63,13 @@ Variable attributes and the ARM citation are copied into the file.
 ## Common commands
 
 ```bash
-python download_arm.py --list                          # products, active machine, data folder
-python download_arm.py cbh_ceil_S2                     # same variables at Mt. Soledad
-python download_arm.py cbh_ceil_M1 --dry-run           # what would be downloaded
-python download_arm.py cbh_ceil_M1 --start 2023-07-01 --end 2023-07-31
-python download_arm.py cbh_ceil_M1 --full              # complete files for that datastream
-python download_arm.py --datastream epcdlfptS2.b1 --start 2023-07-01 --end 2023-07-01   # any datastream, complete files
-python combine_product.py cbh_ceil_M1 --start 2023-06-01 --end 2023-08-31
+python download_data/download_arm.py --list                          # products, active machine, data folder
+python download_data/download_arm.py cbh_ceil_S2                     # same variables at Mt. Soledad
+python download_data/download_arm.py cbh_ceil_M1 --dry-run           # what would be downloaded
+python download_data/download_arm.py cbh_ceil_M1 --start 2023-07-01 --end 2023-07-31
+python download_data/download_arm.py cbh_ceil_M1 --full              # complete files for that datastream
+python download_data/download_arm.py --datastream epcdlfptS2.b1 --start 2023-07-01 --end 2023-07-01   # any datastream, complete files
+python download_data/combine_product.py cbh_ceil_M1 --start 2023-06-01 --end 2023-08-31
 ```
 
 To add a product, add an entry under `products:` in `config.yaml` with a
@@ -130,22 +130,30 @@ cite each datastream's DOI.
 
 ## Analysis code layout
 
-The `EPCAPE/` folder is itself the Python package: the shared modules sit at
-its top level and are imported as `from EPCAPE import ...`, with the folder
-*containing* `EPCAPE/` (Python-Research) on `sys.path`. The two scripts, the
-tests and the notebooks add it themselves. Science code is organised so it is
-easy to find later:
+The `EPCAPE/` folder is itself the Python package. Every module is imported
+by its full path, e.g. `from EPCAPE.analysis_tools import qc`, with the folder
+*containing* `EPCAPE/` (Python-Research) on `sys.path`. The scripts, the tests
+and the notebooks add it themselves. The top level holds only configuration
+and documentation; code lives in sub-folders so it is easy to find later:
 
 ```
 EPCAPE/                       the package and the repository folder
-  config.yaml, data/            machine paths and products; downloaded + processed data (not in git)
-  download_arm.py, combine_product.py   command-line entry points
-  config.py, sync.py, armlive.py, combine.py, ...   download and combine
+  config.yaml, README.md        machine paths and products; this file
+  environment.yml, requirements.txt
+  data/                         downloaded + processed data (not in git)
+download_data/                getting ARM data
+  download_arm.py               command line: python download_data/download_arm.py <product>
+  combine_product.py            command line: python download_data/combine_product.py <product>
+  config.py                     reads config.yaml (campaign dates, machine paths, products)
+  sync.py, armlive.py, arm_files.py, credentials.py   resumable ARM Live downloads
+  combine.py                    daily files -> data/processed/<product>_<start>_<end>.nc
+analysis_tools/               shared analysis code
   products.py                   load_product(): one Dataset per product (builds the combined file if needed)
   qc.py                         decode ARM qc_ bit fields into "bad sample" masks
+  filters.py                    named selection criteria and the filter "funnel" table
   units.py, stats.py            unit conversion from file attributes; paired-comparison statistics
-  filters.py, plotting.py       named-criteria filter "funnels"; fixed instrument colours and figure style
   derived.py                    save_derived(): MATLAB-ready netCDF with settings + git commit in attributes
+plotting/style.py             fixed instrument colours and figure style (from EPCAPE.plotting import COLORS)
 instruments/<instrument>/     products that come from ONE instrument
   mfrsr/mfrsrcldod.py           MFRSRCLDOD tau and r_e (load, standardize, selection criteria)
   sunphotometer/sphotcod.py     SPHOTCOD tau, r_e, LWP
@@ -180,10 +188,29 @@ The three cloud-property products in `config.yaml` are `cod_mfrsr_M1`,
 be checked against an EPCAPE file when the products were added. Variable
 names are matched case-insensitively.
 
+What the real EPCAPE files showed (checked 2026-10-06), and how the code handles it:
+
+- **SPHOTCOD** retrievals have a `gain` dimension (0 = aureole gain A, 1 = sky
+  gain K, 2 = mean of A and K). `sphotcod.standardize` uses the mean by default.
+  Its `retrieval_flag` is a bit-packed QC field with 7 tests, all "Bad". Only
+  about 14% of retrievals pass every test, because the spectral-signature
+  tests 2-5 fail often at the pier. `sphotcod.Criteria(ignore_flag_bits=...)`
+  relaxes them.
+- **SPHOTCOD** assumes a MODIS albedo stored once per daily file. The combine
+  step now repeats such per-file variables along time instead of keeping only
+  the first file's values.
+- **MFRSRCLDOD** `ir_temp` is empty for the whole campaign. A criterion whose
+  input is missing or all-NaN is reported as *skipped* rather than rejecting
+  every sample. The LWP source is `source_lwp`, mostly MWRRET.
+- **MWRLOS** `wet_window` (window heater on) is 1 for 39% of the campaign,
+  mostly at night in the marine layer. Following TR-016, it is not used by
+  default; Tb > 100 K and LWP > 1000 g m-2 screen rain and window water.
+  `mwrlos.Criteria(reject_wet_window=True)` gives the strict screen.
+
 **ARM orders delivered as symbolic links.** An order staged for ARM's own
 computing contains symlinks into `/data/archive/...`. These resolve on ARM
 JupyterHub/Cumulus and nowhere else. On a laptop such a folder looks full in
-Finder but holds no data (`ls -l` shows `->`). Use `download_arm.py` (or a
+Finder but holds no data (`ls -l` shows `->`). Use `download_data/download_arm.py` (or a
 standard Data Discovery download) to get real files.
 
 To test the analysis without real data:

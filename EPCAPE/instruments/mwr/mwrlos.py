@@ -30,8 +30,9 @@ Quality rules used here (all from TR-016)
 * ARM QC bits, except the "minimum" test on liq. The handbook says negative
   LWP within the retrieval RMS is usable (FAQ: "Can we use the data when there
   are long periods of qcmin flags for liquid?").
-* wet_window == 1: the heater is on because the rain/dew sensor triggered
-  (rain, drizzle, dew). Liquid on the Teflon window makes LWP spuriously large.
+* wet_window == 1 means the window heater is on (rain/dew sensor triggered).
+  At EPCAPE this is frequent and is not used by default; see Criteria.
+* LWP > 1 mm (1000 g m-2): rain or dew on the window (TR-016 FAQ).
 * Sky brightness temperature > 100 K in either channel: precipitation or a
   wet window (Westwater rule; also used by MFRSRCLDOD, TR-047 section 4).
 """
@@ -44,15 +45,15 @@ from typing import Optional
 import numpy as np
 import xarray as xr
 
-from EPCAPE import filters, qc, units
-from EPCAPE.products import load_product
+from EPCAPE.analysis_tools import filters, qc, units
+from EPCAPE.analysis_tools.products import load_product
 
 PRODUCT = "lwp_mwr_M1"
 MIN_TEST_PATTERNS = ("valid_min", "minimum")  # QC test descriptions of the lower-limit check
 
 
 def load(start=None, end=None, **kwargs) -> xr.Dataset:
-    """Raw combined product for [start, end] (see epcape.products.load_product)."""
+    """Raw combined product for [start, end] (see EPCAPE.analysis_tools.products.load_product)."""
     return load_product(PRODUCT, start, end, **kwargs)
 
 
@@ -98,11 +99,23 @@ def standardize(raw: xr.Dataset) -> xr.Dataset:
 
 @dataclass
 class Criteria:
-    """Selection thresholds for MWR LWP. Defaults follow TR-016."""
+    """Selection thresholds for MWR LWP. Defaults follow TR-016.
+
+    wet_window is NOT used by default. At EPCAPE the window heater is on 39%
+    of the time (mostly 19:00-07:00 local, 72% of July), i.e. through much
+    of the marine-layer night and fog, not mainly in rain. TR-016 (FAQ on the
+    anti-dew system) says the heater "periodically triggers unnecessarily"
+    and that "this does not affect the PWV or LWP measurements". Rejecting
+    every wet-window sample would therefore remove most nighttime
+    stratocumulus. Instead, the handbook's own signatures of liquid on the
+    window or rain are used: Tb > 100 K, and LWP > 1 mm (1000 g m-2;
+    "Two events cause the LWP to exceed 1 mm ... rain ... [and] condensation
+    (dew)"). Set reject_wet_window=True for the strict screen."""
 
     use_qc: bool = True
-    reject_wet_window: bool = True
+    reject_wet_window: bool = False
     tb_max_K: Optional[float] = 100.0  # rain / wet-window rule (TR-016 FAQ)
+    lwp_max_gm2: Optional[float] = 1000.0  # > 1 mm: rain or dew on the window (TR-016 FAQ)
     zenith_tolerance_deg: Optional[float] = 1.0  # keep only zenith-pointing samples
     lwp_min_gm2: Optional[float] = None  # e.g. 30 to keep only clearly cloudy samples
 
@@ -126,9 +139,13 @@ def lwp_criteria(std: xr.Dataset, c: Criteria = Criteria()) -> filters.Criteria:
             )
         else:
             crit[f"Tb23, Tb31 < {c.tb_max_K:g} K"] = None
+    if c.lwp_max_gm2 is not None:
+        crit[f"LWP < {c.lwp_max_gm2:g} g m-2 (no rain / dew on window)"] = lwp < c.lwp_max_gm2
     if c.zenith_tolerance_deg is not None:
         crit[f"zenith pointing (|elev - 90| <= {c.zenith_tolerance_deg:g} deg)"] = (
-            np.abs(std["elevation_deg"] - 90) <= c.zenith_tolerance_deg if "elevation_deg" in std else None
+            np.abs(std["elevation_deg"] - 90) <= c.zenith_tolerance_deg
+            if filters.available(std, "elevation_deg") is not None
+            else None
         )
     if c.lwp_min_gm2 is not None:
         crit[f"LWP > {c.lwp_min_gm2:g} g m-2"] = lwp > c.lwp_min_gm2

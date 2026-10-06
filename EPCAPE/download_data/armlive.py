@@ -7,6 +7,7 @@ Three services are used:
             does the extraction, so e.g. cloud-base heights arrive without the
             much larger backscatter profiles
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -161,8 +162,10 @@ class ArmLiveClient:
         if status != 200 or is_html:
             hint = ""
             if is_html or status in (401, 403):
-                hint = (" This usually means a wrong username or token; your token is shown "
-                        "at https://adc.arm.gov/armlive/ .")
+                hint = (
+                    " This usually means a wrong username or token; your token is shown "
+                    "at https://adc.arm.gov/armlive/ ."
+                )
             raise ArmLiveError(
                 f"ARM Live query for {datastream} failed (HTTP {status}).{hint} "
                 f"Reply begins: {self.redact(text[:150])!r}"
@@ -225,7 +228,11 @@ class ArmLiveClient:
                         f"{filename}: not available through ARM Live; order it through ARM "
                         f"Data Discovery instead. Server said: {text[:120]!r}"
                     )
-                hint = " (an HTML page usually means a wrong username or token)" if text.lstrip().startswith("<") else ""
+                hint = (
+                    " (an HTML page usually means a wrong username or token)"
+                    if text.lstrip().startswith("<")
+                    else ""
+                )
                 raise ArmLiveError(
                     f"{filename}: ARM Live did not return a netCDF file{hint}. "
                     f"Reply begins: {self.redact(text[:150])!r}"
@@ -248,7 +255,12 @@ def _disposition_filename(headers) -> Optional[str]:
 def citation(datastream: str, start: dt.date, end: dt.date, timeout: float = 30) -> Optional[str]:
     """ARM's recommended citation (with DOI) for a datastream and date range, or None."""
     url = os.environ.get("ARM_CITATION_URL", DEFAULT_CITATION_URL)
-    params = {"id": datastream, "citationType": "apa", "startDate": start.isoformat(), "endDate": end.isoformat()}
+    params = {
+        "id": datastream,
+        "citationType": "apa",
+        "startDate": start.isoformat(),
+        "endDate": end.isoformat(),
+    }
     try:
         r = requests.get(url, params=params, timeout=timeout)
         if r.status_code == 200:

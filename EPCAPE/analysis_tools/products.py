@@ -1,11 +1,11 @@
 """Load a configured product as one time-continuous xarray Dataset.
 
 This is the entry point the analysis code uses. It never reads daily ARM files
-directly: it reads the combined file that ``combine_product.py`` writes to
+directly: it reads the combined file that ``download_data/combine_product.py`` writes to
 ``<data folder>/processed/`` and builds that file first if it does not exist.
 Where the daily files come from (a mounted ARM archive on JupyterHub/Cumulus,
 server-side subsets, or complete downloads) is decided by ``config.yaml`` and
-``epcape.combine``, so the same notebook runs unchanged on every machine.
+``EPCAPE.download_data.combine``, so the same notebook runs unchanged on every machine.
 
 The combined file always spans the full campaign; a shorter [start, end]
 window is cut from it in memory. One cached file per product keeps the
@@ -21,14 +21,21 @@ from typing import Callable, Optional
 import numpy as np
 import xarray as xr
 
-from .combine import combine_product
-from .config import Machine, active_machine, as_date, campaign_dates, get_product, load_config
+from EPCAPE.download_data.combine import combine_product
+from EPCAPE.download_data.config import (
+    Machine,
+    active_machine,
+    as_date,
+    campaign_dates,
+    get_product,
+    load_config,
+)
 
 
 def processed_path(name: str, machine: Optional[Machine] = None, cfg: Optional[dict] = None) -> Path:
     """Path of the full-campaign combined file for product `name`.
 
-    Matches the default output name of ``combine_product.py <name>``, so a file
+    Matches the default output name of ``download_data/combine_product.py <name>``, so a file
     built from the command line is found here and vice versa."""
     cfg = cfg if cfg is not None else load_config()
     machine = machine or active_machine(cfg)
@@ -57,7 +64,7 @@ def load_product(
 
     Missing float values are NaN. Integer QC fields that were missing in the
     source are decoded to NaN as well (xarray turns them into floats), which
-    ``epcape.qc`` treats as "failed".
+    ``EPCAPE.analysis_tools.qc`` treats as "failed".
     """
     cfg = load_config()
     machine = machine or active_machine(cfg)
@@ -88,7 +95,7 @@ def source_file_attrs(name: str, machine: Optional[Machine] = None) -> dict:
     Returns {} if no daily file is available on this machine."""
     import netCDF4
 
-    from .arm_files import list_local
+    from EPCAPE.download_data.arm_files import list_local
 
     cfg = load_config()
     machine = machine or active_machine(cfg)

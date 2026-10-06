@@ -6,6 +6,7 @@ Output conventions:
   integer flags   original integer type; missing values are the ARM fill (-9999)
 Variable attributes (units, long_name, QC bit descriptions) are kept.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -22,7 +23,7 @@ from .config import Machine, Product, active_machine
 from .sync import MANIFEST, netcdf_variables, resolve_variables
 
 TIME_UNITS = "seconds since 1970-01-01"  # UTC; MATLAB: datetime(t,'ConvertFrom','posixtime')
-PER_FILE_TIME = ("base_time", "time_offset")          # replaced by a continuous time axis
+PER_FILE_TIME = ("base_time", "time_offset")  # replaced by a continuous time axis
 PER_FILE_GLOBALS = ("history", "input_source", "input_datastreams")
 
 
@@ -65,9 +66,20 @@ def combine_files(
 
     _check_static_coords(pieces, files)
     pieces = _fill_absent(pieces, wanted)
+    pieces, varying = _expand_varying_static(pieces, wanted)
+    for v in varying:
+        log(
+            f"  note: {v} has no time dimension but differs between files; "
+            "it is repeated along time so every file's value is kept"
+        )
     combined = xr.concat(
-        pieces, dim="time", data_vars="minimal", coords="minimal",
-        compat="override", join="outer", combine_attrs="override",
+        pieces,
+        dim="time",
+        data_vars="minimal",
+        coords="minimal",
+        compat="override",
+        join="outer",
+        combine_attrs="override",
     )
     combined = combined.sortby("time")
     t = combined["time"].values
@@ -83,16 +95,18 @@ def combine_files(
     attrs = {k: v for k, v in first_attrs.items() if k not in PER_FILE_GLOBALS and not k.startswith("_")}
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     times = combined["time"].values
-    attrs.update({
-        "title": title or attrs.get("title", ""),
-        "source_file_count": len(files),
-        "source_first_file": files[0].name,
-        "source_last_file": files[-1].name,
-        "time_coverage_start": str(times[0])[:19] + "Z",
-        "time_coverage_end": str(times[-1])[:19] + "Z",
-        "history": f"{now} UTC: combined from {len(files)} ARM files by the epcape tools",
-        "attribute_note": "Global attributes not added by the epcape tools come from the first source file.",
-    })
+    attrs.update(
+        {
+            "title": title or attrs.get("title", ""),
+            "source_file_count": len(files),
+            "source_first_file": files[0].name,
+            "source_last_file": files[-1].name,
+            "time_coverage_start": str(times[0])[:19] + "Z",
+            "time_coverage_end": str(times[-1])[:19] + "Z",
+            "history": f"{now} UTC: combined from {len(files)} ARM files by the epcape tools",
+            "attribute_note": "Global attributes not added by the epcape tools come from the first source file.",
+        }
+    )
     for key, value in (extra_attrs or {}).items():
         if value is not None:
             attrs[key] = value
@@ -150,7 +164,7 @@ def combine_product(
     if not found:
         raise FileNotFoundError(
             f"No {product.datastream} files dated {start} to {end} under {machine.data_root}.\n"
-            f"Download them first:  python download_arm.py {product.name}"
+            f"Download them first:  python download_data/download_arm.py {product.name}"
         )
     _, _, key, directory, files = max(found, key=lambda f: (f[0], f[1]))
     log(f"Combining {len(files)} files from {directory} ({key}).")
@@ -168,7 +182,9 @@ def combine_product(
             pass
     out = Path(out) if out else machine.processed_dir() / f"{product.name}_{start:%Y%m%d}_{end:%Y%m%d}.nc"
     combine_files(
-        files, variables, out,
+        files,
+        variables,
+        out,
         title=f"EPCAPE: {product.description}" if product.description else "",
         extra_attrs={
             "source_datastream": product.datastream,
@@ -181,8 +197,12 @@ def combine_product(
     return out
 
 
-def summarize(path: Path, start: Optional[dt.date] = None, end: Optional[dt.date] = None,
-              log: Callable[[str], None] = print) -> None:
+def summarize(
+    path: Path,
+    start: Optional[dt.date] = None,
+    end: Optional[dt.date] = None,
+    log: Callable[[str], None] = print,
+) -> None:
     """Print coverage and simple statistics as a sanity check."""
     path = Path(path)
     with xr.open_dataset(path) as ds:
@@ -244,6 +264,45 @@ def _check_static_coords(pieces: Sequence[xr.Dataset], files: Sequence[Path]) ->
                 )
 
 
+def _expand_varying_static(pieces: List[xr.Dataset], wanted: Sequence[str]):
+    """Give a time dimension to data variables that lack one but differ between files.
+
+    Example: SPHOTCOD's modis_white_sky_albedo(modis_channel) is one value set
+    per daily file, updated as MODIS albedo changes. Concatenating along time
+    would otherwise keep only the first file's values (compat="override").
+    Each file's values are repeated for every sample of that file, so a
+    sample's value is the one its own file used. Variables that are identical
+    in every file (lat, lon, alt, wavelengths) are left as they are.
+    Returns the pieces and the names of the variables that were expanded."""
+    varying = []
+    for v in wanted:
+        ref = pieces[0][v] if v in pieces[0].data_vars else None
+        if ref is None or "time" in ref.dims:
+            continue
+        for piece in pieces[1:]:
+            other = piece[v] if v in piece.data_vars else None
+            if (
+                other is None
+                or other.shape != ref.shape
+                or not np.array_equal(
+                    np.asarray(other.values), np.asarray(ref.values), equal_nan=ref.dtype.kind == "f"
+                )
+            ):
+                varying.append(v)
+                break
+    if not varying:
+        return pieces, varying
+    out = []
+    for piece in pieces:
+        additions = {}
+        for v in varying:
+            da = piece[v]
+            additions[v] = da.expand_dims(time=piece["time"].values).transpose("time", *da.dims)
+            additions[v].attrs = dict(da.attrs)
+        out.append(piece.assign(additions))
+    return out, varying
+
+
 def _fill_absent(pieces: List[xr.Dataset], wanted: Sequence[str]) -> List[xr.Dataset]:
     """Give every piece every variable; missing ones become all-missing arrays."""
     templates: Dict[str, xr.DataArray] = {}
@@ -262,7 +321,9 @@ def _fill_absent(pieces: List[xr.Dataset], wanted: Sequence[str]) -> List[xr.Dat
                 continue
             shape = tuple(piece.sizes["time"] if d == "time" else tpl.sizes[d] for d in tpl.dims)
             dtype = tpl.dtype if tpl.dtype.kind == "f" else np.float64
-            additions[v] = xr.DataArray(np.full(shape, np.nan, dtype=dtype), dims=tpl.dims, attrs=dict(tpl.attrs))
+            additions[v] = xr.DataArray(
+                np.full(shape, np.nan, dtype=dtype), dims=tpl.dims, attrs=dict(tpl.attrs)
+            )
         out.append(piece.assign(additions) if additions else piece)
     return out
 

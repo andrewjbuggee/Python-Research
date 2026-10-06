@@ -6,7 +6,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 
-from EPCAPE import filters
+from EPCAPE.analysis_tools import filters
 from EPCAPE.plotting import COLORS, INK_2, INK_3
 
 

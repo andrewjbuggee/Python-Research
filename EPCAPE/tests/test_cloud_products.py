@@ -13,9 +13,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from EPCAPE import filters, qc, units
-from EPCAPE.stats import paired_stats
-from EPCAPE.sync import resolve_variables
+from EPCAPE.analysis_tools import filters, qc, units
+from EPCAPE.analysis_tools.stats import paired_stats
+from EPCAPE.download_data.sync import resolve_variables
 
 from synthetic_cloud_vaps import write_campaign
 
@@ -42,7 +42,7 @@ def test_bad_mask_uses_assessments_and_ignores_indeterminate():
     assert qc.bad_mask(ds, "x").values.tolist() == [False, True, True, False, True, True]
     assert qc.bad_mask(ds, "x", indeterminate_is_bad=True).values[3]
     # ignoring the minimum test keeps bit-2-only samples (pattern as used by mwrlos)
-    from instruments.mwr.mwrlos import MIN_TEST_PATTERNS
+    from EPCAPE.instruments.mwr.mwrlos import MIN_TEST_PATTERNS
 
     assert qc.bad_mask(ds, "x", ignore_tests_matching=MIN_TEST_PATTERNS).values.tolist() == [
         False,
@@ -87,7 +87,7 @@ def test_radius_units(unit):
 
 # -- window statistics --------------------------------------------------------------
 def test_window_stats_matches_brute_force():
-    from comparisons.cloud_optical_properties.collocate import window_stats
+    from EPCAPE.comparisons.cloud_optical_properties.collocate import window_stats
 
     rng = np.random.default_rng(0)
     t = np.datetime64("2023-07-01") + (np.arange(500) * 20).astype("timedelta64[s]")
@@ -109,7 +109,7 @@ def test_window_stats_matches_brute_force():
 
 
 def test_lwp_from_tau_re():
-    from comparisons.cloud_optical_properties.collocate import lwp_from_tau_re_gm2
+    from EPCAPE.comparisons.cloud_optical_properties.collocate import lwp_from_tau_re_gm2
 
     # tau = 10, r_e = 10 um -> (2/3) * 1e6 g m-3 * 10 * 1e-5 m = 66.7 g m-2
     assert lwp_from_tau_re_gm2(10.0, 10.0) == pytest.approx(200.0 / 3.0)
@@ -143,11 +143,11 @@ def test_end_to_end_recovers_built_in_tau_bias(tmp_path, monkeypatch):
     monkeypatch.delenv("EPCAPE_CONFIG", raising=False)
     write_campaign(tmp_path / "data", dt.date(2023, 7, 1), days=3, seed=3)
 
-    from comparisons.cloud_optical_properties import collocate
-    from EPCAPE.derived import save_derived
-    from instruments.mfrsr import mfrsrcldod
-    from instruments.mwr import mwrlos
-    from instruments.sunphotometer import sphotcod
+    from EPCAPE.comparisons.cloud_optical_properties import collocate
+    from EPCAPE.analysis_tools.derived import save_derived
+    from EPCAPE.instruments.mfrsr import mfrsrcldod
+    from EPCAPE.instruments.mwr import mwrlos
+    from EPCAPE.instruments.sunphotometer import sphotcod
 
     log = lambda *_: None  # noqa: E731
     m = mfrsrcldod.standardize(mfrsrcldod.load(log=log))
@@ -183,10 +183,78 @@ def test_mwr_keeps_values_below_valid_min(tmp_path, monkeypatch):
     monkeypatch.setenv("EPCAPE_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.delenv("EPCAPE_MACHINE", raising=False)
     write_campaign(tmp_path / "data", dt.date(2023, 7, 1), days=1, seed=3)
-    from instruments.mwr import mwrlos
+    from EPCAPE.instruments.mwr import mwrlos
 
     raw = mwrlos.load(log=lambda *_: None)
     flagged_min = (raw["qc_liq"].fillna(0).astype(int) & 2) != 0
     assert int(flagged_min.sum()) == 10
     std = mwrlos.standardize(raw)
     assert not std["qc_bad_lwp"].where(flagged_min, drop=True).any()
+
+
+# -- added 2026-10-06 after checking the real EPCAPE files ---------------------------
+def _synthetic(tmp_path, monkeypatch, days=2):
+    monkeypatch.setenv("EPCAPE_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.delenv("EPCAPE_MACHINE", raising=False)
+    monkeypatch.delenv("EPCAPE_CONFIG", raising=False)
+    write_campaign(tmp_path / "data", dt.date(2023, 7, 1), days=days, seed=5)
+
+
+def test_sphot_gain_selection_and_flag_bits(tmp_path, monkeypatch):
+    _synthetic(tmp_path, monkeypatch)
+    from EPCAPE.instruments.sunphotometer import sphotcod
+
+    raw = sphotcod.load(log=lambda *_: None)
+    assert raw["cloud_optical_depth"].dims == ("time", "gain")
+    std = sphotcod.standardize(raw)  # default: mean of A and K
+    assert std["tau"].dims == ("time",) and std.attrs["gain"] == "mean of A and K"
+    np.testing.assert_allclose(std["tau"].values, raw["cloud_optical_depth"].sel(gain=2).values)
+    assert sphotcod.standardize(raw, gain=None)["tau"].dims == ("time", "gain")
+
+    flag = std["retrieval_flag"].values
+    strict = filters.combine(sphotcod.tau_criteria(std, sphotcod.Criteria())).values
+    relaxed = filters.combine(
+        sphotcod.tau_criteria(std, sphotcod.Criteria(ignore_flag_bits=sphotcod.SPECTRAL_SIGNATURE_BITS))
+    ).values
+    assert np.array_equal(strict, flag == 0)  # every test is "Bad"
+    assert np.array_equal(relaxed, (flag & ~16) == 0)  # bit 5 (value 16) ignored
+    table = qc.bit_breakdown(std["retrieval_flag"])
+    assert set(table["bit"].iloc[:-1]) == {1, 2, 3, 4, 5, 6, 7}
+
+
+def test_combine_keeps_per_file_static_variables(tmp_path, monkeypatch):
+    """SPHOT albedo has no time dimension and changes daily: each day's values must survive."""
+    _synthetic(tmp_path, monkeypatch, days=3)
+    from EPCAPE.instruments.sunphotometer import sphotcod
+
+    std = sphotcod.standardize(sphotcod.load(log=lambda *_: None))
+    a858 = sphotcod.albedo_at(std, 858.0)
+    per_day = a858.to_series().resample("1D").first().dropna()
+    assert std["modis_albedo"].dims == ("time", "modis_channel")
+    assert per_day.nunique() == per_day.size > 1
+
+
+def test_all_nan_ancillary_is_skipped_not_failed(tmp_path, monkeypatch):
+    _synthetic(tmp_path, monkeypatch)
+    from EPCAPE.instruments.mfrsr import mfrsrcldod
+
+    std = mfrsrcldod.standardize(mfrsrcldod.load(log=lambda *_: None))
+    std["ir_temp_K"] = std["ir_temp_K"] * np.nan  # as at EPCAPE: never filled
+    crit = mfrsrcldod.tau_criteria(std)
+    assert crit["IR sky T > 268 K"] is None
+    assert int(filters.combine(crit).sum()) > 0
+    assert "skipped" in filters.funnel(crit)["criterion"].str.cat()
+
+
+def test_mwr_default_keeps_wet_window_but_drops_rain(tmp_path, monkeypatch):
+    _synthetic(tmp_path, monkeypatch)
+    from EPCAPE.instruments.mwr import mwrlos
+
+    std = mwrlos.standardize(mwrlos.load(log=lambda *_: None))
+    ok = filters.combine(mwrlos.lwp_criteria(std)).values
+    wet = std["wet_window"].values == 1
+    lwp = std["lwp_gm2"].values
+    assert ok[wet & (lwp < 1000) & (std["tb31_K"].values < 100)].all()  # heater on, plausible LWP: kept
+    assert not ok[lwp >= 1000].any()  # rain / water on window: dropped
+    strict = filters.combine(mwrlos.lwp_criteria(std, mwrlos.Criteria(reject_wet_window=True))).values
+    assert not strict[wet].any()

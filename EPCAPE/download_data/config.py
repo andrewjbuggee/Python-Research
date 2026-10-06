@@ -3,6 +3,7 @@
 Everything machine-specific lives in config.yaml, so the same code runs on a
 laptop, the UCSD Research Cluster, or ARM's JupyterHub/Cumulus.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -13,9 +14,10 @@ from typing import List, Optional, Tuple
 
 import yaml
 
-# This module lives directly in the EPCAPE folder (the package and the repository
-# folder are the same), so config.yaml and the default data/ folder sit beside it.
-REPO_ROOT = Path(__file__).resolve().parent
+# The EPCAPE folder is both the repository and the Python package. This module is
+# EPCAPE/download_data/config.py, so the folder holding config.yaml and the default
+# data/ folder is one level up.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def config_path() -> Path:

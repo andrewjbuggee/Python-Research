@@ -8,9 +8,9 @@ Typical use from a notebook (the folder that contains EPCAPE/ must be on sys.pat
     sync_product(product, start, end)              # download (or find in ARM archive)
     path = combine_product(product, start, end)    # one netCDF in data/processed/
 """
-from .config import active_machine, as_date, campaign_dates, get_product, load_config
-from .sync import sync_datastream, sync_product
-from .combine import combine_files, combine_product, summarize
+from .download_data.config import active_machine, as_date, campaign_dates, get_product, load_config
+from .download_data.sync import sync_datastream, sync_product
+from .download_data.combine import combine_files, combine_product, summarize
 
 __all__ = [
     "active_machine", "as_date", "campaign_dates", "get_product", "load_config",

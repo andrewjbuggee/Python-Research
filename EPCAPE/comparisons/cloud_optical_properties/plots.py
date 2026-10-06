@@ -1,6 +1,6 @@
 """Figures for the MFRSR / sunphotometer / MWR cloud-property comparison.
 
-Conventions (epcape.plotting): instrument colours are fixed (MFRSR blue,
+Conventions (EPCAPE.plotting): instrument colours are fixed (MFRSR blue,
 SPHOT orange, MWR aqua). Paired scatter points are neutral, or coloured by
 a third variable on a single-hue sequential scale. Text stays in neutral ink.
 """
@@ -27,7 +27,7 @@ from EPCAPE.plotting import (
     one_to_one,
     plain_log_axis,
 )
-from EPCAPE.stats import format_stats, paired_stats
+from EPCAPE.analysis_tools.stats import format_stats, paired_stats
 
 # Single-hue sequential ramp (light -> dark blue) for colouring points by a magnitude.
 SEQ_BLUE = LinearSegmentedColormap.from_list(
@@ -126,8 +126,10 @@ def plot_example_day(day: str, mfrsr, mfrsr_tau_ok, mfrsr_re_ok, sphot, sphot_ok
             label="MFRSR window mean",
         )
     ax.set_ylabel("cloud optical depth τ")
-    ax.set_yscale("log")
-    plain_log_axis(ax, "y")
+    tau_all = np.concatenate([m["tau"].values.ravel(), s["tau"].values.ravel()])
+    if np.any(np.isfinite(tau_all) & (tau_all > 0)):  # a log axis needs at least one positive value
+        ax.set_yscale("log")
+        plain_log_axis(ax, "y")
     legend_above(ax, ncol=5, fontsize=8)
 
     # (b) effective radius
@@ -229,7 +231,7 @@ def scatter_compare(
     subset (numpy Generator seeded with `seed`) is drawn, so tens of
     thousands of 20 s pairs do not hide each other.
 
-    Returns the statistics dict (epcape.stats.paired_stats)."""
+    Returns the statistics dict (EPCAPE.analysis_tools.stats.paired_stats)."""
     x = np.asarray(x, float)
     y = np.asarray(y, float)
     ok = np.isfinite(x) & np.isfinite(y)
@@ -318,12 +320,15 @@ def binned_difference(ax, driver, diff, *, bins, xlabel="", ylabel="", color=INK
         )
         ax.plot(centers, med, "-o", color=color, ms=5, lw=2, zorder=3, label="median")
     ax.axhline(0, color=INK_3, lw=1, zorder=0)
-    if logx:
+    if not ok.any():
+        ax.text(0.5, 0.5, "no matched pairs", transform=ax.transAxes, ha="center", color=INK_2)
+    elif logx:
         ax.set_xscale("log")
         plain_log_axis(ax, "x")
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    legend_above(ax, ncol=2, fontsize=8)
+    if ok.any():
+        legend_above(ax, ncol=2, fontsize=8)
 
 
 def plot_distributions(ax, samples: Sequence[dict], *, bins, xlabel="", log_x=False):
@@ -332,6 +337,7 @@ def plot_distributions(ax, samples: Sequence[dict], *, bins, xlabel="", log_x=Fa
     samples: list of dicts with keys values, label, instrument and optional
     linestyle. Colour follows the instrument; linestyle separates subsets of
     the same instrument (e.g. all samples vs samples at SPHOT times)."""
+    drawn = 0
     for s in samples:
         v = np.asarray(s["values"], float)
         v = v[np.isfinite(v)]
@@ -339,6 +345,7 @@ def plot_distributions(ax, samples: Sequence[dict], *, bins, xlabel="", log_x=Fa
             v = v[v > 0]
         if v.size == 0:
             continue
+        drawn += 1
         ax.hist(
             v,
             bins=bins,
@@ -349,9 +356,11 @@ def plot_distributions(ax, samples: Sequence[dict], *, bins, xlabel="", log_x=Fa
             ls=s.get("linestyle", "-"),
             label=f"{s['label']} (N={v.size:,}, median {np.median(v):.3g})",
         )
-    if log_x:
+    if log_x and drawn:
         ax.set_xscale("log")
         plain_log_axis(ax, "x")
+    if not drawn:
+        ax.text(0.5, 0.5, "no data", transform=ax.transAxes, ha="center", color=INK_2)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("probability density")
     # Legend below the x-axis label so the step lines are never covered

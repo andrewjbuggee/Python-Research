@@ -9,6 +9,7 @@ Looked up in this order, so nothing secret ever lives in the repository:
          token = your_access_token
   3. an interactive prompt (terminal only), which offers to write that file
 """
+
 from __future__ import annotations
 
 import configparser

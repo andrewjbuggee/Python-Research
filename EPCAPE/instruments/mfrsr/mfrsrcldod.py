@@ -47,15 +47,15 @@ from typing import Optional
 import numpy as np
 import xarray as xr
 
-from EPCAPE import filters, qc, units
-from EPCAPE.products import load_product
+from EPCAPE.analysis_tools import filters, qc, units
+from EPCAPE.analysis_tools.products import load_product
 
 PRODUCT = "cod_mfrsr_M1"
 R_E_DEFAULT_UM = 8.0  # value the VAP assigns when no MWR LWP is used (TR-047 sec. 1)
 
 
 def load(start=None, end=None, **kwargs) -> xr.Dataset:
-    """Raw combined product for [start, end] (see epcape.products.load_product)."""
+    """Raw combined product for [start, end] (see EPCAPE.analysis_tools.products.load_product)."""
     return load_product(PRODUCT, start, end, **kwargs)
 
 
@@ -167,16 +167,22 @@ def tau_criteria(std: xr.Dataset, c: Criteria = Criteria()) -> filters.Criteria:
         crit[f"tau > {c.tau_min:g}"] = t > c.tau_min
     if c.cloud_fraction_min is not None:
         crit[f"cloud fraction > {c.cloud_fraction_min:g}"] = (
-            std["cloud_fraction"] > c.cloud_fraction_min if "cloud_fraction" in std else None
+            std["cloud_fraction"] > c.cloud_fraction_min
+            if filters.available(std, "cloud_fraction") is not None
+            else None
         )
     if c.ir_temp_min_K is not None:
         crit[f"IR sky T > {c.ir_temp_min_K:g} K"] = (
-            std["ir_temp_K"] > c.ir_temp_min_K if "ir_temp_K" in std else None
+            std["ir_temp_K"] > c.ir_temp_min_K if filters.available(std, "ir_temp_K") is not None else None
         )
     if c.cbh_max_m is not None:
-        crit[f"cloud base < {c.cbh_max_m:g} m"] = std["cbh_m"] < c.cbh_max_m if "cbh_m" in std else None
+        crit[f"cloud base < {c.cbh_max_m:g} m"] = (
+            std["cbh_m"] < c.cbh_max_m if filters.available(std, "cbh_m") is not None else None
+        )
     if c.sza_max_deg is not None:
-        crit[f"SZA < {c.sza_max_deg:g} deg"] = std["sza_deg"] < c.sza_max_deg if "sza_deg" in std else None
+        crit[f"SZA < {c.sza_max_deg:g} deg"] = (
+            std["sza_deg"] < c.sza_max_deg if filters.available(std, "sza_deg") is not None else None
+        )
     return crit
 
 

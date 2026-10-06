@@ -35,9 +35,20 @@ standard deviation ~ 3 um. LWP is roughly unbiased in non-drizzling cases
 (error ~ 50 g m-2, r ~ 0.7 against MWR retrievals).
 
 Site-specific assumption to check at the Scripps Pier: the 500 m MODIS
-albedo pixel mixes ocean, beach and land. That makes the assumed albedo
-uncertain, and the 870/1640 nm retrieval is sensitive to albedo contrast.
-This is my inference from the retrieval design, not a documented EPCAPE issue.
+albedo pixel mixes ocean, beach and land. In the EPCAPE files the assumed
+white-sky albedo at 858 nm is typically 0.19-0.23, a land/vegetation value
+(open ocean is roughly 0.03-0.05 there), with occasional ocean-like days
+(e.g. 0.038 in May 2023). The 870/1640 nm retrieval is sensitive to that
+albedo. Whether it biases tau and r_e here is an inference from the
+retrieval design, not a documented EPCAPE result; the notebook tests it.
+
+EPCAPE file structure (checked 2026-10-06; differs from TR-317 Table 4):
+* tau, r_e, LWP, their std, number_of_solutions and retrieval_flag have a
+  second dimension `gain` (see GAIN_* below); `standardize` selects one.
+* retrieval_flag is a bit-packed QC field with 7 tests, all "Bad"; it is not
+  a simple "0 = good" code.
+* modis_white_sky_albedo has one value set per daily file (no time
+  dimension); the combine step repeats it along time so it is kept per day.
 """
 
 from __future__ import annotations
@@ -48,30 +59,55 @@ from typing import Optional, Sequence
 import numpy as np
 import xarray as xr
 
-from EPCAPE import filters, qc, units
-from EPCAPE.products import load_product
+from EPCAPE.analysis_tools import filters, qc, units
+from EPCAPE.analysis_tools.products import load_product
 
 PRODUCT = "cod_sphot_M1"
 
+# The retrieval is run three times, on radiances from the Cimel's two gain
+# settings and on their mean. Meanings come from the `gain` coordinate's
+# flag_meanings in the EPCAPE files (checked 2026-10-06):
+#   0 = A (aureole gain), 1 = K (sky gain), 2 = mean of A and K.
+GAIN_A, GAIN_K, GAIN_MEAN = 0, 1, 2
+GAIN_LABELS = {GAIN_A: "A (aureole gain)", GAIN_K: "K (sky gain)", GAIN_MEAN: "mean of A and K"}
+DEFAULT_GAIN = GAIN_MEAN
+
+# retrieval_flag is a bit-packed ARM QC field (flag_method = "bit"); every test
+# is assessed "Bad". Tests 2-5 compare radiance differences between 440, 675,
+# 870 and 1020 nm against the spectral signature expected for cloud; test 2's
+# description explicitly refers to a vegetated surface. Test 1 = sun vs sky
+# collimator mismatch > 20%, test 6 = fewer than 15 look-up-table solutions,
+# test 7 = missing data. Read the full text with
+# EPCAPE.analysis_tools.qc.bit_breakdown(raw["retrieval_flag"]).
+SPECTRAL_SIGNATURE_BITS = (2, 3, 4, 5)
+
 
 def load(start=None, end=None, **kwargs) -> xr.Dataset:
-    """Raw combined product for [start, end] (see epcape.products.load_product)."""
+    """Raw combined product for [start, end] (see EPCAPE.analysis_tools.products.load_product)."""
     return load_product(PRODUCT, start, end, **kwargs)
 
 
-def standardize(raw: xr.Dataset) -> xr.Dataset:
-    """Tidy dataset with explicit units in the variable names.
+def standardize(raw: xr.Dataset, gain: Optional[int] = DEFAULT_GAIN) -> xr.Dataset:
+    """Tidy dataset with explicit units in the variable names, for one gain.
+
+    Parameters
+    ----------
+    raw : combined SPHOTCOD product (``load``)
+    gain : 0 = A, 1 = K, 2 = mean of A and K (default). None keeps the
+        `gain` dimension (every variable that has it stays 2-D).
 
     Variables (absent ancillary fields are left out):
         tau, tau_std                   optical depth and its perturbation standard error
         r_e_um, r_e_std_um             effective radius (um)
         lwp_gm2, lwp_std_gm2           liquid water path (g m-2)
         n_solutions                    number of look-up-table solutions
-        retrieval_flag                 VAP quality flag (meaning: see flag attributes)
+        retrieval_flag                 bit-packed QC field (decoded by the criteria functions)
         sza_deg                        solar zenith angle (deg)
-        modis_albedo                   MODIS white-sky albedo used (time, modis_channel)
-        qc_bad_tau                     ARM QC failure on tau (if a qc_ field exists)
+        modis_albedo                   MODIS white-sky albedo the retrieval assumed (time, modis_channel)
+        qc_bad_tau                     ARM QC failure on tau, if a qc_cloud_optical_depth field exists
     """
+    if gain is not None and "gain" in raw.dims:
+        raw = raw.sel(gain=gain)
     out = xr.Dataset(coords={"time": raw["time"]})
     get = lambda n: filters.find_var(raw, n)  # noqa: E731
 
@@ -99,6 +135,7 @@ def standardize(raw: xr.Dataset) -> xr.Dataset:
     out.attrs = {
         "product": PRODUCT,
         "instrument": "SPHOT",
+        "gain": "all" if gain is None else GAIN_LABELS.get(int(gain), str(gain)),
         "source_datastream": raw.attrs.get("source_datastream", "epcsphotcod2chiuM1.c1"),
     }
     return out
@@ -108,22 +145,32 @@ def standardize(raw: xr.Dataset) -> xr.Dataset:
 class Criteria:
     """Selection thresholds for the sunphotometer retrievals.
 
-    ``good_retrieval_flags``: TR-317 does not tabulate the meanings of
-    retrieval_flag. 0 = good is an assumption. Print
-    ``epcape.qc.flag_meanings(std['retrieval_flag'])`` on real data and adjust."""
+    use_retrieval_flag : drop samples whose retrieval_flag fails any test
+        assessed "Bad" (all of them, in the EPCAPE files).
+    ignore_flag_bits : test numbers to leave out of that decision, e.g.
+        ``SPECTRAL_SIGNATURE_BITS`` to keep retrievals that fail only the
+        spectral-signature tests (see the notebook's sensitivity section).
+    n_solutions_min : extra threshold on number_of_solutions. Off by default
+        because flag test 6 already rejects < 15 solutions.
+    """
 
     use_qc: bool = True
-    good_retrieval_flags: Optional[Sequence[int]] = (0,)
-    n_solutions_min: Optional[int] = 1
+    use_retrieval_flag: bool = True
+    ignore_flag_bits: Sequence[int] = ()
+    n_solutions_min: Optional[int] = None
     tau_min: Optional[float] = None
     sza_max_deg: Optional[float] = None
     max_rel_tau_std: Optional[float] = None  # e.g. 0.5 drops retrievals with std > 50% of tau
 
     def as_dict(self) -> dict:
         d = asdict(self)
-        if d["good_retrieval_flags"] is not None:
-            d["good_retrieval_flags"] = list(d["good_retrieval_flags"])
+        d["ignore_flag_bits"] = list(d["ignore_flag_bits"])
         return d
+
+
+def flag_bad(std: xr.Dataset, ignore_bits: Sequence[int] = ()) -> xr.DataArray:
+    """True where retrieval_flag fails a "Bad" test (ignoring `ignore_bits`)."""
+    return qc.bad_from_flag(std["retrieval_flag"], ignore_bits=ignore_bits)
 
 
 def tau_criteria(std: xr.Dataset, c: Criteria = Criteria()) -> filters.Criteria:
@@ -131,10 +178,11 @@ def tau_criteria(std: xr.Dataset, c: Criteria = Criteria()) -> filters.Criteria:
     t = std["tau"]
     crit: filters.Criteria = {"finite tau > 0": np.isfinite(t) & (t > 0)}
     crit["QC (tau)"] = ~std["qc_bad_tau"] if c.use_qc else None
-    if c.good_retrieval_flags is not None:
-        crit[f"retrieval_flag in {tuple(c.good_retrieval_flags)}"] = (
-            std["retrieval_flag"].isin(list(c.good_retrieval_flags)) if "retrieval_flag" in std else None
-        )
+    if c.use_retrieval_flag:
+        label = "retrieval_flag: no Bad test failed"
+        if c.ignore_flag_bits:
+            label += f" (tests {', '.join(map(str, c.ignore_flag_bits))} ignored)"
+        crit[label] = ~flag_bad(std, c.ignore_flag_bits) if "retrieval_flag" in std else None
     if c.n_solutions_min is not None:
         crit[f"n_solutions >= {c.n_solutions_min}"] = (
             std["n_solutions"] >= c.n_solutions_min if "n_solutions" in std else None
@@ -142,7 +190,9 @@ def tau_criteria(std: xr.Dataset, c: Criteria = Criteria()) -> filters.Criteria:
     if c.tau_min is not None:
         crit[f"tau > {c.tau_min:g}"] = t > c.tau_min
     if c.sza_max_deg is not None:
-        crit[f"SZA < {c.sza_max_deg:g} deg"] = std["sza_deg"] < c.sza_max_deg if "sza_deg" in std else None
+        crit[f"SZA < {c.sza_max_deg:g} deg"] = (
+            std["sza_deg"] < c.sza_max_deg if filters.available(std, "sza_deg") is not None else None
+        )
     if c.max_rel_tau_std is not None:
         crit[f"tau std / tau < {c.max_rel_tau_std:g}"] = (
             (std["tau_std"] / t) < c.max_rel_tau_std if "tau_std" in std else None
@@ -163,3 +213,20 @@ def lwp_criteria(std: xr.Dataset, c: Criteria = Criteria()) -> filters.Criteria:
     crit = dict(r_e_criteria(std, c))
     crit["finite LWP"] = np.isfinite(std["lwp_gm2"])
     return crit
+
+
+def albedo_at(std: xr.Dataset, wavelength_nm: float = 858.0) -> Optional[xr.DataArray]:
+    """MODIS white-sky albedo the retrieval assumed, at the MODIS channel nearest
+    `wavelength_nm` (858 nm is the band next to the 870 nm radiance channel).
+    None if the file carries no albedo."""
+    if "modis_albedo" not in std or "modis_wavelength_nm" not in std.coords:
+        return None
+    wl = np.asarray(std["modis_wavelength_nm"].values, dtype=float)
+    i = int(np.nanargmin(np.abs(wl - wavelength_nm)))
+    out = (
+        std["modis_albedo"]
+        .isel(modis_channel=i)
+        .drop_vars(["modis_channel", "modis_wavelength_nm"], errors="ignore")
+    )
+    out.attrs = {"long_name": f"MODIS white-sky albedo at {wl[i]:g} nm assumed by SPHOTCOD", "units": "1"}
+    return out

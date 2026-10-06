@@ -2,11 +2,11 @@
 """Download EPCAPE data from the ARM Live web service.
 
 Examples
-  python download_arm.py cbh_ceil_M1          # a product from config.yaml: only its variables
-  python download_arm.py cbh_ceil_M1 --full   # the same datastream as complete files
-  python download_arm.py --datastream epcceilM1.b1 --start 2023-07-01 --end 2023-07-03
-  python download_arm.py cbh_ceil_M1 --dry-run
-  python download_arm.py --list               # products, active machine, data folder
+  python download_data/download_arm.py cbh_ceil_M1          # a product from config.yaml: only its variables
+  python download_data/download_arm.py cbh_ceil_M1 --full   # the same datastream as complete files
+  python download_data/download_arm.py --datastream epcceilM1.b1 --start 2023-07-01 --end 2023-07-03
+  python download_data/download_arm.py cbh_ceil_M1 --dry-run
+  python download_data/download_arm.py --list               # products, active machine, data folder
 
 Re-running the same command resumes: files already on disk are skipped.
 Credentials: ARM_USERNAME/ARM_TOKEN, or ~/.arm_credentials (prompted on first run).
@@ -17,13 +17,21 @@ import argparse
 import sys
 from pathlib import Path
 
-# The EPCAPE folder is itself the Python package, so its parent folder must be on
-# sys.path for `import EPCAPE` to work when this script is run from inside it.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The EPCAPE folder is itself the Python package, so the folder that contains it
+# (two levels above this file, EPCAPE/download_data/<script>.py) must be on
+# sys.path for `import EPCAPE` to work however the script is launched.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from EPCAPE.armlive import ArmLiveError
-from EPCAPE.config import active_machine, as_date, campaign_dates, config_path, get_product, load_config
-from EPCAPE.sync import sync_datastream, sync_product
+from EPCAPE.download_data.armlive import ArmLiveError
+from EPCAPE.download_data.config import (
+    active_machine,
+    as_date,
+    campaign_dates,
+    config_path,
+    get_product,
+    load_config,
+)
+from EPCAPE.download_data.sync import sync_datastream, sync_product
 
 
 def main(argv=None) -> int:
@@ -86,11 +94,15 @@ def main(argv=None) -> int:
     )
     if result.downloaded and result.full_file_bytes:
         mean = result.bytes_downloaded / len(result.downloaded)
-        print(f"Subset files average {mean / 1e6:.2f} MB; one complete file is "
-              f"{result.full_file_bytes / 1e6:.2f} MB.")
+        print(
+            f"Subset files average {mean / 1e6:.2f} MB; one complete file is "
+            f"{result.full_file_bytes / 1e6:.2f} MB."
+        )
     if result.fallbacks:
-        print(f"{len(result.fallbacks)} files could not be subset by ARM's server and were fetched "
-              "whole and subset here (details in manifest.json).")
+        print(
+            f"{len(result.fallbacks)} files could not be subset by ARM's server and were fetched "
+            "whole and subset here (details in manifest.json)."
+        )
     if result.unavailable:
         print("Not available through ARM Live (order these through ARM Data Discovery):")
         for name in result.unavailable:
@@ -101,7 +113,7 @@ def main(argv=None) -> int:
             print(f"  {name}: {why}")
     print(f"Files are in {result.directory}")
     if args.product and not args.full and not args.datastream:
-        print(f"Next: python combine_product.py {args.product}")
+        print(f"Next: python download_data/combine_product.py {args.product}")
     return 0 if result.ok else 1
 
 

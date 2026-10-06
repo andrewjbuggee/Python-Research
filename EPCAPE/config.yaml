@@ -37,8 +37,8 @@ machines:
     data_root: /gpfs/wolf/proj-shared/PROJECT_ID/epcape   # replace PROJECT_ID; scratch is purged
     arm_archive: /data/archive     # not yet verified; confirm on first login
 
-# Named products. `python download_arm.py <name>` asks the ARM server to
-# extract just these variables; `python combine_product.py <name>` merges the
+# Named products. `python download_data/download_arm.py <name>` asks the ARM server to
+# extract just these variables; `python download_data/combine_product.py <name>` merges the
 # daily files into one netCDF. Each variable's qc_<variable> companion is added
 # automatically when the datastream has one.
 #   Facilities: M1 = Scripps Pier (AMF1 main site), S2 = Mt. Soledad lab

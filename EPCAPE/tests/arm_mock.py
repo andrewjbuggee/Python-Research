@@ -134,7 +134,7 @@ def subset_bytes(src: Path, variables) -> bytes:
     """What ARM's mod service does: a copy of `src` holding only `variables`.
     The mock runs in the same process as the download threads, and netCDF-C is
     not thread-safe, so it must share the package's lock."""
-    from EPCAPE.arm_files import NETCDF_LOCK
+    from EPCAPE.download_data.arm_files import NETCDF_LOCK
 
     with NETCDF_LOCK:
         return _subset_bytes(src, variables)

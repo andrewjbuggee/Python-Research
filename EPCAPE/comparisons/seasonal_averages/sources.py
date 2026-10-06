@@ -3,8 +3,8 @@
 Three kinds of input:
 
 1. ARM time-series products (RADFLUX, MWR, ARSCL, ceilometer, disdrometers):
-   downloaded with ``EPCAPE.sync.sync_product`` and read through
-   ``EPCAPE.products.load_product`` like every other EPCAPE analysis.
+   downloaded with ``EPCAPE.download_data.sync.sync_product`` and read through
+   ``EPCAPE.analysis_tools.products.load_product`` like every other EPCAPE analysis.
 
 2. ARM radiosonde products whose files each hold ONE launch with scalar
    results (PBLHTSONDE: one PBL height per launch; SONDEPARAM: one LCL per
@@ -19,7 +19,7 @@ Three kinds of input:
    ``load_ams_soledad`` and ``load_gcvi`` read them.
 
 Everything machine-specific (the data folder, a mounted ARM archive) comes
-from ``config.yaml`` through ``EPCAPE.config.active_machine``.
+from ``config.yaml`` through ``EPCAPE.download_data.config.active_machine``.
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ import pandas as pd
 import requests
 import xarray as xr
 
-from EPCAPE.arm_files import list_local
-from EPCAPE.config import Machine, active_machine, campaign_dates, get_product, load_config
+from EPCAPE.download_data.arm_files import list_local
+from EPCAPE.download_data.config import Machine, active_machine, campaign_dates, get_product, load_config
 
 UCSD_OBJECT_URL = "https://library.ucsd.edu/dc/object"
 # Identify the script honestly; the library serves file and JSON endpoints to it.
@@ -57,7 +57,7 @@ def product_layout(name: str, cfg: Optional[dict] = None) -> str:
 def product_files(name: str, machine: Optional[Machine] = None) -> List[Path]:
     """Daily (or per-launch) files of product `name` on this machine, sorted by time.
 
-    Same directory choice as ``EPCAPE.combine.combine_product``: a mounted
+    Same directory choice as ``EPCAPE.download_data.combine.combine_product``: a mounted
     ARM archive, the server-side subsets, or complete downloads, whichever
     holds the most files for the campaign window."""
     cfg = load_config()

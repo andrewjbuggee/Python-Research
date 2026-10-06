@@ -3,7 +3,7 @@
 Derived products are the part of the workflow that cannot be re-downloaded,
 so each file records how it was made: the git commit of this repository,
 the analysis settings (as global attributes), and the processed source
-files. Output follows the same conventions as ``epcape.combine``:
+files. Output follows the same conventions as ``EPCAPE.download_data.combine``:
 
     time            float64 seconds since 1970-01-01 UTC
                     (MATLAB: datetime(t, 'ConvertFrom', 'posixtime', 'TimeZone', 'UTC'))
@@ -24,8 +24,8 @@ from typing import Dict, Optional
 import numpy as np
 import xarray as xr
 
-from .combine import TIME_UNITS
-from .config import REPO_ROOT, Machine, active_machine
+from EPCAPE.download_data.combine import TIME_UNITS
+from EPCAPE.download_data.config import REPO_ROOT, Machine, active_machine
 
 
 def git_revision(repo: Path = REPO_ROOT) -> str:
@@ -70,7 +70,7 @@ def save_derived(
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     attrs = dict(ds.attrs)
     attrs.update(
-        history=f"{now} UTC: written by epcape.derived.save_derived",
+        history=f"{now} UTC: written by EPCAPE.analysis_tools.derived.save_derived",
         epcape_git_revision=git_revision(),
     )
     for key, value in (settings or {}).items():

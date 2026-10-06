@@ -5,7 +5,7 @@ ARM products (listed in SEASONAL_PRODUCTS, defined in config.yaml): ARM's
 server extracts only the needed variables (and their qc_ companions) from
 each daily file; downloads resume and files already present are skipped.
 Time-series products are then merged into one netCDF per product in
-<data folder>/processed/, which is what EPCAPE.products.load_product reads.
+<data folder>/processed/, which is what EPCAPE.analysis_tools.products.load_product reads.
 Radiosonde products marked ``layout: per_launch`` are left as one file per
 launch (see sources.read_per_launch).
 
@@ -35,11 +35,11 @@ from pathlib import Path
 # EPCAPE/ is itself the Python package: put its parent folder on sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from EPCAPE.armlive import ArmLiveError  # noqa: E402
-from EPCAPE.combine import combine_product  # noqa: E402
-from EPCAPE.config import active_machine, as_date, campaign_dates, get_product, load_config  # noqa: E402
-from EPCAPE.products import processed_path  # noqa: E402
-from EPCAPE.sync import sync_product  # noqa: E402
+from EPCAPE.download_data.armlive import ArmLiveError  # noqa: E402
+from EPCAPE.download_data.combine import combine_product  # noqa: E402
+from EPCAPE.download_data.config import active_machine, as_date, campaign_dates, get_product, load_config  # noqa: E402
+from EPCAPE.analysis_tools.products import processed_path  # noqa: E402
+from EPCAPE.download_data.sync import sync_product  # noqa: E402
 from EPCAPE.comparisons.seasonal_averages.sources import (  # noqa: E402
     download_ucsd_library,
     product_layout,
@@ -121,7 +121,7 @@ def main(argv=None) -> int:
             if args.no_combine or product_layout(name, cfg) == "per_launch":
                 continue
             # Build (or rebuild after new downloads) the full-campaign combined file
-            # that EPCAPE.products.load_product reads.
+            # that EPCAPE.analysis_tools.products.load_product reads.
             out = processed_path(name, machine, cfg)
             if out.is_file() and not result.downloaded:
                 print(f"{out.name} is up to date")

@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 
@@ -94,25 +95,82 @@ def bad_mask(
     qc_name = f"qc_{var}"
     if qc_name not in ds:
         return xr.zeros_like(ds[var], dtype=bool)
-    qc = ds[qc_name]
-    values = np.asarray(qc.values, dtype=float)
+    out = bad_from_flag(
+        ds[qc_name], indeterminate_is_bad=indeterminate_is_bad, ignore_tests_matching=ignore_tests_matching
+    )
+    return out.rename(f"bad_{var}")
+
+
+def bad_from_flag(
+    flag: xr.DataArray,
+    *,
+    indeterminate_is_bad: bool = False,
+    ignore_tests_matching: Iterable[str] = (),
+    ignore_bits: Iterable[int] = (),
+) -> xr.DataArray:
+    """True where a bit-packed QC/flag field marks the sample as failed.
+
+    Same rules as ``bad_mask``, but for any flag variable whatever its name
+    (e.g. SPHOTCOD's ``retrieval_flag``, which is not called qc_<var>).
+
+    ignore_bits : test numbers N (as in the ``bit_N_description`` attributes,
+        so bit N has value 2**(N-1)) to leave out of the decision.
+    """
+    values = np.asarray(flag.values, dtype=float)
     missing = ~np.isfinite(values)
     ints = np.where(missing, 0, values).astype(np.int64)
 
     ignore = [s.lower() for s in ignore_tests_matching]
-    tests = qc_tests(qc)
+    skip_values = {2 ** (int(n) - 1) for n in ignore_bits}
+    tests = qc_tests(flag)
     if tests:
         counted = 0
         for bit, (desc, assessment) in tests.items():
-            if any(s in desc.lower() for s in ignore):
+            if bit in skip_values or any(s in desc.lower() for s in ignore):
                 continue
             if assessment.strip().lower() == "indeterminate" and not indeterminate_is_bad:
                 continue
             counted |= bit
         bad = (ints & counted) != 0
     else:
-        bad = ints != 0
-    return xr.DataArray(bad | missing, coords=qc.coords, dims=qc.dims, name=f"bad_{var}")
+        # undescribed field: any nonzero value is a failure, except ignored bits
+        mask = ~0
+        for v in skip_values:
+            mask &= ~v
+        bad = (ints & mask) != 0
+    return xr.DataArray(bad | missing, coords=flag.coords, dims=flag.dims, name=f"bad_{flag.name}")
+
+
+def bit_breakdown(flag: xr.DataArray) -> pd.DataFrame:
+    """Table of each test in a bit-packed flag: bit number, value, assessment,
+    percentage of samples failing it, percentage failing ONLY it, and its
+    description. Missing flag values are excluded from the percentages."""
+    values = np.asarray(flag.values, dtype=float).ravel()
+    ints = values[np.isfinite(values)].astype(np.int64)
+    n = max(ints.size, 1)
+    rows = []
+    for bit, (desc, assessment) in sorted(qc_tests(flag).items()):
+        rows.append(
+            {
+                "bit": int(np.log2(bit)) + 1,
+                "value": bit,
+                "assessment": assessment,
+                "failing_pct": 100 * ((ints & bit) != 0).sum() / n,
+                "only_this_pct": 100 * (ints == bit).sum() / n,
+                "description": desc,
+            }
+        )
+    rows.append(
+        {
+            "bit": "-",
+            "value": 0,
+            "assessment": "",
+            "failing_pct": np.nan,
+            "only_this_pct": 100 * (ints == 0).sum() / n,
+            "description": "passed every test",
+        }
+    )
+    return pd.DataFrame(rows)
 
 
 def has_qc(ds: xr.Dataset, var: str) -> bool:

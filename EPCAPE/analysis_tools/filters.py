@@ -27,6 +27,20 @@ def find_var(ds: xr.Dataset, name: str) -> Optional[xr.DataArray]:
     return ds[key] if key is not None else None
 
 
+def available(ds: xr.Dataset, name: str) -> Optional[xr.DataArray]:
+    """ds[name] if it exists and has at least one finite value, else None.
+
+    Criteria built on an ancillary variable use this, so that a variable the
+    files never fill (e.g. MFRSRCLDOD ir_temp at EPCAPE, 0% finite) makes the
+    test *skipped* rather than failing every sample (NaN > x is False)."""
+    if name not in ds:
+        return None
+    da = ds[name]
+    if da.dtype.kind == "f" and not np.isfinite(da.values).any():
+        return None
+    return da
+
+
 def combine(criteria: Criteria) -> xr.DataArray:
     """Logical AND of all criteria that were applied (skipped ones ignored)."""
     applied = [m for m in criteria.values() if m is not None]
@@ -50,7 +64,7 @@ def funnel(criteria: Criteria, label: str = "") -> pd.DataFrame:
         if mask is None:
             rows.append(
                 {
-                    "criterion": f"{name} (skipped: variable not in file)",
+                    "criterion": f"{name} (skipped: variable missing or all-NaN)",
                     "remaining": np.nan,
                     "remaining_pct": np.nan,
                     "removed_here": 0,

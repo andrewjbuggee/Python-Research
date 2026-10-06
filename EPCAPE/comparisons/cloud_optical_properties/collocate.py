@@ -19,7 +19,7 @@ deviation and the fraction of valid samples come along. Both say how steady
 and how overcast the scene was, and both explain disagreement.
 
 All functions take *masked* inputs: values that failed an instrument's
-criteria must already be NaN (see ``epcape.filters.apply``). Window
+criteria must already be NaN (see ``EPCAPE.analysis_tools.filters.apply``). Window
 statistics then count only valid samples, and ``coverage`` = valid / all
 samples in the window measures how much of the window passed.
 """

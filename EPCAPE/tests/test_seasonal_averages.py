@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from EPCAPE import qc
+from EPCAPE.analysis_tools import qc
 from EPCAPE.comparisons.seasonal_averages import quantities as q
 from EPCAPE.comparisons.seasonal_averages import seasonal as s
 
