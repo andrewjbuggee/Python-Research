@@ -104,6 +104,8 @@ data/
   arm/<datastream>/          complete ARM files, archive names
   arm_subset/<product>/      server-extracted variable subsets, plus manifest.json
   processed/                 combined netCDF files
+  processed/<UCSD object>/   Russell-group files from the UC San Diego Library
+                             (listed under ucsd_library: in config.yaml), plus ucsd_manifest.json
 ```
 
 `manifest.json` records each file's size and download time, the variable list,
@@ -119,16 +121,26 @@ cite each datastream's DOI.
 - If extraction fails for the very first file, the run stops and suggests
   `--full`. This prevents a broken service from silently turning into complete
   downloads of every file.
+- A busy server (HTTP 429/502/503/504 after all retries) is never answered
+  with a complete-file download; the file is listed as failed and the next run
+  retries it. On 2026-10-06 ARM Live's subset service answered 502/503 to four
+  parallel requests and worked with one (`--workers 1`).
 - Files that ARM Live can't serve are listed at the end. Those have to be
   ordered through ARM Data Discovery.
 
 ## Analysis code layout
 
-Downloading and combining (above) is shared infrastructure in `epcape/`.
-Science code is organised so it is easy to find later:
+The `EPCAPE/` folder is itself the Python package: the shared modules sit at
+its top level and are imported as `from EPCAPE import ...`, with the folder
+*containing* `EPCAPE/` (Python-Research) on `sys.path`. The two scripts, the
+tests and the notebooks add it themselves. Science code is organised so it is
+easy to find later:
 
 ```
-epcape/                       shared: config, download, combine, plus
+EPCAPE/                       the package and the repository folder
+  config.yaml, data/            machine paths and products; downloaded + processed data (not in git)
+  download_arm.py, combine_product.py   command-line entry points
+  config.py, sync.py, armlive.py, combine.py, ...   download and combine
   products.py                   load_product(): one Dataset per product (builds the combined file if needed)
   qc.py                         decode ARM qc_ bit fields into "bad sample" masks
   units.py, stats.py            unit conversion from file attributes; paired-comparison statistics
@@ -143,6 +155,10 @@ variables/<variable>/         products that estimate ONE variable from SEVERAL i
 comparisons/<topic>/          analyses that set several products side by side
   cloud_optical_properties/     MFRSR vs sunphotometer vs MWR: tau, r_e, LWP
     compare_cloud_optical_properties.ipynb   <- start here
+  seasonal_averages/            re-derives the seasonal-averages table rows attributed to Kavin
+    download_data.py              ARM products + UCSD Library files the check needs
+    check_seasonal_averages.ipynb <- start here (QC = 0 only; outputs in processed/derived/)
+    seasonal.py, quantities.py, sources.py   seasons + table parsing; one function per quantity; data access
 ```
 
 Rules the code follows:
@@ -189,3 +205,6 @@ retries on busy servers and dropped connections, wrong tokens, unavailable
 files, a mid-campaign variable change, a mounted-archive mode, and the MATLAB
 view of the output. `tests/test_cloud_products.py` covers the analysis layer
 (QC decoding, units, window statistics, an end-to-end run on synthetic files).
+`tests/test_seasonal_averages.py` covers the seasonal-averages check (reading
+the sheet's cells, season windows, QC = 0, the Romps LCL, rain events, GCVI
+residuals).

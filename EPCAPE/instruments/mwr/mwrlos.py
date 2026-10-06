@@ -44,8 +44,8 @@ from typing import Optional
 import numpy as np
 import xarray as xr
 
-from epcape import filters, qc, units
-from epcape.products import load_product
+from EPCAPE import filters, qc, units
+from EPCAPE.products import load_product
 
 PRODUCT = "lwp_mwr_M1"
 MIN_TEST_PATTERNS = ("valid_min", "minimum")  # QC test descriptions of the lower-limit check

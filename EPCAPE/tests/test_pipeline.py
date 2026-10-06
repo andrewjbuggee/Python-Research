@@ -16,11 +16,11 @@ import pytest
 import xarray as xr
 
 from conftest import END, REPO, START, TOKEN, USER
-from epcape.armlive import ArmLiveClient, ArmLiveError
-from epcape.combine import combine_product
-from epcape.config import Machine, Product, active_machine
-from epcape.credentials import get_credentials
-from epcape.sync import sync_datastream, sync_product
+from EPCAPE.armlive import ArmLiveClient, ArmLiveError
+from EPCAPE.combine import combine_product
+from EPCAPE.config import Machine, Product, active_machine
+from EPCAPE.credentials import get_credentials
+from EPCAPE.sync import sync_datastream, sync_product
 
 VARS = ["first_cbh", "second_cbh", "third_cbh", "detection_status", "status_flag", "vertical_visibility"]
 PRODUCT = Product("cbh_test", "epcceilM1.b1", VARS, "test cloud-base heights")
@@ -128,7 +128,7 @@ def test_product_download_subsets_records_and_resumes(env, server):
     assert result.full_file_bytes > max(subset_sizes)  # tiny test files; real ones differ far more
 
     manifest = json.loads((subset_dir / "manifest.json").read_text())
-    assert manifest["variables"][:3] == ["base_time", "time_offset", "time"]
+    assert manifest["variables"][:2] == ["time_offset", "time"]  # base_time breaks ARM's mod service
     assert "qc_first_cbh" in manifest["variables"] and "range" not in manifest["variables"]
     assert manifest["citation"].startswith("Zhang") and len(manifest["files"]) == N_FILES
 

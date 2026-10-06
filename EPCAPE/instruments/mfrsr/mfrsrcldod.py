@@ -47,8 +47,8 @@ from typing import Optional
 import numpy as np
 import xarray as xr
 
-from epcape import filters, qc, units
-from epcape.products import load_product
+from EPCAPE import filters, qc, units
+from EPCAPE.products import load_product
 
 PRODUCT = "cod_mfrsr_M1"
 R_E_DEFAULT_UM = 8.0  # value the VAP assigns when no MWR LWP is used (TR-047 sec. 1)
@@ -66,7 +66,8 @@ def standardize(raw: xr.Dataset) -> xr.Dataset:
         tau, tau_avg5min, tau_unc          cloud optical depth (unitless) and 1-sigma
         r_e_um, r_e_avg5min_um, r_e_unc_um effective radius (um)
         r_e_from_mwr                       True where r_e used MWR LWP (r_e != 8.00 um)
-        lwp_gm2, lwp_source                LWP used/derived by the VAP (g m-2)
+        lwp_gm2, lwp_source                LWP used/derived by the VAP (g m-2) and its source flag
+                                           (file variable `source_lwp`; meanings in its attributes)
         cloud_fraction                     shortwave sky-cover fraction (0-1)
         cbh_m                              cloud-base height (m above ground)
         ir_temp_K                          IR sky brightness temperature (K)
@@ -86,16 +87,32 @@ def standardize(raw: xr.Dataset) -> xr.Dataset:
     if get("reffi_toterror") is not None:
         out["r_e_unc_um"] = units.radius_to_um(get("reffi_toterror"))
 
-    # r_e equal to the 8.00 um default means the VAP had no usable MWR LWP.
-    # A tolerance covers float32 storage of 8.0.
+    # Which samples have r_e retrieved with an MWR LWP?
+    # Preferred: the integer flag `source_lwp` (EPCAPE files; older versions may
+    # call it `lwp_source`). Its flag_N_description attributes name the MWR
+    # product, e.g. 4 = "mwrret1liljclou.c2:phys_lwp", 8 = "mwrlos.b1:liq",
+    # 2 = "none: lwp is derived ... (2/3) * default_re * tau", 0 = no source.
+    # Fallback (TR-047 sec. 5): r_e equal to the 8.00 um default means no MWR LWP
+    # was used; the tolerance covers float32 storage of 8.0.
     r_e = out["r_e_um"]
-    out["r_e_from_mwr"] = np.isfinite(r_e) & (np.abs(r_e - R_E_DEFAULT_UM) > 1e-3)
+    source = get("source_lwp") if get("source_lwp") is not None else get("lwp_source")
+    meanings = qc.flag_meanings(source) if source is not None else None
+    if meanings:
+        mwr_codes = [code for code, text in meanings.items() if "mwr" in text.lower()]
+        out["lwp_source"] = source
+        out["r_e_from_mwr"] = np.isfinite(r_e) & source.isin(mwr_codes)
+        out["r_e_from_mwr"].attrs[
+            "method"
+        ] = f"source flag in {mwr_codes} (descriptions mention an MWR product)"
+    else:
+        out["r_e_from_mwr"] = np.isfinite(r_e) & (np.abs(r_e - R_E_DEFAULT_UM) > 1e-3)
+        out["r_e_from_mwr"].attrs["method"] = "r_e != 8.00 um default"
+        if source is not None:
+            out["lwp_source"] = source
 
     lwp = get("lwp")
     if lwp is not None:
         out["lwp_gm2"] = units.water_path_to_gm2(lwp)
-    if get("lwp_source") is not None:
-        out["lwp_source"] = get("lwp_source")
     if get("cloudfraction") is not None:
         out["cloud_fraction"] = get("cloudfraction")
     if get("cloudbasebestestimate") is not None:

@@ -13,9 +13,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from epcape import filters, qc, units
-from epcape.stats import paired_stats
-from epcape.sync import resolve_variables
+from EPCAPE import filters, qc, units
+from EPCAPE.stats import paired_stats
+from EPCAPE.sync import resolve_variables
 
 from synthetic_cloud_vaps import write_campaign
 
@@ -144,7 +144,7 @@ def test_end_to_end_recovers_built_in_tau_bias(tmp_path, monkeypatch):
     write_campaign(tmp_path / "data", dt.date(2023, 7, 1), days=3, seed=3)
 
     from comparisons.cloud_optical_properties import collocate
-    from epcape.derived import save_derived
+    from EPCAPE.derived import save_derived
     from instruments.mfrsr import mfrsrcldod
     from instruments.mwr import mwrlos
     from instruments.sunphotometer import sphotcod

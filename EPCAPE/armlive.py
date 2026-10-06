@@ -45,6 +45,14 @@ class FileNotAvailable(ArmLiveError):
     """ARM Live cannot serve this file; it has to be ordered through Data Discovery."""
 
 
+class ServerBusy(ArmLiveError):
+    """Retries were exhausted on a busy server or a dropped connection.
+
+    Kept separate from other failures so callers do not mistake it for a
+    problem with the file itself: rerunning later is the remedy, not
+    downloading the complete file instead."""
+
+
 class _Transient(Exception):
     """A failure worth retrying (server busy, dropped connection, short transfer)."""
 
@@ -125,7 +133,7 @@ class ArmLiveClient:
                 return fn()
             except _TRANSIENT as exc:
                 if attempt == self.max_retries:
-                    raise ArmLiveError(
+                    raise ServerBusy(
                         f"{what}: giving up after {attempt} attempts ({self.redact(exc)})"
                     ) from None
                 wait = min(60.0, self.backoff * 2 ** (attempt - 1))

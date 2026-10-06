@@ -6,8 +6,8 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 
-from epcape import filters
-from epcape.plotting import COLORS, INK_3
+from EPCAPE import filters
+from EPCAPE.plotting import COLORS, INK_3
 
 
 def quicklook_day(std, crit, day: str):

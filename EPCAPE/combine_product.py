@@ -15,8 +15,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from epcape.combine import combine_product
-from epcape.config import active_machine, as_date, campaign_dates, get_product, load_config
+# The EPCAPE folder is itself the Python package, so its parent folder must be on
+# sys.path for `import EPCAPE` to work when this script is run from inside it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from EPCAPE.combine import combine_product
+from EPCAPE.config import active_machine, as_date, campaign_dates, get_product, load_config
 
 
 def main(argv=None) -> int:

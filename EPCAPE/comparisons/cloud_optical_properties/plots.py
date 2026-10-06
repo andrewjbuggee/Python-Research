@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 
-from epcape.plotting import (
+from EPCAPE.plotting import (
     COLORS,
     GRID,
     INK,
@@ -27,7 +27,7 @@ from epcape.plotting import (
     one_to_one,
     plain_log_axis,
 )
-from epcape.stats import format_stats, paired_stats
+from EPCAPE.stats import format_stats, paired_stats
 
 # Single-hue sequential ramp (light -> dark blue) for colouring points by a magnitude.
 SEQ_BLUE = LinearSegmentedColormap.from_list(

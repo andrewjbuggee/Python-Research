@@ -13,7 +13,9 @@ from typing import List, Optional, Tuple
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# This module lives directly in the EPCAPE folder (the package and the repository
+# folder are the same), so config.yaml and the default data/ folder sit beside it.
+REPO_ROOT = Path(__file__).resolve().parent
 
 
 def config_path() -> Path:

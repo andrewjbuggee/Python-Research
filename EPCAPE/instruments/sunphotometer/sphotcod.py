@@ -48,8 +48,8 @@ from typing import Optional, Sequence
 import numpy as np
 import xarray as xr
 
-from epcape import filters, qc, units
-from epcape.products import load_product
+from EPCAPE import filters, qc, units
+from EPCAPE.products import load_product
 
 PRODUCT = "cod_sphot_M1"
 

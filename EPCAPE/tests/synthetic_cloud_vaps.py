@@ -322,14 +322,18 @@ def write_day(
         )
         _var(
             nc,
-            "lwp_source",
+            "source_lwp",  # name and flag style as in the real EPCAPE files (checked 2026-10-06)
             "i4",
             ("time",),
-            np.where(from_mwr, 1, 2),
-            long_name="Flag indicating data source used to determine lwp",
-            units="unitless",
-            flag_values=np.array([1, 2], "i4"),
-            flag_meanings="MWR MFRSR_with_assumed_effective_radius",
+            np.where(from_mwr, 8, 2),
+            long_name="Source for variable: Total liquid water along LOS path",
+            units="1",
+            flag_method="integer",
+            flag_0_description="no_source_available",
+            flag_2_description="none: lwp is derived from mfrsr.b1 using the formula "
+            "(2/3) * default_re * optical_depth_instantaneous",
+            flag_4_description="mwrret1liljclou.c2:phys_lwp",
+            flag_8_description="mwrlos.b1:liq",
         )
         _var(
             nc,

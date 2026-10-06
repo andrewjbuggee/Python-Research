@@ -115,6 +115,31 @@ def bad_mask(
     return xr.DataArray(bad | missing, coords=qc.coords, dims=qc.dims, name=f"bad_{var}")
 
 
+def has_qc(ds: xr.Dataset, var: str) -> bool:
+    """True if the dataset carries a ``qc_<var>`` companion for `var`."""
+    return f"qc_{var}" in ds
+
+
+def qc_is_zero(ds: xr.Dataset, var: str) -> xr.DataArray:
+    """True where ``qc_<var>`` is exactly 0: the strictest ARM screen.
+
+    A value of 0 means the sample passed every test, both those assessed
+    "Bad" and those assessed "Indeterminate". ``bad_mask`` by default keeps
+    Indeterminate samples; this does not. A missing QC value (NaN after
+    decoding the fill value, e.g. a day whose file lacked the QC field)
+    counts as not-zero, so that sample is dropped.
+
+    If there is no ``qc_<var>`` field, every sample passes: there is
+    nothing to screen on. Check ``has_qc`` first and report that case.
+    """
+    qc_name = f"qc_{var}"
+    if qc_name not in ds:
+        return xr.ones_like(ds[var], dtype=bool).rename(f"qc0_{var}")
+    values = np.asarray(ds[qc_name].values, dtype=float)
+    ok = np.isfinite(values) & (values == 0)
+    return xr.DataArray(ok, coords=ds[qc_name].coords, dims=ds[qc_name].dims, name=f"qc0_{var}")
+
+
 def describe_qc(ds: xr.Dataset, var: str) -> str:
     """Readable summary of what qc_<var> tests and how often each test fails."""
     qc_name = f"qc_{var}"

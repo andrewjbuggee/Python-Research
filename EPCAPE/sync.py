@@ -8,6 +8,7 @@ Two modes:
 On a machine whose config lists a mounted ARM archive containing the
 datastream, nothing is downloaded; the files are read in place.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -19,12 +20,16 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .arm_files import NETCDF_LOCK, list_local, looks_like_netcdf
-from .armlive import ArmLiveClient, ArmLiveError, FileNotAvailable, citation
+from .armlive import ArmLiveClient, ArmLiveError, FileNotAvailable, ServerBusy, citation
 from .config import Machine, Product, active_machine
 from .credentials import get_credentials
 
 # Always carried along when present, so every subset file is self-describing.
-SUPPORT_VARIABLES = ("base_time", "time_offset", "time", "lat", "lon", "alt")
+# base_time is deliberately not requested: asking ARM Live's mod service for it
+# returns HTTP 500 (found 2026-10-06 with epcmfrsrcldod1minM1.c1, while every other
+# variable, including the scalars lat/lon/alt, worked). It is redundant because
+# `time` and `time_offset` carry absolute units ("seconds since <date> 0:00").
+SUPPORT_VARIABLES = ("time_offset", "time", "lat", "lon", "alt")
 MANIFEST = "manifest.json"
 
 
@@ -40,7 +45,7 @@ class SyncResult:
     bytes_downloaded: int = 0
     variables: Optional[List[str]] = None
     full_file_bytes: Optional[int] = None  # size of one complete file, for comparison
-    source: str = "armlive"                # or "archive"
+    source: str = "armlive"  # or "archive"
 
     @property
     def ok(self) -> bool:
@@ -55,8 +60,9 @@ def netcdf_variables(path: Path) -> Dict[str, Tuple[str, ...]]:
         return {name: tuple(var.dimensions) for name, var in nc.variables.items()}
 
 
-def match_variables(requested: Sequence[str], available: Dict[str, Tuple[str, ...]],
-                    *, required: bool = True) -> List[str]:
+def match_variables(
+    requested: Sequence[str], available: Dict[str, Tuple[str, ...]], *, required: bool = True
+) -> List[str]:
     """The names in `available` that `requested` refers to.
 
     An exact match wins; otherwise a unique case-insensitive match is accepted,
@@ -83,8 +89,9 @@ def match_variables(requested: Sequence[str], available: Dict[str, Tuple[str, ..
     return matched
 
 
-def resolve_variables(requested: Sequence[str], available: Dict[str, Tuple[str, ...]],
-                      optional: Sequence[str] = ()) -> List[str]:
+def resolve_variables(
+    requested: Sequence[str], available: Dict[str, Tuple[str, ...]], optional: Sequence[str] = ()
+) -> List[str]:
     """The requested variables plus, where they exist: `optional` variables,
     time/location support variables, each variable's qc_ companion, and
     coordinate variables. A requested variable that does not exist is an error;
@@ -149,8 +156,20 @@ def sync_product(
     manifest.update(datastream=product.datastream, product=product.name, variables=variables)
     manifest["citation"] = citation(product.datastream, start, end) or manifest.get("citation")
 
-    result = _download_all(client, names, dest, variables, overwrite, workers, manifest, start, end, log,
-                           core=core, full_dir=machine.full_dir(product.datastream))
+    result = _download_all(
+        client,
+        names,
+        dest,
+        variables,
+        overwrite,
+        workers,
+        manifest,
+        start,
+        end,
+        log,
+        core=core,
+        full_dir=machine.full_dir(product.datastream),
+    )
     result.full_file_bytes = full_bytes
     return result
 
@@ -256,8 +275,20 @@ def _lacking(path: Path, core: Sequence[str]) -> List[str]:
     return lacking
 
 
-def _download_all(client, names, dest, variables, overwrite, workers, manifest, start, end, log,
-                  core: Sequence[str] = (), full_dir: Optional[Path] = None) -> SyncResult:
+def _download_all(
+    client,
+    names,
+    dest,
+    variables,
+    overwrite,
+    workers,
+    manifest,
+    start,
+    end,
+    log,
+    core: Sequence[str] = (),
+    full_dir: Optional[Path] = None,
+) -> SyncResult:
     dest.mkdir(parents=True, exist_ok=True)
     for stale in dest.glob("*.part"):
         stale.unlink()
@@ -291,10 +322,19 @@ def _download_all(client, names, dest, variables, overwrite, workers, manifest, 
             reason = f"the server's subset lacked {', '.join(lacking)}"
         except FileNotAvailable:
             raise
+        except ServerBusy as exc:
+            # A busy server says nothing about this file. Falling back to the
+            # complete file here would turn an overloaded subset service into
+            # full downloads (~50-160 MB/day for ARSCL or the disdrometer VAPs).
+            # The file is recorded as failed; rerunning retries just those.
+            raise ServerBusy(
+                f"{name}: ARM Live's subset service is busy or unavailable ({client.redact(exc)}). "
+                "Rerun later (with fewer --workers); if this persists, download complete files with --full."
+            ) from None
         except ArmLiveError as exc:
             reason = client.redact(exc)
             if reason.startswith(name + ": "):
-                reason = reason[len(name) + 2:]
+                reason = reason[len(name) + 2 :]
         if not allow_fallback or full_dir is None:
             raise ArmLiveError(
                 f"{name}: ARM's server could not extract the variables ({reason}). "
@@ -381,16 +421,18 @@ def _load_manifest(dest: Path) -> dict:
 
 def _save_manifest(dest: Path, manifest: dict, start, end, result: SyncResult, final: bool = True) -> None:
     if final:
-        manifest.setdefault("runs", []).append({
-            "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-            "start": str(start),
-            "end": str(end),
-            "listed": len(result.files),
-            "downloaded": len(result.downloaded),
-            "skipped": len(result.skipped),
-            "unavailable": result.unavailable,
-            "failed": sorted(result.failed),
-        })
+        manifest.setdefault("runs", []).append(
+            {
+                "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                "start": str(start),
+                "end": str(end),
+                "listed": len(result.files),
+                "downloaded": len(result.downloaded),
+                "skipped": len(result.skipped),
+                "unavailable": result.unavailable,
+                "failed": sorted(result.failed),
+            }
+        )
     dest.mkdir(parents=True, exist_ok=True)
     tmp = dest / (MANIFEST + ".tmp")
     tmp.write_text(json.dumps(manifest, indent=1, sort_keys=True, default=str))

@@ -68,7 +68,7 @@ products:
     variables: [optical_depth_instantaneous, optical_depth_average,
                 effective_radius_instantaneous, effective_radius_average]
     optional_variables: [cldtaui_toterror, cldtaua_toterror, reffi_toterror, reffa_toterror,
-                         cosine_solar_zenith_angle, lwp, lwp_source, lwp_uncertainty,
+                         cosine_solar_zenith_angle, lwp, source_lwp, lwp_source, lwp_uncertainty,
                          cloudfraction, cloudbasebestestimate, ir_temp, surface_albedo, pwv]
 
   cod_sphot_M1:
@@ -87,3 +87,84 @@ products:
     # DOE/SC-ARM-TR-016 (Morris 2019), Tables 1, 3 and 4
     variables: [liq, vap]
     optional_variables: [tbsky23, tbsky31, wet_window, sky_ir_temp, actel, actaz]
+
+  # ---- Seasonal-averages table check (comparisons/seasonal_averages) ---------
+  # Products behind the EPCAPE seasonal-averages table that Lynn asked to be
+  # re-derived (spreadsheet rows attributed to Kavin). Every variable's qc_
+  # companion is downloaded automatically and the analysis keeps qc == 0 only.
+  # `layout: per_launch` marks radiosonde products whose files hold one launch
+  # each with scalar results (e.g. one PBL height per launch). Those are read
+  # file by file in comparisons/seasonal_averages/sources.py instead of being
+  # combined along time, which would keep only the first launch's scalars.
+
+  radflux_M1:
+    description: Broadband irradiances and clear-sky estimates (RADFLUX, Long & Ackerman 2000), Scripps Pier (M1)
+    datastream: epcradflux1longM1.c2
+    variables: [downwelling_shortwave, clearsky_downwelling_shortwave, downwelling_longwave, cosine_zenith]
+    optional_variables: [clearsky_downwelling_longwave, cloud_transmissivity_shortwave, clearsky_status]
+
+  lwp_mwrret1_M1:
+    description: Liquid water path from the MWRRET VAP, version 1 (Turner et al. 2007), Scripps Pier (M1)
+    datastream: epcmwrret1liljclouM1.c2
+    variables: [phys_lwp, be_lwp]
+    optional_variables: [phys_lwp_uncertainty, be_retrieval_status]
+
+  cloud_arscl_M1:
+    description: Hydrometeor layer bases and tops from KAZR-ARSCL (Kollias et al.), Scripps Pier (M1); heights above ground
+    datastream: epcarsclkazr1kolliasM1.c1
+    variables: [cloud_layer_top_height, cloud_layer_base_height, cloud_base_best_estimate]
+
+  pblh_thermo_M1:
+    description: PBL height best estimate from thermodynamic profiles (PBLHTTHERMO, machine learning), Scripps Pier (M1); km above ground
+    datastream: epcpblhtthermoM1.c1
+    variables: [pbl_height]
+
+  pblh_sonde_M1:
+    description: PBL heights from radiosondes (PBLHTSONDE; Liu-Liang, Heffter, bulk Richardson) plus the launch's low-level p, T, RH, Scripps Pier (M1)
+    datastream: epcpblhtsonde1mcfarlM1.c1
+    layout: per_launch
+    variables: [pbl_height_liu_liang, pbl_height_heffter, pbl_height_bulk_richardson_pt25,
+                pbl_height_bulk_richardson_pt5, atm_pres, air_temp, rh]
+
+  sondeparam_M1:
+    description: Radiosonde-derived parcel parameters incl. lifting condensation level (SONDEPARAM), Scripps Pier (M1)
+    datastream: epcsondeparamM1.c1
+    layout: per_launch
+    variables: [lcl, parcel_type, data_quality]
+
+  rain_ld_M1:
+    description: Parsivel2 laser disdrometer precipitation intensity, Scripps Pier (M1)
+    datastream: epcldM1.b1
+    variables: [precip_rate]
+    optional_variables: [weather_code, number_detected_particles]
+
+  rain_ld_S2:
+    description: Parsivel2 laser disdrometer precipitation intensity, Mt. Soledad (S2)
+    datastream: epcldS2.b1
+    variables: [precip_rate]
+    optional_variables: [weather_code, number_detected_particles]
+
+  rain_vdis_M1:
+    description: Rain rate from the 2D video disdrometer (VDISQUANTS VAP), Scripps Pier (M1)
+    datastream: epcvdisquantsM1.c1
+    variables: [rain_rate]
+
+# Russell-group EPCAPE products in the UC San Diego Library Digital Collections
+# ("Aerosol Microphysics and Chemical Measurements at Mt. Soledad and Scripps Pier
+# during EPCAPE", https://library.ucsd.edu/dc/collection/bb0898306q).
+# Component files are served at
+#   https://library.ucsd.edu/dc/object/<object>/_<component>_1.<ext>
+# and saved to <data folder>/processed/<folder>/<filename>. The library publishes
+# each file's size in https://library.ucsd.edu/dc/object/<object>.json, which the
+# downloader checks before and after each transfer.
+ucsd_library:
+  aerosol_quantification_products:
+    object: bb2743661p
+    title: Aerosol Quantification Products at Mt. Soledad and Scripps Pier during EPCAPE 2023-24
+    doi: https://doi.org/10.6075/J0WM1DSC
+    folder: Aerosol Quantification Products
+    files:
+      - {component: 1,  ext: pdf, filename: aerosol_readMe.pdf}                       # README for every file below
+      - {component: 16, ext: nc,  filename: AMS_CE_corrected_msptof.nc}               # HR-ToF-AMS NR-PM1, Mt. Soledad, ~5 min
+      - {component: 30, ext: txt, filename: bb2743661p_30_1_lowCloudPeriods.txt}      # hourly Low Cloud Period flag, Scripps Pier
+      - {component: 36, ext: csv, filename: bb2743661p_36_1_CVI_EF.csv}               # GCVI enhancement factor, 1 s

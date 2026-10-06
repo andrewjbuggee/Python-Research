@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
-from epcape.armlive import ArmLiveError
-from epcape.config import active_machine, as_date, campaign_dates, config_path, get_product, load_config
-from epcape.sync import sync_datastream, sync_product
+# The EPCAPE folder is itself the Python package, so its parent folder must be on
+# sys.path for `import EPCAPE` to work when this script is run from inside it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from EPCAPE.armlive import ArmLiveError
+from EPCAPE.config import active_machine, as_date, campaign_dates, config_path, get_product, load_config
+from EPCAPE.sync import sync_datastream, sync_product
 
 
 def main(argv=None) -> int:
