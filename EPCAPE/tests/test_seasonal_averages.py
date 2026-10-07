@@ -127,3 +127,49 @@ def test_arscl_empty_layers_are_minus_one_not_nan():
     single, _ = q.lowest_layer_top_m(ds, single_layer=True, period="5min")
     assert any_layer.tolist()[:2] == [600.0, 650.0] and np.isnan(any_layer.iloc[2])  # -1 = clear sky
     assert single.iloc[0] == 600.0 and np.isnan(single.iloc[1])  # second layer present at t1
+
+
+# --- SW / LW averaging window (minutes; 0 = no averaging) ---------------------
+def _radflux(n_min=20):
+    """Synthetic 1-min RADFLUX-like dataset: SW = 0.5 x clear-sky, LW = 300..319 W m-2."""
+    t = pd.date_range("2023-07-01 18:00", periods=n_min, freq="1min")
+    cs = np.linspace(800.0, 900.0, n_min)
+    ds = xr.Dataset(
+        {
+            "downwelling_shortwave": ("time", 0.5 * cs),
+            "qc_downwelling_shortwave": ("time", np.zeros(n_min)),
+            "clearsky_downwelling_shortwave": ("time", cs),
+            "downwelling_longwave": ("time", 300.0 + np.arange(n_min)),
+            "qc_downwelling_longwave": ("time", np.zeros(n_min)),
+            "cosine_zenith": ("time", np.full(n_min, 0.8)),
+        },
+        coords={"time": t},
+    )
+    ds["qc_downwelling_shortwave"].values[3] = 4  # one sample fails QC (Indeterminate bit)
+    return ds
+
+
+def test_window_mean_zero_is_every_sample_and_lengths_are_arbitrary():
+    t = pd.date_range("2023-07-01", periods=15, freq="1min")
+    x = pd.Series(np.arange(15.0), index=t)
+    x.iloc[2] = np.nan
+    np.testing.assert_array_equal(q.window_mean(x, 0).values, x.dropna().values)
+    m = q.window_mean(x, 7.5)  # 7.5-min windows: [0, 7.5) and [7.5, 15) minutes
+    assert len(m) == 2
+    assert m.iloc[0] == pytest.approx(np.mean([0, 1, 3, 4, 5, 6, 7]))  # samples at 0..7 min, minus the NaN
+    assert m.iloc[1] == pytest.approx(np.mean(np.arange(8.0, 15.0)))
+    assert q.window_mean(x, 15).iloc[0] == pytest.approx(np.nanmean(x.values))
+    with pytest.raises(ValueError):
+        q.window_mean(x, -1)
+
+
+def test_sw_and_lw_window_minutes():
+    ds = _radflux()
+    t0, info0 = q.sw_transmittance(ds, window_min=0)
+    assert len(t0) == 19 and np.allclose(t0.values, 0.5)  # every QC = 0 sample, no averaging
+    t5, _ = q.sw_transmittance(ds, window_min=5)
+    assert len(t5) == 4 and np.allclose(t5.values, 0.5)
+    lw0, _ = q.lw_down(ds, window_min=0)
+    lw10, _ = q.lw_down(ds, window_min=10)
+    assert len(lw0) == 20 and lw10.tolist() == [304.5, 314.5]
+    assert info0["window_min"] == 0

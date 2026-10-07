@@ -15,11 +15,14 @@ which ones those are (``qc_report``).
 
 Time averaging
 --------------
-Continuous series are averaged to a common grid (default 5 min) before
-statistics, so instruments with 4-s and 1-min sampling are compared on the
-same footing; Kavin's SW transmittance note specifies 5-min averages. The
-standard deviation of 5-min means is slightly smaller than that of the raw
-samples (sub-5-min variability is averaged out).
+Continuous series are averaged over a fixed window before statistics, so
+instruments with 4-s and 1-min sampling are compared on the same footing;
+Kavin's SW transmittance note specifies 5-min averages. The SW and LW
+functions take the window in minutes (``window_min``, any non-negative
+length; 0 = no averaging, every QC = 0 sample counts); the others take a
+pandas period string (default "5min"). The standard deviation of window
+means is smaller than that of the raw samples, because variability shorter
+than the window is averaged out.
 """
 
 from __future__ import annotations
@@ -76,13 +79,53 @@ def grid_mean(series: pd.Series, period: str = "5min", min_count: int = 1) -> pd
     return mean.where(g.count() >= min_count)
 
 
+def window_mean(series: pd.Series, window_min: float, min_count: int = 1) -> pd.Series:
+    """Average `series` over consecutive, non-overlapping windows `window_min` minutes long.
+
+    window_min is any non-negative length in minutes, fractional allowed
+    (0.5, 1, 5, 7.5, 60, 1440, ...).
+
+    * window_min > 0: mean of the finite samples in each window, labelled by
+      the window's start time. Windows are anchored at midnight UTC of the
+      first day. Windows with fewer than `min_count` finite samples are NaN,
+      not 0. A window shorter than the sampling interval leaves the data
+      unchanged apart from empty windows, which are NaN.
+    * window_min == 0: no further averaging. The finite samples are returned
+      as they are, so the seasonal statistics are taken over every sample that
+      passed QC, at the resolution the product is distributed at. For RADFLUX
+      that is 1-min means (each the mean of 60 one-second SKYRAD samples;
+      epcskyrad60s: sampling_interval 1 s, averaging_interval 60 s), so 0 and
+      1 give the same result.
+    """
+    if not np.isfinite(window_min) or window_min < 0:
+        raise ValueError(f"window_min must be a finite number >= 0 (minutes), got {window_min!r}")
+    if window_min == 0:
+        return series[np.isfinite(series)]
+    return grid_mean(series, pd.Timedelta(minutes=float(window_min)), min_count=min_count)
+
+
+def describe_window(window_min: float) -> str:
+    """Words for one averaged sample, for table labels: '5-min mean', 'every QC = 0 sample'."""
+    if window_min == 0:
+        return "every QC = 0 sample (no further averaging)"
+    return f"{window_min:g}-min mean"
+
+
 # ---------------------------------------------------------------------------
 # radiation (RADFLUX; Long & Ackerman 2000, JGR 105, 15609; Long & Turner 2008, JGR 113, D18206)
 # ---------------------------------------------------------------------------
 def sw_transmittance(
-    ds: xr.Dataset, *, sza_max_deg: float = 80.0, period: str = "5min"
+    ds: xr.Dataset, *, sza_max_deg: float = 80.0, window_min: float = 5.0
 ) -> Tuple[pd.Series, Dict[str, object]]:
-    """SW transmittance = <SW down> / <clear-sky SW down>, both averaged to `period`.
+    """SW transmittance = <SW down> / <clear-sky SW down>, each averaged over `window_min` minutes.
+
+    window_min: averaging window in minutes, any non-negative length (see
+    ``window_mean``). With window_min = 0 there is no further averaging: the
+    ratio is taken for every RADFLUX 1-min mean that passes QC and the daytime
+    cut, and the seasonal statistics are over those ratios. RADFLUX values
+    are 1-min means of 1-s SKYRAD samples, timestamped at the END of the
+    minute (time_bounds = [-60 s, 0]). That is the mean of instantaneous ratios, which is not the same
+    as the ratio of seasonal-mean irradiances.
 
     Kavin's note: "ratio of five-minute-averaged downwelling shortwave
     irradiances from SKYRAD (radflux1long dataset) to an idealized clear sky
@@ -103,11 +146,18 @@ def sw_transmittance(
     cs, info_cs = qc0_values(ds, "clearsky_downwelling_shortwave")
     mu0 = ds["cosine_zenith"]
     day = mu0 > np.cos(np.deg2rad(sza_max_deg))
+    # The same samples go into numerator and denominator: both QC = 0 (the clear-sky
+    # estimate has no QC field), clear-sky > 0, and the sun above the cut.
     both = np.isfinite(sw) & np.isfinite(cs) & (cs > 0) & day
-    sw5 = grid_mean(to_series(sw.where(both)), period)
-    cs5 = grid_mean(to_series(cs.where(both)), period)
-    ratio = (sw5 / cs5).where(cs5 > 0).rename("sw_transmittance")
-    info = {"qc": [info_sw, info_cs], "sza_max_deg": sza_max_deg, "n_daytime_bins": int(ratio.notna().sum())}
+    sw_avg = window_mean(to_series(sw.where(both)), window_min)
+    cs_avg = window_mean(to_series(cs.where(both)), window_min)
+    ratio = (sw_avg / cs_avg).where(cs_avg > 0).rename("sw_transmittance")
+    info = {
+        "qc": [info_sw, info_cs],
+        "sza_max_deg": sza_max_deg,
+        "window_min": window_min,
+        "n_values": int(ratio.notna().sum()),
+    }
     return ratio, info
 
 
@@ -115,9 +165,10 @@ SOLAR_CONSTANT_WM2 = 1361.0  # total solar irradiance at 1 AU (Kopp & Lean 2011,
 
 
 def sw_clearness_index(
-    ds: xr.Dataset, *, sza_max_deg: float = 80.0, period: str = "5min"
+    ds: xr.Dataset, *, sza_max_deg: float = 80.0, window_min: float = 5.0
 ) -> Tuple[pd.Series, Dict[str, object]]:
-    """<SW down> / <top-of-atmosphere SW down>, both averaged to `period` (the clearness index).
+    """<SW down> / <top-of-atmosphere SW down>, each averaged over `window_min` minutes
+    (the clearness index). window_min = 0: sample-by-sample ratios, no averaging.
 
     TOA irradiance on a horizontal surface = S0 (1 + 0.033 cos(2 pi n / 365)) mu0,
     with n the day of year; the cosine term approximates the Earth-Sun distance
@@ -129,15 +180,21 @@ def sw_clearness_index(
     doy = pd.DatetimeIndex(ds["time"].values).dayofyear.values
     toa = SOLAR_CONSTANT_WM2 * (1.0 + 0.033 * np.cos(2.0 * np.pi * doy / 365.0)) * mu0
     ok = np.isfinite(sw) & (mu0 > np.cos(np.deg2rad(sza_max_deg)))
-    sw5 = grid_mean(to_series(sw.where(ok)), period)
-    toa5 = grid_mean(to_series(toa.where(ok)), period)
-    return (sw5 / toa5).where(toa5 > 0).rename("clearness_index"), {"qc": [info_sw]}
+    sw_avg = window_mean(to_series(sw.where(ok)), window_min)
+    toa_avg = window_mean(to_series(toa.where(ok)), window_min)
+    ratio = (sw_avg / toa_avg).where(toa_avg > 0).rename("clearness_index")
+    return ratio, {"qc": [info_sw], "window_min": window_min}
 
 
-def lw_down(ds: xr.Dataset, *, period: str = "5min") -> Tuple[pd.Series, Dict[str, object]]:
-    """Downwelling LW irradiance (W m-2), QC = 0, averaged to `period`, day and night."""
+def lw_down(ds: xr.Dataset, *, window_min: float = 5.0) -> Tuple[pd.Series, Dict[str, object]]:
+    """Downwelling LW irradiance (W m-2), QC = 0, day and night, averaged over `window_min` minutes.
+
+    window_min: averaging window in minutes, any non-negative length (see
+    ``window_mean``); 0 = no further averaging, i.e. the statistics are over
+    every RADFLUX 1-min mean (60 one-second samples each) that passes QC."""
     lw, info = qc0_values(ds, "downwelling_longwave")
-    return grid_mean(to_series(lw), period).rename("lw_down_wm2"), {"qc": [info]}
+    out = window_mean(to_series(lw), window_min).rename("lw_down_wm2")
+    return out, {"qc": [info], "window_min": window_min}
 
 
 # ---------------------------------------------------------------------------
