@@ -173,3 +173,18 @@ def test_segment_of_class_at_and_segment_majority():
                                            "2023-07-01 01:01", "2023-07-01 01:02", "2023-07-01 01:03"]))
     assert k.segment_majority_class(d, segs, 1).tolist() == [True, False]
     assert k.segment_majority_class(d, segs, 2).tolist() == [False, True]
+
+
+# --- Abbey's 15-min file (Kavin's AMSforAndrew.mlx) -----------------------------------------------------------------
+def test_kavin_15min_hours_effective_diameter_and_class_of_times():
+    t = pd.date_range("2023-04-30 23:30", periods=4, freq="15min")  # two intervals in April, two in May
+    cls = pd.Series([1.0, 2.0, 1.0, np.nan], index=t)
+    h = k.kavin_15min_hours(cls)
+    assert h.loc["Spring", "cloud_h"] == 0.5 and h.loc["Spring", "haze_h"] == 0.25 and h.loc["EPCAPE", "cloud_n"] == 2
+    # effective diameter: one bin -> its diameter; two equal-N bins at 2 and 4 um -> (8 + 64) / (4 + 16) = 3.6
+    dsd = pd.DataFrame([[1.0, 0.0], [1.0, 1.0], [0.0, 0.0]], columns=[2.0, 4.0])
+    d = k.effective_diameter_um(dsd, np.array([2.0, 4.0]))
+    assert d.iloc[0] == pytest.approx(2.0) and d.iloc[1] == pytest.approx(3.6) and np.isnan(d.iloc[2])
+    # class of arbitrary times = class of the 15-min interval holding them
+    times = pd.DatetimeIndex(["2023-04-30 23:44:59", "2023-04-30 23:45:00", "2023-05-01 02:00"])
+    assert k.class_of_times(times, cls)[:2].tolist() == [1.0, 2.0] and np.isnan(k.class_of_times(times, cls)[2])

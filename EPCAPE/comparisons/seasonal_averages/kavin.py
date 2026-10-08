@@ -20,6 +20,9 @@ corrected variant runs on the same data, which separates "different method" from
                                                        28, 29      abbey_class_per_sample
   (Abbey's classes applied to the GCVI-AMS samples)    33-42       class_at, segment_of,
                                                                    segment_majority_class
+  AMSforAndrew.mlx (Abbey's 15-min file and classes)  25, 26, 28, read_kavin_15min, kavin_15min_hours,
+                                                       29, 33-42,  effective_diameter_um, class_of_times
+                                                       54, 55
 
 The MATLAB lines being reproduced are quoted in comments, prefixed with ``%``.
 """
@@ -641,3 +644,93 @@ def segment_majority_class(dcrit: pd.DataFrame, segments: pd.DataFrame, class_co
     out = np.zeros(len(segments), dtype=bool)
     out[share.index[share > 0.5].to_numpy()] = True
     return out
+
+
+# =============================================================================
+# Abbey Williams' 15-min merged file (Kavin's AMSforAndrew.mlx): rows 25, 26, 28, 29, 33-42, 54, 55
+# =============================================================================
+KAVIN_15MIN_FILE = "EPCAPE_15mindata.nc"
+# Order of the AMS species along the file's AMS_species dimension, i.e. the rows of Kavin's
+# AMS_mass_15min_EF (Abbey, via Kavin: "Row 1 is nitrate, row 2 is sulfate, row 3 is organics,
+# row 4 is ammonium, and row 5 is chloride"); read_kavin_15min checks it against the file's labels.
+AMS_15MIN_SPECIES = ("nitrate", "sulfate", "organics", "ammonium", "chloride")
+
+
+def read_kavin_15min(folder: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Abbey Williams' 15-min merged EPCAPE file (EPCAPE_15mindata.nc): only the variables used here.
+
+    Kavin's AMSforAndrew.mlx reads ClrCldHaz_class from this file, and AMS_mass_15min_EF /
+    AMS_massfrac_15min_EF from EPCAPE_15min_data.mat (not provided). The file's AMS_mass equals the
+    CE-corrected AMS (AMS_CE_corrected_msptof.nc) averaged over each 15-min interval while the
+    CVI is off, and the CE-corrected AMS divided by EF while it is on (checked in the notebook,
+    Section 10e). It reproduces every one of the sheet's residual values, so it stands in for
+    AMS_mass_15min_EF.
+
+    time: "nanoseconds since 2023-02-15" (UTC), 35,041 steps of 15 min (2023-02-15 00:00 to
+    2024-02-15 00:00), each labelled by its interval START; float jitter of a few ns is rounded off.
+
+    Returns (frame, dsd):
+      frame columns  clr_cld_haz_class  1 = cloud, 2 = haze (defined only while the CVI is on),
+                                        0 = CVI off, NaN = CVI in transition
+                     cvi_on_class       1 = CVI on, 0 = off, 0.5 = transition
+                     <species>_ugm3     AMS_mass for AMS_15MIN_SPECIES
+                     <species>_frac     AMS_massfrac (0, not NaN, when the AMS has no data)
+                     fm120_nd_cm3, fm120_ed_um, fm120_lwc_gm3   FM-120 number, ED, LWC
+      dsd            FM120_DSD, dN per bin (cm-3); columns = FM120_diam (um), the bins' UPPER edges
+                     (3, 4, ..., 50 um for the 2-3, ..., 48-50 um bins of readme_FM120.md)."""
+    path = Path(folder) / KAVIN_15MIN_FILE
+    with xr.open_dataset(path) as ds:
+        labels = [str(s).strip().lower() for s in ds["AMS_species"].values]
+        if tuple(labels) != AMS_15MIN_SPECIES:
+            raise ValueError(f"{path.name}: AMS_species is {labels}, expected {AMS_15MIN_SPECIES}")
+        time = pd.DatetimeIndex(ds["time"].values).round("1s")
+        frame = pd.DataFrame({"clr_cld_haz_class": ds["ClrCldHaz_class"].values,
+                              "cvi_on_class": ds["CVIon_class"].values,
+                              "fm120_nd_cm3": ds["FM120_Nd"].values, "fm120_ed_um": ds["FM120_ED"].values,
+                              "fm120_lwc_gm3": ds["FM120_LWC"].values}, index=pd.DatetimeIndex(time, name="time"))
+        mass, frac = ds["AMS_mass"].values, ds["AMS_massfrac"].values  # (time, species)
+        for j, species in enumerate(AMS_15MIN_SPECIES):
+            frame[f"{species}_ugm3"] = mass[:, j]
+            frame[f"{species}_frac"] = frac[:, j]
+        dsd = pd.DataFrame(ds["FM120_DSD"].values, index=frame.index,
+                           columns=pd.Index(ds["FM120_diam"].values.astype(float), name="upper_edge_um"))
+    return frame, dsd
+
+
+def kavin_15min_hours(clr_cld_haz_class: pd.Series) -> pd.DataFrame:
+    """Cloud and haze hours as Kavin's AMSforAndrew.mlx counts them.
+
+      % totalcldhours = sum(index == 1)/4
+      % totalcldsprhours = sum(index == 1 & month(d) >= 4 & month(d) <= 6)/4   (likewise 7-9, 10-12, 1-3; haze = 2)
+
+    Each 15-min interval classed cloud (haze) counts 0.25 h, whether or not the AMS reported in it.
+    Seasons are calendar quarters of the UTC time; EPCAPE = every interval. The sheet holds these
+    values ROUNDED (e.g. 13.75 -> 14, 100.5 -> 101).
+    Returns DataFrame(rows = SEASON_ORDER; cloud_h, haze_h, cloud_n, haze_n)."""
+    month = clr_cld_haz_class.index.month
+    rows = {"EPCAPE": np.ones(month.size, bool), **{s: np.isin(month, m) for s, m in KAVIN_QUARTERS.items()}}
+    cloud = (clr_cld_haz_class == 1).to_numpy()
+    haze = (clr_cld_haz_class == 2).to_numpy()
+    out = {s: {"cloud_h": (cloud & sel).sum() / 4, "haze_h": (haze & sel).sum() / 4,
+               "cloud_n": int((cloud & sel).sum()), "haze_n": int((haze & sel).sum())} for s, sel in rows.items()}
+    return pd.DataFrame.from_dict(out, orient="index").loc[SEASON_ORDER]
+
+
+def effective_diameter_um(dsd: pd.DataFrame, diameters_um: np.ndarray) -> pd.Series:
+    """Effective diameter of each size distribution: sum(N_i D_i^3) / sum(N_i D_i^2), in um.
+
+    dsd: dN per bin (rows = times, columns = bins); diameters_um: the diameter given to each bin.
+    Kavin's values are reproduced with the bins' UPPER edges (the file's FM120_diam); the bin
+    mid-points give the physically consistent value (smaller by roughly half a bin width).
+    Rows with no droplets give NaN."""
+    n = dsd.to_numpy(float)  # (times, bins)
+    d = np.asarray(diameters_um, float)  # (bins,)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        d_eff = (n * d ** 3).sum(axis=1) / (n * d ** 2).sum(axis=1)
+    return pd.Series(d_eff, index=dsd.index, name="d_eff_um").where(lambda x: np.isfinite(x))
+
+
+def class_of_times(times: pd.DatetimeIndex, interval_class: pd.Series, *, interval_min: float = 15.0) -> np.ndarray:
+    """The 15-min class (clr_cld_haz_class) of the interval [t, t + 15 min) holding each time; NaN if none."""
+    start = times.floor(pd.Timedelta(minutes=interval_min))
+    return interval_class.reindex(start).to_numpy(dtype=float)
