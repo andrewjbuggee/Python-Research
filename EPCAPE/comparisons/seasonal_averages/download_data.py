@@ -43,6 +43,7 @@ from EPCAPE.download_data.sync import sync_product  # noqa: E402
 from EPCAPE.comparisons.seasonal_averages.sources import (  # noqa: E402
     download_ucsd_library,
     product_layout,
+    reduce_arscl_top_source,
 )
 
 # Ordered smallest download first, so the quick products are usable early.
@@ -53,7 +54,8 @@ SEASONAL_PRODUCTS = [
     "rain_ld_S2",  # row 23  rain, LD at Mt. Soledad (the sheet says "LDS1")
     "rain_vdis_M1",  # row 24  rain, VDIS
     "radflux_M1",  # rows 7-8 SW transmittance, LW down
-    "lwp_mwrret1_M1",  # row 10  LWP
+    "lwp_mwrret1_M1",  # row 10  LWP (MWRRET v1, 2-channel MWR) and its cloud-base field
+    "lwp_mwrret2_M1",  # row 10  LWP (MWRRET v2, 3-channel MWR) and its cloud-base fields
     "lwp_mwr_M1",  # row 10  LWP (MWRLOS, already used by the cloud-property comparison)
     "sondeparam_M1",  # row 20  LCL (SONDEPARAM)
     "pblh_sonde_M1",  # rows 17-20 sonde PBL heights and surface p/T/RH for LCL
@@ -79,6 +81,14 @@ def main(argv=None) -> int:
         help="parallel ARM downloads (default: 1; ARM Live's subset service answered 502/503 to 4 parallel requests on 2026-10-06)",
     )
     parser.add_argument("--dry-run", action="store_true", help="list what would be downloaded, then stop")
+    parser.add_argument(
+        "--keep-daily", action="store_true",
+        help="cloud_source_arscl_M1: keep the ~28 MB/day files after reducing them",
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help="download again even if files exist (needed after a product's variable list changes)",
+    )
     args = parser.parse_args(argv)
 
     cfg = load_config()
@@ -103,7 +113,8 @@ def main(argv=None) -> int:
             try:
                 product = get_product(name, cfg)
                 result = sync_product(
-                    product, start, end, machine=machine, workers=args.workers, dry_run=args.dry_run
+                    product, start, end, machine=machine, workers=args.workers, dry_run=args.dry_run,
+                    overwrite=args.overwrite,
                 )
             except (ArmLiveError, RuntimeError, ValueError, KeyError, FileNotFoundError) as exc:
                 problems[name] = str(exc)
@@ -118,6 +129,15 @@ def main(argv=None) -> int:
             )
             if result.failed:
                 problems[name] = f"{len(result.failed)} files failed (rerun to retry)"
+            if product_layout(name, cfg) == "reduce_top_source":
+                # ARSCL cloud_source_flag: too large to combine along time. Reduce each
+                # daily file to the code at the lowest cloud top, then delete the dailies.
+                try:
+                    reduce_arscl_top_source(machine=machine, delete_daily=not args.keep_daily)
+                except (ValueError, FileNotFoundError, OSError) as exc:
+                    problems[name] = f"reduce failed: {exc}"
+                    print(f"Reduce failed: {exc}", file=sys.stderr)
+                continue
             if args.no_combine or product_layout(name, cfg) == "per_launch":
                 continue
             # Build (or rebuild after new downloads) the full-campaign combined file

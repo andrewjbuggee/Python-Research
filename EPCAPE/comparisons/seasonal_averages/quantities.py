@@ -17,12 +17,12 @@ Time averaging
 --------------
 Continuous series are averaged over a fixed window before statistics, so
 instruments with 4-s and 1-min sampling are compared on the same footing;
-Kavin's SW transmittance note specifies 5-min averages. The SW and LW
-functions take the window in minutes (``window_min``, any non-negative
-length; 0 = no averaging, every QC = 0 sample counts); the others take a
-pandas period string (default "5min"). The standard deviation of window
-means is smaller than that of the raw samples, because variability shorter
-than the window is averaged out.
+Kavin's SW transmittance note specifies 5-min averages. Every continuous
+quantity (SW, LW, LWP, cloud top, cloud base) takes the window in minutes
+(``window_min``, any non-negative length; 0 = no averaging, every sample that
+passes QC = 0 and the other filters counts). The standard deviation of
+window means is smaller than that of the raw samples, because variability
+shorter than the window is averaged out.
 """
 
 from __future__ import annotations
@@ -200,102 +200,372 @@ def lw_down(ds: xr.Dataset, *, window_min: float = 5.0) -> Tuple[pd.Series, Dict
 # ---------------------------------------------------------------------------
 # liquid water path
 # ---------------------------------------------------------------------------
-def lwp_gm2(ds: xr.Dataset, var: str, *, period: str = "5min") -> Tuple[pd.Series, Dict[str, object]]:
-    """Liquid water path in g m-2 (unit read from the file), QC = 0, averaged to `period`.
+def cloudy_mwrret1(ds: xr.Dataset) -> xr.DataArray:
+    """True for MWRRET v1 (mwrret1liljclou.c2) samples taken under a detected cloud base.
 
-    All QC = 0 samples are kept, including clear sky (LWP ~ 0) and small
-    negative values within the retrieval noise, because a campaign-mean LWP
-    is an all-sky mean. Use ``cloudy_only`` for a cloudy-sky mean."""
-    values, info = qc0_values(ds, var)
+    The VAP carries the cloud base it used, ``cloud_base_height`` (km), copied
+    from ARSCL's ``cloud_base_best_estimate`` (ceilometer + micropulse lidar)
+    and interpolated onto the MWR sample times. Its QC field says why a value
+    is missing:
+        bit 1 (Bad)            bad quality, set to missing
+        bit 2 (Bad)            clear sky, set to missing
+        bit 3 (Indeterminate)  no input file for the day, set to 1 km
+    So a sample is cloudy when qc_cloud_base_height is exactly 0 and the
+    height itself is a valid, non-negative number. Requiring QC = 0 (not just
+    "not Bad") also rejects the days where 1 km was filled in without data.
+    """
+    cbh_km = ds["cloud_base_height"]
+    qc_ok = qc.qc_is_zero(ds, "cloud_base_height")  # all tests passed (no clear-sky bit, no fill)
+    has_base = np.isfinite(cbh_km) & (cbh_km >= 0)  # a real height, not the -9999 fill
+    return (qc_ok & has_base).rename("cloudy")
+
+
+def cloudy_mwrret2(ds: xr.Dataset) -> xr.DataArray:
+    """True for MWRRET v2 (mwrret2turn.c1) samples taken under a detected cloud base.
+
+    MWRRET v2 copies two ceilometer fields onto its ~1.3-s sample times (no QC
+    fields are distributed for either):
+        cbh_detected      first cloud base (km); -0.001 when no cloud
+        detection_status  ceilometer code: 0 no backscatter, 1-3 one to three
+                          cloud bases, 4 full obscuration without a base (fog),
+                          5 some obscuration, judged transparent
+    A sample is cloudy when a cloud base was detected: status 1, 2 or 3 and
+    cbh_detected > 0. Fog that hides the base (status 4) is therefore not
+    counted as cloud. The VAP's own ``clearsky_flag`` is not used: per its
+    attributes it is 1 only when cbh_detected <= 0 AND the std of the first
+    tbsky channel is below a PWV-dependent threshold, so "not clear" also
+    includes variable skies with no cloud base over the MWR.
+    """
+    cbh_km = ds["cbh_detected"]
+    status = ds["detection_status"]
+    base_detected = status.isin([1, 2, 3])  # ceilometer saw at least one cloud base
+    has_base = np.isfinite(cbh_km) & (cbh_km > 0)  # and reported a positive height
+    return (base_detected & has_base).rename("cloudy")
+
+
+def lwp_cloudy_gm2(
+    ds: xr.Dataset,
+    var: str,
+    cloudy: xr.DataArray,
+    *,
+    require_zero: Sequence[str] = (),
+    window_min: float = 5,
+) -> Tuple[pd.Series, Dict[str, object]]:
+    """Liquid water path (g m-2) over cloudy samples only, averaged over `window_min` minutes.
+
+    Steps, all at the instrument's own sample times:
+      1. QC = 0 on the LWP itself (``qc_<var>`` exactly 0).
+      2. Any extra flag fields in `require_zero` must also be exactly 0
+         (MWRRET v2: ``phys_qc_flag``, its "retrieval good/bad" flag).
+      3. Keep only samples where `cloudy` is True (see cloudy_mwrret1/2), so
+         clear-sky retrievals (LWP ~ 0, often slightly negative) never enter.
+      4. Convert to g m-2 from the file's units attribute.
+    Then the samples are averaged over windows `window_min` minutes long (any
+    non-negative number; see ``window_mean``):
+      * window_min > 0: each value is the mean of the cloudy samples in one
+        window; windows with no cloudy sample drop out. Every window then
+        counts once in the statistics, however many cloudy samples it held.
+      * window_min = 0: no time averaging. Every sample that passed steps 1-3
+        is returned at its own time stamp, so the statistics are over all of
+        them, weighted by sampling rate (MWRRET v1 ~20 s, v2 ~1 s).
+
+    Returns (series, info). info["qc"] has one entry per screening step for
+    the notebook's QC table; info["cloudy_fraction"] is the fraction of
+    QC-passing samples that were cloudy.
+    """
+    # 1. QC = 0 on the LWP variable itself
+    values, info_lwp = qc0_values(ds, var)
+    qc_pass = np.isfinite(values)
+
+    # 2. extra quality flags that must equal 0 (missing flag values count as failing)
+    infos = [info_lwp]
+    for flag in require_zero:
+        flag_vals = ds[flag]
+        ok_flag = np.isfinite(flag_vals) & (flag_vals == 0)
+        values = values.where(ok_flag)
+        infos.append({"variable": f"{flag} == 0 (for {var})", "has_qc": True, "n": int(flag_vals.size),
+                      "n_finite": int(qc_pass.values.sum()), "n_kept": int(np.isfinite(values).values.sum())})
+
+    # 3. cloudy samples only
+    n_before_cloud = int(np.isfinite(values).values.sum())
+    values = values.where(cloudy)
+    n_cloudy = int(np.isfinite(values).values.sum())
+    infos.append({"variable": f"cloudy samples (for {var})", "has_qc": False, "n": int(cloudy.size),
+                  "n_finite": n_before_cloud, "n_kept": n_cloudy})
+
+    # 4. units -> g m-2, then average over window_min minutes (0 = keep every sample)
     values = units.water_path_to_gm2(values)
-    return grid_mean(to_series(values), period).rename(f"{var}_gm2"), {"qc": [info]}
+    series = window_mean(to_series(values), window_min).rename(f"{var}_cloudy_gm2")
+    info = {"qc": infos, "cloudy_fraction": n_cloudy / n_before_cloud if n_before_cloud else np.nan}
+    return series, info
 
 
 def near_rain(
-    rate_mm_h: pd.Series, index: pd.DatetimeIndex, *, window_min: float = 30.0, period: str = "5min"
+    rate_mm_h: pd.Series,
+    index: pd.DatetimeIndex,
+    *,
+    window_min: float = 30.0,
+    value_length_min: float = 0.0,
 ) -> np.ndarray:
-    """True for the times in `index` within ±`window_min` of any rain (rate > 0) in `rate_mm_h`.
+    """True for each time in `index` that lies within ±`window_min` of any rain.
 
     Used to drop microwave-radiometer LWP while liquid may be on the radome,
     which biases retrieved LWP high (rain drops and a wet window emit at 23.8
-    and 31.4 GHz). Rate samples that are NaN (e.g. failed QC) and times the
-    rain record does not cover count as dry."""
-    wet = (rate_mm_h > 0).astype(float).resample(period).max()
-    n_bins = int(round(2.0 * window_min / (pd.Timedelta(period).total_seconds() / 60.0))) + 1
-    wet = wet.rolling(n_bins, center=True, min_periods=1).max()
-    return wet.reindex(index).fillna(0.0).to_numpy() > 0
+    and 31.4 GHz).
 
-
-def cloudy_only(series: pd.Series, threshold: float) -> pd.Series:
-    """Keep samples >= threshold (e.g. LWP >= 20 g m-2 as 'cloudy')."""
-    return series.where(series >= threshold)
+    `index` can be any time stamps: native samples (value_length_min = 0) or
+    the start times of averaging windows (value_length_min = the window
+    length). A value covering [t, t + value_length_min] is flagged when a rain
+    sample (rate > 0) falls in [t - window_min, t + value_length_min + window_min].
+    The test uses the rain samples' own time stamps, so it does not depend on
+    any averaging grid. Rate samples that are NaN (e.g. failed QC) and times
+    the rain record does not cover count as dry.
+    """
+    # times of every rain sample, sorted (the Parsivel reports every minute)
+    wet_times = np.sort(rate_mm_h.index[(rate_mm_h > 0).to_numpy()].to_numpy(dtype="datetime64[ns]"))
+    flags = np.zeros(len(index), dtype=bool)
+    if wet_times.size == 0:
+        return flags
+    # each value's search interval [lo, hi]
+    t = pd.DatetimeIndex(index).to_numpy(dtype="datetime64[ns]")
+    lo = t - np.timedelta64(int(round(window_min * 60e9)), "ns")
+    hi = t + np.timedelta64(int(round((value_length_min + window_min) * 60e9)), "ns")
+    # first rain sample at or after lo; the value is "near rain" if that sample is <= hi
+    k = np.searchsorted(wet_times, lo, side="left")
+    in_range = k < wet_times.size
+    flags[in_range] = wet_times[k[in_range]] <= hi[in_range]
+    return flags
 
 
 # ---------------------------------------------------------------------------
 # cloud boundaries
 # ---------------------------------------------------------------------------
+# ARSCL cloud_source_flag codes (flag_N_description in the file)
+ARSCL_SOURCE_CODES = {
+    0: "no detection: radar and lidar data both missing",
+    1: "clear according to radar and lidar",
+    2: "cloud detected by radar and lidar",
+    3: "cloud detected by radar only",
+    4: "cloud detected by lidar only",
+    5: "cloud detected by radar, lidar data missing",
+    6: "cloud detected by lidar, radar data missing",
+}
+
+
+def arscl_cloud_top_source(ds: xr.Dataset) -> xr.DataArray:
+    """ARSCL ``cloud_source_flag`` at the range gate that holds the lowest layer's top.
+
+    cloud_source_flag(time, height) says, for every 30-m range gate (centres
+    from 160 m above ground), which instrument detected hydrometeors there
+    (codes in ARSCL_SOURCE_CODES). ARSCL reports each layer top at the centre
+    of the layer's highest cloudy gate, so the gate whose centre is nearest
+    the lowest layer's top gives the instrument(s) that saw that top. On a
+    test day the code at that gate was a cloud code (2-6) for 98.7 % of tops.
+
+    Returns an int16 DataArray on `time`: the code at the top gate, or -1
+    where there is no lowest layer. Needs the full 2-D flag, so it is meant
+    for one daily file at a time (sources.reduce_arscl_top_source does that
+    for the campaign and keeps only this 1-D result).
+    """
+    heights_m = ds["height"].values  # gate centres, m above ground
+    flag = ds["cloud_source_flag"].values  # (time, height) codes 0-6
+    top0 = ds["cloud_layer_top_height"].values[:, 0]  # top of the lowest layer (-1 = none)
+    has_layer = np.isfinite(top0) & (top0 >= 0)
+    out = np.full(top0.shape, -1, dtype=np.int16)
+    # nearest gate centre to each top, then read the code there
+    gate = np.abs(heights_m[None, :] - top0[has_layer, None]).argmin(axis=1)
+    out[has_layer] = flag[np.nonzero(has_layer)[0], gate]
+    return xr.DataArray(out, coords={"time": ds["time"]}, dims=("time",), name="cloud_top_source")
+
+
 def lowest_layer_top_m(
-    ds: xr.Dataset, *, max_top_m: float = 3000.0, single_layer: bool = False, period: str = "5min"
+    ds: xr.Dataset,
+    *,
+    max_top_m: float = 3000.0,
+    single_layer: bool = False,
+    window_min: float = 5,
+    cloud_sources: Optional[Sequence[int]] = None,
 ) -> Tuple[pd.Series, Dict[str, object]]:
     """Top (m above ground) of the lowest KAZR-ARSCL hydrometeor layer, for low clouds.
 
-    ``cloud_layer_top_height[:, 0]`` is the top of the lowest layer (layers
-    are ordered upward). A sample counts when that layer exists and its top
-    is <= `max_top_m` (3 km, the "low cloud" bound used for the EPCAPE Low
-    Cloud Periods). With single_layer=True, samples with a second layer are
-    dropped. Empty layer slots hold the flag value -1 ("clear_sky"), not NaN. ARSCL distributes no QC field for these variables. Heights are
-    above ground; the Scripps Pier site is ~7 m above sea level, which is
-    negligible here.
+    Inputs
+    ------
+    ds : ARSCL dataset with ``cloud_layer_top_height`` and
+        ``cloud_layer_base_height`` (time, layer), m above ground. To use
+        `cloud_sources` it must also hold either ``cloud_top_source`` (time;
+        from sources.load_arscl_top_source) or the 2-D ``cloud_source_flag``
+        plus ``height`` (one daily file).
+    max_top_m : keep only samples whose lowest-layer top is <= this height
+        (m above ground). Default 3000 m, the "low cloud" bound of the EPCAPE
+        Low Cloud Periods; np.inf keeps every cloud.
+    single_layer : if True, also drop samples that have a second layer above
+        the first (keeps single-layer cloud only).
+    window_min : averaging window in minutes (see window_mean); 0 = no time
+        averaging, every kept 4-s sample enters the statistics.
+    cloud_sources : None (default) keeps every layer ARSCL reports, whatever
+        instrument detected it. Otherwise, a collection of cloud_source_flag
+        codes (ARSCL_SOURCE_CODES); a sample is kept only if the code at the
+        gate holding its lowest-layer top is in the collection. Examples:
+          (2, 3, 5)        tops the radar saw (lidar present or not)
+          (2,)             tops both radar and lidar saw
+          (2, 3, 4, 5, 6)  any cloud detection (drops the ~1 % of tops that sit on a "clear" gate)
+        Note: when the lidar is down, radar detections are code 5, not 2 or 3,
+        so a selection without 5 also drops every day without lidar data.
 
-    Note: ARSCL layers are hydrometeor layers, so drizzle below cloud base
-    can lower the 'base', but the top is the cloud top in either case."""
+    How cloud-only data are ensured
+    -------------------------------
+    ARSCL layers are HYDROMETEOR layers: cloud, but also drizzle or rain
+    below cloud base. Radar clutter is removed by ARSCL itself. This function
+    adds: the lowest layer must exist (empty slots hold -1, not NaN), its top
+    must be above ground and <= max_top_m, and, optionally, it must have been
+    seen by the chosen instrument(s). The TOP of a precipitating layer is
+    still the cloud top, so precipitation mainly affects bases, not this
+    quantity. ARSCL distributes no QC field for these variables. The Pier
+    site is ~7 m above sea level, negligible here.
+    """
+    # --- Inputs: KAZR-ARSCL hydrometeor layers ------------------------------
+    # ARSCL (Active Remote Sensing of CLouds, product arsclkazr1kollias.c1) merges
+    # the Ka-band radar (KAZR), the micropulse lidar (MPL) and the ceilometer
+    # into up to 10 hydrometeor layers per 4-s sample:
+    #   cloud_layer_base_height(time, layer), cloud_layer_top_height(time, layer)
+    # in m above ground, layer 0 = lowest. The radar sets the TOPS (it sees
+    # through the deck); the lidars help set the BASES (the radar also sees
+    # drizzle falling below the base). Unused layer slots hold -1, not NaN.
     top = ds["cloud_layer_top_height"]
     base = ds["cloud_layer_base_height"]
-    layer_dim = [d for d in top.dims if d != "time"][0]
-    top0 = top.isel({layer_dim: 0})
+    layer_dim = [d for d in top.dims if d != "time"][0]  # name of the layer dimension
+    top0 = top.isel({layer_dim: 0})  # top of the LOWEST layer, one value per 4-s sample
 
     def present(x):
-        # ARSCL writes -1 ("clear_sky" in flag_values) for an empty layer slot, not NaN.
+        # A layer exists only where the height is a real, non-negative number:
+        # ARSCL writes -1 ("clear_sky" in flag_values) for an empty slot, and
+        # missing data decode to NaN.
         return np.isfinite(x) & (x >= 0)
 
+    # --- Which samples count -------------------------------------------------
+    # 1. the lowest layer exists (both its base and its top are real heights),
+    # 2. its top is above the ground (> 0 m), and
+    # 3. its top is at or below max_top_m (3 km = "low cloud", the bound used
+    #    for the EPCAPE Low Cloud Periods), so cirrus or mid-level-only scenes
+    #    do not enter the stratocumulus statistic.
     ok = present(top0) & present(base.isel({layer_dim: 0})) & (top0 > 0) & (top0 <= max_top_m)
     if single_layer:
+        # Optional: drop samples with a second layer above the first (multi-layer
+        # scenes), leaving only single-layer low cloud.
         ok &= ~present(base.isel({layer_dim: 1}))
+
+    # 4. Optional: which instrument(s) detected the top (cloud_source_flag code
+    #    at the top gate). Precomputed 1-D codes are used if the dataset has
+    #    them; otherwise they are computed from the 2-D flag (one daily file).
+    source_counts = None
+    if cloud_sources is not None:
+        if "cloud_top_source" in ds:
+            src = ds["cloud_top_source"]
+        elif "cloud_source_flag" in ds:
+            src = arscl_cloud_top_source(ds)
+        else:
+            raise KeyError(
+                "cloud_sources was given but the dataset has neither cloud_top_source nor "
+                "cloud_source_flag. Download the cloud_source_arscl_M1 product first:\n"
+                "  python comparisons/seasonal_averages/download_data.py --only cloud_source_arscl_M1"
+            )
+        # how often each code holds the top among the samples that passed 1-3 (for the notebook)
+        codes, counts = np.unique(src.values[ok.values], return_counts=True)
+        source_counts = dict(zip(codes.tolist(), counts.tolist()))
+        ok &= src.isin(list(cloud_sources))
+
+    # --- Output ---------------------------------------------------------------
+    # Lowest-layer top where the sample counts, NaN elsewhere; then averaged over
+    # windows `window_min` minutes long (see window_mean). window_min > 0: each
+    # value is the mean of the counted samples in one window; windows with no low
+    # cloud drop out. window_min = 0: no time averaging, every counted 4-s sample
+    # enters the seasonal statistics on its own.
     s = to_series(top0.where(ok), "cloud_top_m")
     info = {
+        # ARSCL has no qc_ fields for these variables, so the "QC" entry only
+        # records how many samples had a layer and how many passed the cuts above.
         "qc": [{"variable": "cloud_layer_top_height", "has_qc": False, "n": int(top0.size),
                 "n_finite": int(present(top0).values.sum()), "n_kept": int(ok.values.sum())}],
         "max_top_m": max_top_m,
         "single_layer": single_layer,
+        "cloud_sources": None if cloud_sources is None else list(cloud_sources),
+        "top_source_counts": source_counts,  # code -> samples, before the source selection
     }
-    return grid_mean(s, period), info
+    return window_mean(s, window_min), info
 
 
 def ceilometer_cbh_m(
-    ds: xr.Dataset, *, max_cbh_m: float = 3000.0, period: str = "5min"
+    ds: xr.Dataset, *, max_cbh_m: float = 3000.0, window_min: float = 5
 ) -> Tuple[pd.Series, Dict[str, object]]:
     """Lowest ceilometer cloud base (m above the instrument), QC = 0, low clouds only.
 
-    A sample counts when detection_status is 1, 2 or 3 (one, two or three
-    cloud bases detected; 4 = full obscuration reports vertical visibility
-    instead, 0 = no significant backscatter) and first_cbh <= `max_cbh_m`.
-    Heights are above the instrument, not sea level (ARM ceilometer handbook)."""
+    Inputs
+    ------
+    ds : the combined cbh_ceil_M1 product (epcceilM1.b1, Vaisala ceilometer at
+        the Scripps Pier, one sample every 16 s) with:
+          first_cbh         lowest cloud base height (m), valid range 0-7700 m.
+                            Measured from the instrument, not sea level (ARM
+                            ceilometer handbook: heights "are measured above the
+                            optics assembly and are not adjusted for altitude").
+                            Only a cloud base when detection_status is 1-3.
+          qc_first_cbh      bit-packed QC: bit 1 missing value, bit 2 below
+                            valid_min (0 m), bit 3 above valid_max (7700 m); all
+                            three are "Bad". QC = 0 keeps samples with none set.
+          detection_status  what the ceilometer saw: 0 no significant
+                            backscatter (clear), 1/2/3 one/two/three cloud bases,
+                            4 full obscuration with no cloud base (e.g. fog or
+                            heavy precipitation; first_cbh then holds a vertical
+                            visibility, not a base). No QC field.
+    max_cbh_m : keep only bases at or below this height (m). Default 3000 m,
+        the "low cloud" bound of the EPCAPE Low Cloud Periods; np.inf keeps
+        every detected base.
+    window_min : averaging window in minutes (any number >= 0; see window_mean).
+        > 0: each value is the mean of the kept 16-s samples in one window.
+        0: no time averaging; every kept 16-s sample (cloudy, QC = 0) enters
+        the seasonal statistics on its own.
+
+    A sample counts when detection_status is 1, 2 or 3, qc_first_cbh is 0,
+    the height is finite and first_cbh <= `max_cbh_m`.
+    """
+    # Lowest cloud base reported by the Vaisala ceilometer (16-s samples), with
+    # every sample whose qc_first_cbh is not exactly 0 set to NaN.
     cbh, info = qc0_values(ds, "first_cbh")
+    # detection_status says what the ceilometer saw: only 1-3 mean a cloud base
+    # was found (with 4, first_cbh holds a vertical visibility, not a base).
     status = ds["detection_status"]
+    # Keep: a base was detected, the height is real, and it is a low cloud.
     ok = np.isin(status.values, [1, 2, 3]) & np.isfinite(cbh.values) & (cbh.values <= max_cbh_m)
+    # Then average over window_min minutes (0 = keep every sample at its own time).
     s = to_series(cbh.where(ok), "cbh_m")
-    return grid_mean(s, period), {"qc": [info], "max_cbh_m": max_cbh_m}
+    return window_mean(s, window_min), {"qc": [info], "max_cbh_m": max_cbh_m, "window_min": window_min}
 
 
 # ---------------------------------------------------------------------------
 # boundary-layer height
 # ---------------------------------------------------------------------------
 def pblh_thermo_m(ds: xr.Dataset) -> Tuple[pd.Series, Dict[str, object]]:
-    """PBLHTTHERMO best-estimate PBL height (m above ground), native 10-min samples.
+    """PBLHTTHERMO best-estimate PBL height (m above ground), one value per 10-min retrieval.
 
-    The file gives km above ground; there is no QC field. QC = 0 is applied
-    anyway in case a later version adds one."""
+    Input
+    -----
+    ds : the combined pblh_thermo_M1 product (epcpblhtthermoM1.c1) with
+        ``pbl_height`` (km above ground; long_name "Planetary boundary layer
+        height from combined Raman Lidar and TROPoe theta profiles"). ARM's
+        Data Discovery lists this VAP as "Planetary Boundary Layer Height Best
+        Estimate using Machine Learning". The VAP itself produces one value
+        every 10 min, stamped on the hour and at :10, :20, ... :50 (144 a day;
+        no data 2023-10-11 to 2023-10-31).
+
+    What is done
+    ------------
+    Nothing but QC and a unit change: no time averaging, because the product
+    is already on a 10-min grid. Each 10-min value is one sample in the
+    seasonal statistics. The file has no qc_pbl_height; QC = 0 is applied
+    anyway in case a later version adds one.
+    """
+    # QC = 0 (a no-op today: there is no qc_pbl_height field)
     pbl, info = qc0_values(ds, "pbl_height")
+    # km -> m, read from the units attribute so a future change of units cannot slip through
     factor = {"km": 1000.0, "m": 1.0}[str(ds["pbl_height"].attrs.get("units", "km")).strip()]
     return to_series(pbl * factor, "pblh_thermo_m"), {"qc": [info]}
 
@@ -369,8 +639,13 @@ def sondeparam_launch(ds: xr.Dataset) -> Dict[str, float]:
     the QC = 0 equivalent for this product. The VAP documentation does not
     say whether lcl is above ground or sea level; the site is ~7 m above sea
     level, so the difference is negligible."""
+    # parcel_type(parcel_type): which column of lcl is which parcel (1 surface, 2 most unstable, 3 mixed layer)
     ptype = np.asarray(ds["parcel_type"].values).astype(int)
+    # lcl(time, parcel_type) in km; the same value is repeated at every sample of the launch.
+    # The -9999 fill was already decoded to NaN when the file was opened.
     lcl_all = np.atleast_2d(np.asarray(ds["lcl"].values, dtype=float))
+    # data_quality(time): bit mask of input checks on the sonde profile (surface dew point / temperature
+    # jumps, bad dp, tdry, pressure, rh, winds). 0 everywhere in the launch = every check passed.
     dq = np.asarray(ds["data_quality"].values, dtype=float) if "data_quality" in ds else np.array([0.0])
     dq_ok = bool(np.all(np.isfinite(dq)) and np.all(dq == 0))
 
@@ -658,3 +933,157 @@ def gcvi_ams_residuals(
         samples[col.replace("_ugm3", "_resid_ugm3")] = samples[col] / samples["EF"]
     used = long_segs.loc[np.unique(k[inside])]
     return samples, used
+
+
+# ---------------------------------------------------------------------------
+# FM-120 fog monitor at Mt. Soledad: cloud and haze sampling hours
+# ---------------------------------------------------------------------------
+def fm120_classify(
+    fm: pd.DataFrame,
+    *,
+    cloud_nd_min_cm3: float,
+    cloud_lwc_min_gm3: float,
+    haze_nd_min_cm3: float,
+    haze_lwc_min_gm3: float,
+) -> pd.DataFrame:
+    """Label each FM-120 5-min interval as cloud, haze, or neither.
+
+    Inputs
+    ------
+    fm : sources.load_fm120() output, one row per 5-min interval the instrument
+        ran, with nd_cm3 (total droplet number, 2-50 um, # cm-3) and lwc_gm3
+        (liquid water content, g m-3). There is no QC field.
+    cloud_nd_min_cm3, cloud_lwc_min_gm3 : an interval is CLOUD when
+        nd_cm3 > cloud_nd_min_cm3 AND lwc_gm3 > cloud_lwc_min_gm3.
+        (DOE/SC-ARM-24-023, Chang 2024, Table 1 uses N > 1 cm-3 and
+        LWC > 0.05 g m-3; the sheet's "Fig. 5" values need other thresholds,
+        see the notebook.)
+    haze_nd_min_cm3, haze_lwc_min_gm3 : an interval is HAZE when it is not
+        cloud AND nd_cm3 > haze_nd_min_cm3 AND lwc_gm3 > haze_lwc_min_gm3,
+        i.e. droplets are present but too few or too dilute to count as cloud.
+        This definition is an assumption: the sheet does not document it.
+
+    Returns a DataFrame on fm's index with boolean columns ``cloud``, ``haze``
+    and ``operating`` (the interval has a finite number and LWC). Intervals
+    with a missing value are neither cloud nor haze.
+    """
+    nd, lwc = fm["nd_cm3"], fm["lwc_gm3"]
+    operating = nd.notna() & lwc.notna()
+    # comparisons with NaN are False, so missing values never classify as cloud or haze
+    cloud = (nd > cloud_nd_min_cm3) & (lwc > cloud_lwc_min_gm3)
+    haze = ~cloud & (nd > haze_nd_min_cm3) & (lwc > haze_lwc_min_gm3)
+    return pd.DataFrame({"cloud": cloud, "haze": haze, "operating": operating})
+
+
+def interval_hours(mask: pd.Series, *, interval_min: Optional[float] = None) -> pd.Series:
+    """Hours represented by each True interval (0 for False), for seasonal_sums.
+
+    Each FM-120 row is one 5-min average, so a True row counts interval_min / 60
+    hours. interval_min defaults to the median spacing of the index (5 min)."""
+    if interval_min is None:
+        interval_min = float(pd.Series(mask.index).diff().median() / pd.Timedelta(minutes=1))
+    return mask.astype(float) * interval_min / 60.0
+
+
+VIS_SENSOR_MAX_M = 48270.0  # the visibility record's ceiling: 30 statute miles (48.27 km)
+
+
+def visibility_on_intervals(
+    vis_m: pd.Series,
+    index: pd.DatetimeIndex,
+    *,
+    interval_min: float = 5.0,
+    valid_max_m: float = VIS_SENSOR_MAX_M,
+    min_samples: int = 125,
+) -> pd.DataFrame:
+    """Visibility statistics of the ~1-s record over each FM-120 interval.
+
+    Inputs
+    ------
+    vis_m : ~1-s visibility (m), UTC index (sources.load_visibility_msd)
+    index : FM-120 interval START times; each interval is [t, t + interval_min)
+        (the FM-120 files average 1-s data into 5-min intervals labelled by
+        their start, 00:00 ... 23:55)
+    valid_max_m : samples above this are spikes and are dropped (the sensor
+        reports at most 30 statute miles = 48,270 m). Samples <= 0 m are also
+        dropped (the record holds a few zeros; fog gives a few metres, not 0).
+    min_samples : an interval needs at least this many valid samples, else its
+        statistics are NaN (a full 5-min interval holds ~250 samples)
+
+    Returns a DataFrame on `index`: vis_median_m (visibility for more than half
+    the interval was below this), vis_mean_m, n_vis (valid samples).
+    """
+    valid = vis_m[(vis_m > 0) & (vis_m <= valid_max_m)]
+    # assign every sample to the interval that starts at its floored time stamp
+    start = valid.index.floor(pd.Timedelta(minutes=interval_min))
+    g = valid.groupby(start)
+    stats = pd.DataFrame({"vis_median_m": g.median(), "vis_mean_m": g.mean(), "n_vis": g.count()})
+    stats = stats.reindex(index)
+    stats["n_vis"] = stats["n_vis"].fillna(0).astype(int)
+    too_few = stats["n_vis"] < min_samples
+    stats.loc[too_few, ["vis_median_m", "vis_mean_m"]] = np.nan
+    return stats
+
+
+def fm120_classify_visibility(
+    fm: pd.DataFrame,
+    vis_m: pd.Series,
+    *,
+    cloud_vis_max_m: float = 1000.0,
+    cloud_lwc_min_gm3: float = 0.01,
+    haze_vis_max_m: float = 5000.0,
+    haze_lwc_max_gm3: float = 0.01,
+    haze_vis_min_m: float = 0.0,
+) -> pd.DataFrame:
+    """Label each FM-120 5-min interval as cloud or haze from visibility and LWC.
+
+    The defaults are the operational definitions in Lynn Russell's EPCAPE BAMS
+    paper (text quoted by Andrew Buggee, 2026-10-07): "haze conditions identified
+    operationally as those with low visibility (<5 km) but low liquid water
+    content (<0.01 g m-3)", and cloud "conditions with visibility <1 km and
+    liquid water >0.01 g m-3".
+
+    Inputs
+    ------
+    fm : sources.load_fm120() output (one row per 5-min interval the FM-120 ran),
+        with lwc_gm3 (liquid water content, g m-3) and nd_cm3
+    vis_m : visibility (m) of each interval, on fm's index (one column of
+        visibility_on_intervals, e.g. vis_median_m); NaN = no usable visibility
+    cloud_vis_max_m, cloud_lwc_min_gm3 : CLOUD when visibility < cloud_vis_max_m
+        AND lwc_gm3 > cloud_lwc_min_gm3
+    haze_vis_max_m, haze_lwc_max_gm3 : HAZE when visibility < haze_vis_max_m
+        AND lwc_gm3 < haze_lwc_max_gm3 AND the interval is not cloud.
+        haze_lwc_max_gm3 = np.inf drops the LWC condition.
+    haze_vis_min_m : optional lower visibility bound for haze (visibility >
+        haze_vis_min_m); 0 = none (the paper's definition). 1000 with
+        haze_lwc_max_gm3 = np.inf gives "1 km < visibility < 5 km", the reading
+        that reproduces the sheet's row 32.
+
+    Cloud and haze never overlap: haze excludes cloud intervals explicitly (with
+    the default thresholds they are already disjoint, LWC > 0.01 vs < 0.01).
+
+    Returns a DataFrame on fm's index with boolean columns:
+      cloud, haze
+      low_vis_neither  visibility < max(cloud_vis_max_m, haze_vis_max_m) but
+                       neither cloud nor haze (with the defaults: 1-5 km and
+                       LWC >= 0.01 g m-3, i.e. too clear for cloud, too wet for haze)
+      operating        the FM-120 reported number and LWC for the interval
+      has_vis          usable visibility for the interval
+    NaN visibility or LWC never classifies (comparisons with NaN are False).
+    """
+    lwc = fm["lwc_gm3"]
+    operating = fm["nd_cm3"].notna() & lwc.notna()
+    vis = vis_m.reindex(fm.index)
+    # cloud: low visibility (fog at the summit) with measurable liquid water
+    cloud = operating & (vis < cloud_vis_max_m) & (lwc > cloud_lwc_min_gm3)
+    # haze: reduced visibility without (much) liquid water, and not already cloud
+    haze = (operating & (vis > haze_vis_min_m) & (vis < haze_vis_max_m)
+            & (lwc < haze_lwc_max_gm3) & ~cloud)
+    low_vis = vis < max(cloud_vis_max_m, haze_vis_max_m)
+    return pd.DataFrame({
+        "cloud": cloud,
+        "haze": haze,
+        "low_vis_neither": operating & low_vis & ~cloud & ~haze,
+        "operating": operating,
+        "has_vis": operating & vis.notna(),
+    })

@@ -12,3 +12,4 @@ dependencies:
   - pytest
   - matplotlib     # figures in instruments/ and comparisons/
   - ipykernel      # run the analysis notebooks in this environment
+  - openpyxl       # read the seasonal-averages sheet and write the summary .xlsx

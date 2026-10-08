@@ -106,13 +106,33 @@ products:
   lwp_mwrret1_M1:
     description: Liquid water path from the MWRRET VAP, version 1 (Turner et al. 2007), Scripps Pier (M1)
     datastream: epcmwrret1liljclouM1.c2
-    variables: [phys_lwp, be_lwp]
+    # cloud_base_height (km; from ARSCL cloud_base_best_estimate) and its qc_ field mark cloudy samples:
+    # qc_cloud_base_height bit 2 = "Clear sky conditions", bit 3 = no input file (value set to 1 km).
+    variables: [phys_lwp, be_lwp, cloud_base_height]
     optional_variables: [phys_lwp_uncertainty, be_retrieval_status]
+
+  lwp_mwrret2_M1:
+    description: Liquid water path from the MWRRET VAP, version 2 (3-channel MWR, Turner), Scripps Pier (M1)
+    datastream: epcmwrret2turnM1.c1
+    # ~1.3 s samples. Cloud presence: cbh_detected (km; ceilometer first_cbh, -0.001 when no cloud) and
+    # detection_status (ceilometer code; 1-3 = cloud base detected). phys_qc_flag (0 = good) is a
+    # second QC field for phys_lwp besides qc_phys_lwp.
+    variables: [phys_lwp, cbh_detected, detection_status, phys_qc_flag]
+    optional_variables: [clearsky_flag]
 
   cloud_arscl_M1:
     description: Hydrometeor layer bases and tops from KAZR-ARSCL (Kollias et al.), Scripps Pier (M1); heights above ground
     datastream: epcarsclkazr1kolliasM1.c1
     variables: [cloud_layer_top_height, cloud_layer_base_height, cloud_base_best_estimate]
+
+  cloud_source_arscl_M1:
+    description: ARSCL cloud_source_flag (which instrument detected each gate) + layer tops, Scripps Pier (M1); reduced to the code at the lowest cloud top
+    datastream: epcarsclkazr1kolliasM1.c1
+    # ~28 MB/day (~10 GB campaign) as ARM Live serves it. Not in the default download:
+    #   python comparisons/seasonal_averages/download_data.py --only cloud_source_arscl_M1
+    # The daily files are reduced to processed/cloud_arscl_topsource_M1_*.nc and then deleted.
+    layout: reduce_top_source
+    variables: [cloud_source_flag, cloud_layer_top_height]
 
   pblh_thermo_M1:
     description: PBL height best estimate from thermodynamic profiles (PBLHTTHERMO, machine learning), Scripps Pier (M1); km above ground
@@ -168,3 +188,17 @@ ucsd_library:
       - {component: 16, ext: nc,  filename: AMS_CE_corrected_msptof.nc}               # HR-ToF-AMS NR-PM1, Mt. Soledad, ~5 min
       - {component: 30, ext: txt, filename: bb2743661p_30_1_lowCloudPeriods.txt}      # hourly Low Cloud Period flag, Scripps Pier
       - {component: 36, ext: csv, filename: bb2743661p_36_1_CVI_EF.csv}               # GCVI enhancement factor, 1 s
+
+# DMT FM-120 fog monitor at Mt. Soledad (Lauren Robinson and Rachel Chang, Dalhousie
+# University; ARM field campaign report DOE/SC-ARM-24-023). Not in the ARM archive or the
+# UCSD Library: daily CSV files of 5-min averages (00:00-23:55 UTC) received from the PIs
+# and placed in <data folder>/processed/<folder>/, one file per day, named YYYY-MM-DD.csv.
+fm120:
+  folder: Daily Averaged FM-120 FIles
+  readme: readme_FM120.md
+  # Visibility at Mt. Soledad ("msd"), ~1-s samples in metres, UTC, in <data folder>/processed/.
+  # Used to sort FM-120 intervals into cloud (visibility < 1 km) and haze (1-3 km).
+  # The two files overlap on 2023-07-19 04:00-13:57; duplicates are dropped when read.
+  visibility_files:
+    - msd_visibility_20230224-20230719.csv
+    - msd_visibility_20230719-20240214.csv

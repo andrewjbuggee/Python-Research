@@ -123,8 +123,8 @@ def test_arscl_empty_layers_are_minus_one_not_nan():
     top = np.array([[600.0, -1.0], [650.0, 2500.0], [-1.0, -1.0]])
     ds = xr.Dataset({"cloud_layer_base_height": (("time", "layer"), base),
                      "cloud_layer_top_height": (("time", "layer"), top)}, coords={"time": time})
-    any_layer, _ = q.lowest_layer_top_m(ds, period="5min")
-    single, _ = q.lowest_layer_top_m(ds, single_layer=True, period="5min")
+    any_layer, _ = q.lowest_layer_top_m(ds, window_min=5)
+    single, _ = q.lowest_layer_top_m(ds, single_layer=True, window_min=5)
     assert any_layer.tolist()[:2] == [600.0, 650.0] and np.isnan(any_layer.iloc[2])  # -1 = clear sky
     assert single.iloc[0] == 600.0 and np.isnan(single.iloc[1])  # second layer present at t1
 
@@ -173,3 +173,122 @@ def test_sw_and_lw_window_minutes():
     lw10, _ = q.lw_down(ds, window_min=10)
     assert len(lw0) == 20 and lw10.tolist() == [304.5, 314.5]
     assert info0["window_min"] == 0
+
+
+# --- cloudy-scene LWP ----------------------------------------------------------
+def test_cloudy_masks_and_cloudy_lwp():
+    t = pd.date_range("2023-07-01", periods=6, freq="1min")
+    # MWRRET v1: qc bit 2 = clear sky (value missing); bit 3 = no input file (value 1 km, Indeterminate)
+    r1 = xr.Dataset(
+        {
+            "cloud_base_height": ("time", [0.3, np.nan, 0.4, 1.0, 0.5, 0.2]),
+            "qc_cloud_base_height": ("time", [0, 2, 0, 4, 0, 0]),
+            "phys_lwp": ("time", [50.0, 1.0, 70.0, 80.0, 90.0, 100.0]),
+            "qc_phys_lwp": ("time", [0, 2, 0, 0, 0, 1]),
+        },
+        coords={"time": t},
+    )
+    r1["phys_lwp"].attrs["units"] = "g/m^2"
+    np.testing.assert_array_equal(q.cloudy_mwrret1(r1).values, [True, False, True, False, True, True])
+    lwp, info = q.lwp_cloudy_gm2(r1, "phys_lwp", q.cloudy_mwrret1(r1), window_min=2)
+    # kept: t0 (50), t2 (70), t4 (90); t5 fails qc_phys_lwp; t1 clear; t3 filled cloud base
+    assert lwp.tolist() == [50.0, 70.0, 90.0]
+    assert info["cloudy_fraction"] == pytest.approx(3 / 4)  # 4 samples pass LWP QC, 3 are cloudy
+
+    # MWRRET v2: cbh_detected = -0.001 when clear; detection_status 4 = obscured, no base
+    r2 = xr.Dataset(
+        {
+            "cbh_detected": ("time", [0.3, -0.001, 0.4, -0.001, 0.5, 0.2]),
+            "detection_status": ("time", [1, 0, 2, 4, 1, 1]),
+            "phys_lwp": ("time", [50.0, -3.0, 70.0, 80.0, 90.0, 100.0]),
+            "qc_phys_lwp": ("time", [0, 0, 0, 0, 0, 0]),
+            "phys_qc_flag": ("time", [0, 0, 0, 0, 1, 0]),
+        },
+        coords={"time": t},
+    )
+    r2["phys_lwp"].attrs["units"] = "g/m^2"
+    np.testing.assert_array_equal(q.cloudy_mwrret2(r2).values, [True, False, True, False, True, True])
+    lwp2, _ = q.lwp_cloudy_gm2(r2, "phys_lwp", q.cloudy_mwrret2(r2), require_zero=("phys_qc_flag",), window_min=1)
+    assert lwp2.dropna().tolist() == [50.0, 70.0, 100.0]  # t4 fails phys_qc_flag; clear and obscured dropped
+
+    # window_min = 0: no averaging, every sample that passed QC + cloud filter, at its own time
+    raw2, _ = q.lwp_cloudy_gm2(r2, "phys_lwp", q.cloudy_mwrret2(r2), require_zero=("phys_qc_flag",), window_min=0)
+    assert raw2.tolist() == [50.0, 70.0, 100.0] and list(raw2.index) == [t[0], t[2], t[5]]
+
+
+def test_near_rain_works_on_any_time_stamps():
+    rain_t = pd.date_range("2023-07-01 12:00", periods=3, freq="1min")  # rain 12:00-12:02
+    rate = pd.Series([0.0, 2.0, 0.0], index=rain_t)  # only 12:01 is wet
+    # native, irregular sample times (seconds off any grid)
+    samples = pd.to_datetime(["2023-07-01 11:30:59", "2023-07-01 11:31:01", "2023-07-01 12:30:59",
+                              "2023-07-01 12:31:01", "2023-07-01 14:00:17"])
+    np.testing.assert_array_equal(q.near_rain(rate, samples, window_min=30),
+                                  [False, True, True, False, False])
+    # a 5-min window starting 11:26 covers 11:26-11:31, so 11:31 + 30 min reaches the 12:01 rain
+    starts = pd.to_datetime(["2023-07-01 11:20", "2023-07-01 11:26"])
+    np.testing.assert_array_equal(q.near_rain(rate, starts, window_min=30, value_length_min=5), [False, True])
+    assert not q.near_rain(rate.iloc[[0, 2]], samples).any()  # no rain at all -> all dry
+
+
+def test_cloud_top_source_selection():
+    # 3 samples, 4 gates (centres 160-250 m); lowest-layer tops at 220, 190 and none
+    t = pd.date_range("2023-07-01", periods=3, freq="4s")
+    ds = xr.Dataset(
+        {
+            "cloud_layer_top_height": (("time", "layer"), [[220.0, -1.0], [190.0, -1.0], [-1.0, -1.0]]),
+            "cloud_layer_base_height": (("time", "layer"), [[160.0, -1.0], [160.0, -1.0], [-1.0, -1.0]]),
+            "cloud_source_flag": (("time", "height"), [[2, 2, 2, 1], [4, 4, 1, 1], [1, 1, 1, 1]]),
+        },
+        coords={"time": t, "height": [160.0, 190.0, 220.0, 250.0]},
+    )
+    assert q.arscl_cloud_top_source(ds).values.tolist() == [2, 4, -1]  # code at the top gate; -1 = no layer
+    every, _ = q.lowest_layer_top_m(ds, window_min=0)
+    radar, info = q.lowest_layer_top_m(ds, window_min=0, cloud_sources=(2, 3, 5))
+    assert every.tolist() == [220.0, 190.0] and radar.tolist() == [220.0]  # lidar-only top dropped
+    assert info["top_source_counts"] == {2: 1, 4: 1}
+    with pytest.raises(KeyError):
+        q.lowest_layer_top_m(ds.drop_vars("cloud_source_flag"), cloud_sources=(2,))
+
+
+# --- FM-120 cloud / haze hours ------------------------------------------------------
+def test_fm120_cloud_haze_classification_and_hours():
+    t = pd.date_range("2023-07-01", periods=5, freq="5min")
+    fm = pd.DataFrame({"nd_cm3": [100.0, 100.0, 3.0, 0.5, np.nan],
+                       "lwc_gm3": [0.2, 0.005, 0.004, 0.0005, 0.3]}, index=t)
+    cls = q.fm120_classify(fm, cloud_nd_min_cm3=50, cloud_lwc_min_gm3=0.01,
+                           haze_nd_min_cm3=1, haze_lwc_min_gm3=0.001)
+    assert cls["cloud"].tolist() == [True, False, False, False, False]
+    assert cls["haze"].tolist() == [False, True, True, False, False]  # droplets, but not cloud
+    assert cls["operating"].tolist() == [True, True, True, True, False]
+    hrs = q.interval_hours(cls["haze"])
+    assert hrs.sum() == pytest.approx(2 * 5 / 60)
+
+
+def test_visibility_intervals_and_classification():
+    # 1-s visibility over three 5-min intervals: fog, haze, and a gap
+    t = pd.date_range("2023-07-01 00:00:00", "2023-07-01 00:09:59", freq="1s")
+    vis = pd.Series(np.where(t < pd.Timestamp("2023-07-01 00:05"), 500.0, 2000.0), index=t)
+    vis.iloc[10] = 1e8  # spike above the sensor ceiling -> dropped
+    vis.iloc[11] = 0.0  # zero -> dropped
+    starts = pd.date_range("2023-07-01", periods=3, freq="5min")
+    st = q.visibility_on_intervals(vis, starts, min_samples=125)
+    assert st["vis_median_m"].tolist()[:2] == [500.0, 2000.0] and np.isnan(st["vis_median_m"].iloc[2])
+    assert st["n_vis"].tolist() == [298, 300, 0]
+    # defaults = the BAMS-paper definitions: cloud = vis < 1 km & LWC > 0.01; haze = vis < 5 km & LWC < 0.01
+    fm = pd.DataFrame({"nd_cm3": [100.0, 10.0, 5.0], "lwc_gm3": [0.2, 0.005, 0.3]}, index=starts)
+    cls = q.fm120_classify_visibility(fm, st["vis_median_m"])
+    assert cls["cloud"].tolist() == [True, False, False]  # 500 m, LWC 0.2
+    assert cls["haze"].tolist() == [False, True, False]  # 2 km, LWC 0.005; the third has no visibility
+    assert cls["has_vis"].tolist() == [True, True, False]
+    # fog with almost no liquid water is haze; 2 km with LWC >= 0.01 is neither
+    fm2 = fm.assign(lwc_gm3=[0.005, 0.05, 0.3])
+    cls2 = q.fm120_classify_visibility(fm2, st["vis_median_m"])
+    assert cls2["haze"].tolist() == [True, False, False] and not cls2["cloud"].any()
+    assert cls2["low_vis_neither"].tolist() == [False, True, False]
+    # the sheet's reading: haze = 1 km < vis < 5 km with no LWC condition
+    cls3 = q.fm120_classify_visibility(fm2, st["vis_median_m"], haze_vis_min_m=1000.0, haze_lwc_max_gm3=np.inf)
+    assert cls3["haze"].tolist() == [False, True, False]
+    assert cls3["low_vis_neither"].tolist() == [True, False, False]
+    # cloud and haze never overlap, even with no LWC condition on haze
+    cls4 = q.fm120_classify_visibility(fm, st["vis_median_m"], haze_lwc_max_gm3=np.inf)
+    assert not (cls4["cloud"] & cls4["haze"]).any()

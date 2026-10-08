@@ -99,6 +99,8 @@ export EPCAPE_DATA_ROOT=/some/path    # optional: overrides data_root for one ma
 
 ## Data layout
 
+What the parts of an ARM file name mean (site, facility, data level `b1`/`c1`/..., version attributes): see [ARM_file_naming.md](ARM_file_naming.md).
+
 ```
 data/
   arm/<datastream>/          complete ARM files, archive names
@@ -167,6 +169,9 @@ comparisons/<topic>/          analyses that set several products side by side
     download_data.py              ARM products + UCSD Library files the check needs
     check_seasonal_averages.ipynb <- start here (QC = 0 only; outputs in processed/derived/)
     seasonal.py, quantities.py, sources.py   seasons + table parsing; one function per quantity; data access
+    kavin.py                      Kavin's MATLAB live script re-run on his input files
+                                  (Kavin_data_for_BAMS_paper/, git-ignored): SW, LW, LWP, FM-120 hours, activated fractions,
+                                  droplet number and diameter
 ```
 
 Rules the code follows:
@@ -235,3 +240,6 @@ view of the output. `tests/test_cloud_products.py` covers the analysis layer
 `tests/test_seasonal_averages.py` covers the seasonal-averages check (reading
 the sheet's cells, season windows, QC = 0, the Romps LCL, rain events, GCVI
 residuals).
+`tests/test_kavin.py` checks the re-run of Kavin's code against hand-worked
+cases (MATLAB zero padding, Lubin's table cells, visibility windows, Abbey Williams'
+cloud/haze classes on the FM-120 rows and on the GCVI-AMS samples).
