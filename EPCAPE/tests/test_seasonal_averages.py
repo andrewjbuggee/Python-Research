@@ -216,6 +216,73 @@ def test_cloudy_masks_and_cloudy_lwp():
     assert raw2.tolist() == [50.0, 70.0, 100.0] and list(raw2.index) == [t[0], t[2], t[5]]
 
 
+def test_solar_zenith_at_the_pier_on_the_june_solstice():
+    # Local solar noon at the Scripps Pier (32.867 N, 117.257 W) is ~19:50 UTC; at the June solstice the
+    # noon zenith angle is |lat - 23.44| ~ 9.43 deg, and at 08:00 UTC (local midnight) the sun is down.
+    t = pd.date_range("2023-06-21 00:00", "2023-06-21 23:59", freq="1min")
+    sza = q.solar_zenith_deg(t, 32.867, -117.257)
+    assert sza.min() == pytest.approx(9.43, abs=0.3)
+    assert pd.Timestamp("2023-06-21 19:44") <= t[np.argmin(sza)] <= pd.Timestamp("2023-06-21 19:56")
+    assert sza[t.get_loc(pd.Timestamp("2023-06-21 08:00"))] > 90
+
+
+def test_ceilometer_cloud_frequency_and_goes_like_lwp_windows():
+    # two hours of 16-s ceilometer samples: hour 1 = low cloud for 3/4 of the hour, then clear;
+    # hour 2 = a 5-km base (not low) for half, then status 0 for the rest, but only 40 % of it reported
+    t = pd.date_range("2023-07-01 18:00", periods=450, freq="16s")
+    status = np.r_[np.ones(169), np.zeros(56), np.ones(45), np.zeros(45), np.full(135, -1)]
+    cbh = np.r_[np.full(169, 400.0), np.full(56, np.nan), np.full(45, 5000.0), np.full(180, np.nan)]
+    ceil = xr.Dataset({"first_cbh": ("time", cbh), "qc_first_cbh": ("time", np.where(np.isfinite(cbh), 0, 1)),
+                       "detection_status": ("time", status)}, coords={"time": t})
+    cf = q.ceilometer_low_cloud_fraction(ceil, max_cbh_m=3500, window_min=60, min_coverage=0.5)
+    assert cf["low_cloud_fraction"].iloc[0] == pytest.approx(169 / 225)
+    assert np.isnan(cf["low_cloud_fraction"].iloc[1])  # 90 of 225 samples known: under-covered
+    # LWP samples: two in hour 1 (mean 60), one in hour 2; hour 1 is daytime at the Pier (18:30 UTC midpoint)
+    samples = pd.Series([40.0, 80.0, 30.0], index=pd.to_datetime(
+        ["2023-07-01 18:10", "2023-07-01 18:50", "2023-07-01 19:20"]))
+    w = q.lwp_goes_like_windows(samples, cf, window_min=60, lat_deg=32.867, lon_deg=-117.257, sza_max_deg=80)
+    assert w["lwp_gm2"].tolist() == [60.0, 30.0] and w["n_samples"].tolist() == [2, 1]
+    assert bool(w["daytime"].iloc[0]) and np.isnan(w["low_cloud_fraction"].iloc[1])
+    # sky classes: hour 1 is cloudy (fraction 0.75) but not overcast; hour 2 has no fraction (under-covered)
+    assert q.goes_like_sky(w, "cloudy").tolist() == [60.0]
+    assert q.goes_like_sky(w, "overcast").empty
+    # RADFLUX zenith option: a cosine of 1 at the midpoint -> 0 deg; no RADFLUX value nearby -> NaN, not daytime
+    cz = pd.Series([1.0], index=pd.to_datetime(["2023-07-01 18:30"]))
+    w2 = q.lwp_goes_like_windows(samples, cf, window_min=60, lat_deg=0, lon_deg=0, cosine_zenith=cz)
+    assert w2["sza_deg"].iloc[0] == pytest.approx(0.0) and np.isnan(w2["sza_deg"].iloc[1])
+    assert w2["daytime"].tolist() == [True, False]
+
+
+def test_arscl_state_and_per_sample_low_cloud_mask():
+    # ARSCL flag values: -1 clear, -2 possible clear (unknown); bases above max_cbh_m are "no low cloud"
+    t = pd.date_range("2023-07-01 18:00", periods=5, freq="4s")
+    arscl = xr.Dataset({"cloud_base_best_estimate": ("time", [500.0, -1.0, -2.0, 6000.0, np.nan])}, coords={"time": t})
+    np.testing.assert_array_equal(q.arscl_low_cloud_state(arscl, max_cbh_m=3500).to_numpy(),
+                                  [1.0, 0.0, np.nan, 0.0, np.nan])
+    # MWR samples at the same times: only the one under low cloud is kept; then the 10-250 g m-2 range
+    mwr = xr.Dataset({"phys_lwp": ("time", [80.0, 90.0, 70.0, 60.0, 50.0]), "qc_phys_lwp": ("time", [0] * 5),
+                      "phys_qc_flag": ("time", [0] * 5)}, coords={"time": t})
+    mwr["phys_lwp"].attrs["units"] = "g/m^2"
+    no_rain = pd.Series([0.0], index=pd.to_datetime(["2023-07-01 00:00"]))
+    kept, counts = q.lwp_goes_like_samples_gm2(mwr, no_rain, q.arscl_low_cloud_state(arscl, max_cbh_m=3500))
+    assert kept.tolist() == [80.0] and counts["low cloud base overhead"] == 1
+
+
+@pytest.mark.parametrize("sampling, expected", [
+    ("hour", 40.0),          # every sample, 10-250 per sample: 20 (clear but >= 10) and 60 -> 40
+    ("cloud_sample", 60.0),  # only the samples under low cloud, then 10-250: 60
+    ("hour_mean", 95.5),     # every sample averaged (2, 20, 60, 300 -> 95.5), then 10-250 on the mean
+])
+def test_goes_like_sampling_modes(sampling, expected):
+    t = pd.to_datetime(["2023-07-01 18:05", "2023-07-01 18:20", "2023-07-01 18:35", "2023-07-01 18:50"])
+    lwp = pd.Series([2.0, 20.0, 60.0, 300.0], index=t)
+    state = pd.Series([0.0, 0.0, 1.0, 1.0], index=t)  # clear, clear, low cloud, low cloud
+    cf = q.low_cloud_fraction(state, window_min=60, min_coverage=0.0)
+    w, _ = q.lwp_goes_like(lwp, cf, sampling=sampling, window_min=60, lat_deg=32.867, lon_deg=-117.257,
+                           cloud_state=state, lwp_range_gm2=(10, 250))
+    assert q.goes_like_sky(w, "cloudy").tolist() == [pytest.approx(expected)]
+
+
 def test_near_rain_works_on_any_time_stamps():
     rain_t = pd.date_range("2023-07-01 12:00", periods=3, freq="1min")  # rain 12:00-12:02
     rate = pd.Series([0.0, 2.0, 0.0], index=rain_t)  # only 12:01 is wet

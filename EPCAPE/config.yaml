@@ -183,6 +183,11 @@ products:
     datastream: epcldquantsS2.c1
     variables: [rain_rate]
 
+  rain_tbrg_M1:
+    description: Tipping-bucket rain gauge precipitation total per sample interval, surface met station, Scripps Pier (M1); Dié Wang's "met" input
+    datastream: epcmetM1.b1
+    variables: [tbrg_precip_total]
+
 # Russell-group EPCAPE products in the UC San Diego Library Digital Collections
 # ("Aerosol Microphysics and Chemical Measurements at Mt. Soledad and Scripps Pier
 # during EPCAPE", https://library.ucsd.edu/dc/collection/bb0898306q).

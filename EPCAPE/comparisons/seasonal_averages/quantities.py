@@ -338,6 +338,328 @@ def near_rain(
 
 
 # ---------------------------------------------------------------------------
+# LWP sampled like the GOES-18 statistics (Seethala Chellappan, email of 12 Oct 2026)
+# ---------------------------------------------------------------------------
+# Her GOES-18 / SatCORPS LWP statistics are "cloudy sky" with constraints that reduce the retrieval
+# uncertainty: low cloud fraction > 0, cloud optical depth > 2, LWP within 10-250 g m-2, daytime only.
+# An "overcast" version uses low cloud fraction >= 95 %. For the ARM MWR3C LWP she suggested a half-hourly or
+# hourly cloud frequency from the ceilometer, thresholded the same way.
+#
+# The sample is built in two levels, like a satellite grid box built from pixels:
+#   PER SAMPLE (the MWR's ~1.3-s samples play the role of pixels): lwp_qc_rain_free_gm2 keeps samples with
+#     QC = 0 and no Pier rain nearby; goes_like_samples then applies the sampling mode (below).
+#   PER WINDOW (30 or 60 min, the grid box): lwp_goes_like_windows averages each window's samples and
+#     attaches the window's low-cloud fraction (low_cloud_fraction of a cloud record: ceilometer or ARSCL)
+#     and solar zenith angle; goes_like_sky then picks the windows of one sky class:
+#       "cloudy sky": low-cloud fraction > 0 (low cloud overhead at least once in the window);
+#       "overcast":   low-cloud fraction >= 0.95;
+#       "daytime":    solar zenith angle at the window midpoint <= the cut;  "all time": any time of day.
+# Seethala's email does not say how the MWR samples inside a selected window should be used, so the
+# sampling mode is a choice (GOES_SAMPLING_MODES; lwp_goes_like applies it consistently):
+#   "hour"          every QC = 0, rain-free sample of the window counts; the 10-250 g m-2 range is applied to
+#                   each sample, so clear-sky samples (LWP ~ 0) mostly drop out by themselves. The window's
+#                   cloud fraction is the only cloud screen. (Andrew's reading of her email.)
+#   "cloud_sample"  only samples with low cloud overhead in the cloud record (nearest sample) count; range per
+#                   sample. Because every kept sample has low cloud overhead, "low-cloud fraction > 0" then
+#                   only drops windows whose fraction is NaN (cloud record covering < min_coverage).
+#   "hour_mean"     every QC = 0, rain-free sample of the window is averaged, clear ones included; the range is
+#                   applied to the window MEAN (a box-average reading of her limits).
+GOES_SAMPLING_MODES = {
+    "hour": "every MWR sample in the window that passes QC and the rain screen (no per-sample cloud screen); "
+            "LWP range applied to each sample",
+    "cloud_sample": "only MWR samples with low cloud overhead in the cloud record (nearest sample); LWP range applied "
+                    "to each sample",
+    "hour_mean": "every MWR sample in the window that passes QC and the rain screen, clear ones included, averaged; "
+                 "LWP range applied to the window mean",
+}
+LOW_CLOUD, NO_LOW_CLOUD = 1.0, 0.0  # values of a cloud-state series; NaN = state unknown
+
+
+def solar_zenith_deg(times, lat_deg: float, lon_deg: float) -> np.ndarray:
+    """Solar zenith angle (degrees) at UTC `times` for a site at `lat_deg`, `lon_deg` (degrees north, east).
+
+    From NOAA Global Monitoring Laboratory, "General Solar Position Calculations"
+    (https://gml.noaa.gov/grad/solcalc/solareqns.PDF), which uses the Fourier series of
+    Spencer (1971, Search 2(5), 172) for the solar declination and the equation of time:
+
+      gamma  = 2 pi / N (day_of_year - 1 + (hour - 12) / 24)       fractional year (rad); N = 365 or 366
+      eqtime = 229.18 (0.000075 + 0.001868 cos g - 0.032077 sin g
+                       - 0.014615 cos 2g - 0.040849 sin 2g)         equation of time (min)
+      decl   = 0.006918 - 0.399912 cos g + 0.070257 sin g - 0.006758 cos 2g
+               + 0.000907 sin 2g - 0.002697 cos 3g + 0.00148 sin 3g  solar declination (rad)
+      true solar time (min) = UTC minutes since midnight + eqtime + 4 lon
+      hour angle (deg)      = true solar time / 4 - 180
+      cos(sza) = sin(lat) sin(decl) + cos(lat) cos(decl) cos(hour angle)
+
+    No refraction correction. The notebook checks the result against RADFLUX's cosine_zenith.
+    """
+    t = pd.DatetimeIndex(pd.to_datetime(np.asarray(times)))
+    if t.tz is not None:
+        t = t.tz_convert("UTC").tz_localize(None)
+    hour = t.hour + t.minute / 60.0 + (t.second + t.microsecond / 1e6) / 3600.0  # UTC decimal hours
+    n_days = np.where(t.is_leap_year, 366.0, 365.0)
+    g = 2.0 * np.pi / n_days * (t.dayofyear - 1 + (hour - 12.0) / 24.0)  # fractional year (rad)
+    eqtime_min = 229.18 * (0.000075 + 0.001868 * np.cos(g) - 0.032077 * np.sin(g)
+                           - 0.014615 * np.cos(2 * g) - 0.040849 * np.sin(2 * g))
+    decl_rad = (0.006918 - 0.399912 * np.cos(g) + 0.070257 * np.sin(g) - 0.006758 * np.cos(2 * g)
+                + 0.000907 * np.sin(2 * g) - 0.002697 * np.cos(3 * g) + 0.00148 * np.sin(3 * g))
+    true_solar_min = hour * 60.0 + eqtime_min + 4.0 * lon_deg  # timezone offset 0: times are UTC
+    hour_angle_rad = np.deg2rad(true_solar_min / 4.0 - 180.0)
+    lat_rad = np.deg2rad(lat_deg)
+    cos_sza = (np.sin(lat_rad) * np.sin(decl_rad)
+               + np.cos(lat_rad) * np.cos(decl_rad) * np.cos(hour_angle_rad))
+    return np.rad2deg(np.arccos(np.clip(cos_sza, -1.0, 1.0)))
+
+
+def radflux_zenith_deg(cosine_zenith: pd.Series, times, *, tolerance_s: float = 60.0) -> np.ndarray:
+    """Solar zenith angle (degrees) at `times` from RADFLUX's cosine_zenith (1-min values, no QC field).
+
+    RADFLUX's value is also a calculation, not a measurement (its comment: "Calculated using solarposition()
+    function, by Nels Larson, PNNL"). Each time takes the nearest RADFLUX value within `tolerance_s`
+    seconds; times with none (RADFLUX gaps, ~0.3 % of the campaign's minutes) are NaN, which the caller
+    must treat as "not daytime".
+    """
+    cz = cosine_zenith.reindex(pd.DatetimeIndex(times), method="nearest", tolerance=pd.Timedelta(seconds=tolerance_s))
+    return np.rad2deg(np.arccos(np.clip(cz.to_numpy(dtype=float), -1.0, 1.0)))
+
+
+def ceilometer_low_cloud_state(ds: xr.Dataset, *, max_cbh_m: float = 3500.0) -> pd.Series:
+    """Low cloud overhead or not, per Pier ceilometer sample (epcceilM1.b1, 16 s): 1, 0 or NaN (unknown).
+
+    ds: the cbh_ceil_M1 product with first_cbh (m above the instrument), qc_first_cbh and detection_status
+    (0 no backscatter, 1-3 one to three cloud bases, 4 full obscuration without a base, 5 some obscuration
+    judged transparent; detection_status has no QC field, but its codes say explicitly when it is clear):
+      1 (low cloud)     status 1-3, qc_first_cbh = 0 and first_cbh <= max_cbh_m;
+      0 (no low cloud)  status 0 or 5, or status 1-3 with a QC = 0 base above max_cbh_m (higher cloud only);
+      NaN (unknown)     status 4 (fog or heavy rain hides the base) or a status 1-3 base failing QC.
+    """
+    status = ds["detection_status"].values
+    cbh, _ = qc0_values(ds, "first_cbh")  # first_cbh with every QC != 0 sample set to NaN
+    cbh = cbh.values
+    base = np.isin(status, [1, 2, 3]) & np.isfinite(cbh)  # a cloud base of valid height (QC = 0)
+    state = np.full(status.shape, np.nan)
+    state[np.isin(status, [0, 5]) | (base & (cbh > max_cbh_m))] = NO_LOW_CLOUD
+    state[base & (cbh <= max_cbh_m)] = LOW_CLOUD
+    return pd.Series(state, index=pd.DatetimeIndex(ds["time"].values), name="low_cloud_state")
+
+
+def arscl_low_cloud_state(ds: xr.Dataset, *, max_cbh_m: float = 3500.0) -> pd.Series:
+    """Low cloud overhead or not, per KAZR-ARSCL sample (epcarsclkazr1kolliasM1.c1, 4 s): 1, 0 or NaN.
+
+    cloud_base_best_estimate (m) combines the ceilometer and the micropulse lidar. It has no qc_ field;
+    instead its flag values mark clear sky (file attributes: "-2. Possible clear sky (No MPL observations
+    available, Ceilometer obscured, but no cloud detected), -1. Clear sky, >= 0. Valid cloud base height"):
+      1 (low cloud)     0 <= base <= max_cbh_m;
+      0 (no low cloud)  -1 (clear sky), or a base above max_cbh_m (higher cloud only);
+      NaN (unknown)     -2 (possible clear sky: the ceilometer was obscured and the MPL missing) or missing.
+    (MWRRET v1's qc_cloud_base_height is a QC field on its own copy of this ARSCL base, at 20-s resolution.)
+    """
+    base = ds["cloud_base_best_estimate"].values
+    state = np.full(base.shape, np.nan)
+    state[(base == -1) | (base > max_cbh_m)] = NO_LOW_CLOUD
+    state[(base >= 0) & (base <= max_cbh_m)] = LOW_CLOUD
+    return pd.Series(state, index=pd.DatetimeIndex(ds["time"].values), name="low_cloud_state")
+
+
+def low_cloud_fraction(state: pd.Series, *, window_min: float = 60.0, min_coverage: float = 0.5) -> pd.DataFrame:
+    """Cloud frequency: the fraction of each window's samples with a low cloud base overhead.
+
+    The ground-based stand-in for a satellite low cloud fraction, as Seethala Chellappan suggested (12 Oct
+    2026). It is a fraction of TIME at one point, not of AREA, so it matches the GOES-18 grid-box fraction
+    only for clouds that drift past the site (her words: "not identical ... but might work well to capture
+    persistent stratiform cloud decks").
+
+    state: a cloud-state series (``ceilometer_low_cloud_state`` or ``arscl_low_cloud_state``). Unknown
+    (NaN) samples are left out of both the numerator and the denominator. Windows are `window_min` minutes
+    long, labelled by their start and anchored at midnight UTC of the first day (the grid of ``window_mean``).
+    A window's fraction is NaN when fewer than `min_coverage` of the samples it should hold (window length /
+    median sampling interval) have a known state.
+
+    Returns DataFrame indexed by window start: n_known, n_low, coverage (known samples / expected),
+    low_cloud_fraction (0-1).
+    """
+    known = state.notna()
+    frame = pd.DataFrame({"n_known": known.astype(int), "n_low": (state == LOW_CLOUD).astype(int)}, index=state.index)
+    out = frame.resample(pd.Timedelta(minutes=float(window_min))).sum()
+    dt_s = float(np.median(np.diff(state.index.asi8))) / 1e9  # 16 s (ceilometer) or 4 s (ARSCL)
+    out["coverage"] = out["n_known"] / (window_min * 60.0 / dt_s)
+    out["low_cloud_fraction"] = (out["n_low"] / out["n_known"].where(out["n_known"] > 0)).where(
+        out["coverage"] >= min_coverage)
+    return out
+
+
+def ceilometer_low_cloud_fraction(
+    ds: xr.Dataset, *, max_cbh_m: float = 3500.0, window_min: float = 60.0, min_coverage: float = 0.5
+) -> pd.DataFrame:
+    """``low_cloud_fraction`` of the Pier ceilometer (see ``ceilometer_low_cloud_state``)."""
+    return low_cloud_fraction(ceilometer_low_cloud_state(ds, max_cbh_m=max_cbh_m), window_min=window_min,
+                              min_coverage=min_coverage)
+
+
+def lwp_qc_rain_free_gm2(
+    ds: xr.Dataset, rain_rate_mm_h: pd.Series, *, rain_window_min: float = 30.0
+) -> Tuple[pd.Series, Dict[str, int]]:
+    """MWRRET v2 LWP samples (g m-2) with QC = 0, phys_qc_flag = 0 and no Pier rain within ±`rain_window_min`.
+
+    ds is lwp_mwrret2_M1 (epcmwrret2turnM1.c1, the 3-channel MWR mwr3c, ~1.3-s samples). Water on the radome
+    biases the MWR high, so samples within ±`rain_window_min` minutes of any rain at the Pier Parsivel are
+    dropped (``near_rain``). No cloud screen and no LWP range yet (``goes_like_samples`` adds them).
+    Returns (samples at their own times, counts after each step).
+    """
+    lwp, _ = lwp_cloudy_gm2(ds, "phys_lwp", xr.ones_like(ds["phys_lwp"], dtype=bool),
+                            require_zero=("phys_qc_flag",), window_min=0)  # QC only; every sample kept
+    counts = {"QC = 0 and phys_qc_flag = 0": int(lwp.size)}
+    lwp = lwp[~near_rain(rain_rate_mm_h, lwp.index, window_min=rain_window_min)]
+    counts[f"rain-free (±{rain_window_min:g} min)"] = int(lwp.size)
+    return lwp.rename("lwp_gm2"), counts
+
+
+def goes_like_samples(
+    lwp_gm2: pd.Series,
+    *,
+    sampling: str = "hour",
+    cloud_state: Optional[pd.Series] = None,
+    lwp_range_gm2: Tuple[float, float] = (10.0, 250.0),
+    match_tolerance_s: Optional[float] = None,
+) -> Tuple[pd.Series, Dict[str, int]]:
+    """The PER-SAMPLE part of a sampling mode (GOES_SAMPLING_MODES), applied to QC'd, rain-free samples.
+
+    lwp_gm2: output of ``lwp_qc_rain_free_gm2``.
+      sampling = "hour":         keep lwp_range_gm2[0] <= LWP <= lwp_range_gm2[1]; no cloud screen here.
+      sampling = "cloud_sample": keep samples whose nearest `cloud_state` sample (within `match_tolerance_s`;
+                                 default = the state's median sampling interval) is 1 (low cloud overhead),
+                                 then the LWP range. Clear samples are dropped even inside a cloudy window.
+      sampling = "hour_mean":    keep every sample; the range is applied later to the window mean.
+    Returns (samples, counts after each step).
+    """
+    if sampling not in GOES_SAMPLING_MODES:
+        raise ValueError(f"sampling must be one of {list(GOES_SAMPLING_MODES)}, not {sampling!r}")
+    counts: Dict[str, int] = {}
+    if sampling == "cloud_sample":
+        if cloud_state is None:
+            raise ValueError("sampling='cloud_sample' needs a cloud_state series")
+        if match_tolerance_s is None:
+            match_tolerance_s = float(np.median(np.diff(cloud_state.index.asi8))) / 1e9
+        state_at = cloud_state.reindex(lwp_gm2.index, method="nearest", tolerance=pd.Timedelta(seconds=match_tolerance_s))
+        lwp_gm2 = lwp_gm2[(state_at == LOW_CLOUD).to_numpy()]
+        counts["low cloud base overhead"] = int(lwp_gm2.size)
+    if sampling in ("hour", "cloud_sample"):
+        lo, hi = lwp_range_gm2
+        lwp_gm2 = lwp_gm2[(lwp_gm2 >= lo) & (lwp_gm2 <= hi)]
+        counts[f"{lo:g} <= LWP <= {hi:g} g m-2 (each sample)"] = int(lwp_gm2.size)
+    return lwp_gm2, counts
+
+
+def lwp_goes_like_samples_gm2(
+    ds: xr.Dataset,
+    rain_rate_mm_h: pd.Series,
+    cloud_state: pd.Series,
+    *,
+    lwp_range_gm2: Tuple[float, float] = (10.0, 250.0),
+    rain_window_min: float = 30.0,
+    match_tolerance_s: Optional[float] = None,
+) -> Tuple[pd.Series, Dict[str, int]]:
+    """The "cloud_sample" mode in one call: QC, rain screen, low cloud overhead, LWP range (per sample)."""
+    lwp, counts = lwp_qc_rain_free_gm2(ds, rain_rate_mm_h, rain_window_min=rain_window_min)
+    lwp, more = goes_like_samples(lwp, sampling="cloud_sample", cloud_state=cloud_state,
+                                  lwp_range_gm2=lwp_range_gm2, match_tolerance_s=match_tolerance_s)
+    return lwp, {**counts, **more}
+
+
+def lwp_goes_like_windows(
+    samples_gm2: pd.Series,
+    cloud_fraction: pd.DataFrame,
+    *,
+    window_min: float,
+    lat_deg: float,
+    lon_deg: float,
+    sza_max_deg: float = 80.0,
+    cosine_zenith: Optional[pd.Series] = None,
+    window_lwp_range_gm2: Optional[Tuple[float, float]] = None,
+) -> pd.DataFrame:
+    """PER-WINDOW means of the GOES-like LWP samples, with what the sky-class rules need attached.
+
+    samples_gm2: output of ``lwp_goes_like_samples_gm2``. cloud_fraction: output of ``low_cloud_fraction``
+    for the SAME window length and cloud source. Each window ([start, start + window_min)) gets
+      lwp_gm2             mean of the samples kept in it: an in-cloud mean (clear samples were never kept)
+      n_samples           how many samples went into it
+      low_cloud_fraction  the window's low-cloud frequency (NaN if the cloud source covered too little of it)
+      sza_deg             solar zenith angle at the window's midpoint: from RADFLUX's `cosine_zenith` when
+                          given (``radflux_zenith_deg``; NaN in RADFLUX gaps), else the NOAA equations
+                          (``solar_zenith_deg``)
+      daytime             sza_deg <= sza_max_deg (False where sza_deg is NaN)
+    Only windows holding at least one kept sample are returned; with `window_lwp_range_gm2` (the "hour_mean"
+    mode) only windows whose MEAN lies in that range. ``goes_like_sky`` picks the sky class.
+    """
+    period = pd.Timedelta(minutes=float(window_min))
+    g = samples_gm2.resample(period)
+    out = pd.DataFrame({"lwp_gm2": g.mean(), "n_samples": g.count()})
+    out = out[out["n_samples"] > 0]
+    out["low_cloud_fraction"] = cloud_fraction["low_cloud_fraction"].reindex(out.index)
+    mid = out.index + period / 2
+    out["sza_deg"] = (radflux_zenith_deg(cosine_zenith, mid) if cosine_zenith is not None
+                      else solar_zenith_deg(mid, lat_deg, lon_deg))
+    out["daytime"] = out["sza_deg"] <= sza_max_deg  # NaN compares False: no zenith angle = not daytime
+    if window_lwp_range_gm2 is not None:  # "hour_mean": the LWP range applies to the window mean
+        lo, hi = window_lwp_range_gm2
+        out = out[(out["lwp_gm2"] >= lo) & (out["lwp_gm2"] <= hi)]
+    return out
+
+
+def lwp_goes_like(
+    lwp_gm2: pd.Series,
+    cloud_fraction: pd.DataFrame,
+    *,
+    sampling: str,
+    window_min: float,
+    lat_deg: float,
+    lon_deg: float,
+    cloud_state: Optional[pd.Series] = None,
+    lwp_range_gm2: Tuple[float, float] = (10.0, 250.0),
+    sza_max_deg: float = 80.0,
+    cosine_zenith: Optional[pd.Series] = None,
+) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """GOES-like LWP windows for one sampling mode (GOES_SAMPLING_MODES), applied consistently.
+
+    lwp_gm2: QC'd, rain-free samples (``lwp_qc_rain_free_gm2``). cloud_fraction: ``low_cloud_fraction`` of the
+    cloud record for the same window length; cloud_state: that record's per-sample state (needed only for
+    "cloud_sample"). Returns (windows from ``lwp_goes_like_windows``, per-sample counts); pass the windows
+    to ``goes_like_sky`` for a sky class.
+    """
+    samples, counts = goes_like_samples(lwp_gm2, sampling=sampling, cloud_state=cloud_state, lwp_range_gm2=lwp_range_gm2)
+    windows = lwp_goes_like_windows(samples, cloud_fraction, window_min=window_min, lat_deg=lat_deg, lon_deg=lon_deg,
+                                    sza_max_deg=sza_max_deg, cosine_zenith=cosine_zenith,
+                                    window_lwp_range_gm2=lwp_range_gm2 if sampling == "hour_mean" else None)
+    return windows, counts
+
+
+def goes_like_sky(
+    windows: pd.DataFrame, sky: str, *, daytime_only: bool = True, overcast_min_fraction: float = 0.95
+) -> pd.Series:
+    """The window LWP values (g m-2) of one GOES-18 sky class, from ``lwp_goes_like_windows``.
+
+    sky = "cloudy":   windows whose low-cloud fraction is > 0, i.e. low cloud was overhead at least once in the
+                      window (Seethala's "low cloud fraction > 0"). Every sample the sampling mode kept in
+                      the window counts. In the "hour" and "hour_mean" modes this is the cloud screen; in
+                      "cloud_sample" mode the samples were already screened, so it only removes windows whose
+                      cloud fraction is NaN (cloud record covering < min_coverage of the window).
+    sky = "overcast": windows whose low-cloud fraction is >= `overcast_min_fraction` (Seethala: 95 %).
+    daytime_only = True ("daytime"): also require the window's daytime flag, as in the GOES-18 statistics;
+                   False ("all time"): any time of day, all the other constraints unchanged.
+    """
+    cf = windows["low_cloud_fraction"]
+    if sky == "cloudy":
+        keep = cf > 0
+    elif sky == "overcast":
+        keep = cf >= overcast_min_fraction
+    else:
+        raise ValueError(f"sky must be 'cloudy' or 'overcast', not {sky!r}")
+    if daytime_only:
+        keep &= windows["daytime"]
+    return windows.loc[keep, "lwp_gm2"]
+
+
+# ---------------------------------------------------------------------------
 # cloud boundaries
 # ---------------------------------------------------------------------------
 # ARSCL cloud_source_flag codes (flag_N_description in the file)
