@@ -169,6 +169,20 @@ products:
     datastream: epcvdisquantsM1.c1
     variables: [rain_rate]
 
+  # ---- Monthly rain accumulation (variables/precipitation) -------------------
+  # Dié Wang's EPCAPE rain figure uses the LDQUANTS VAP (rain_rate, mm h-1), not
+  # the raw Parsivel precip_rate above. Her "LD_S1" is the Mt. Soledad laser
+  # disdrometer: ARM serves it as S2 (no epcldquantsS1 datastream exists).
+  rain_ldquants_M1:
+    description: Rain rate from the laser disdrometer (LDQUANTS VAP), Scripps Pier (M1)
+    datastream: epcldquantsM1.c1
+    variables: [rain_rate]
+
+  rain_ldquants_S2:
+    description: Rain rate from the laser disdrometer (LDQUANTS VAP), Mt. Soledad (S2; Dié Wang's "LD_S1")
+    datastream: epcldquantsS2.c1
+    variables: [rain_rate]
+
 # Russell-group EPCAPE products in the UC San Diego Library Digital Collections
 # ("Aerosol Microphysics and Chemical Measurements at Mt. Soledad and Scripps Pier
 # during EPCAPE", https://library.ucsd.edu/dc/collection/bb0898306q).
