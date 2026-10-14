@@ -1,0 +1,66 @@
+FM-120 Fog Droplet Monitor (Mt. Soledad), EPCAPE: data availability
+====================================================================
+Data:     5-min averages, data/processed/FM120/Monthly FM-120 Files/ (UTC)
+Campaign: 2023-02-15 00:00 to 2024-02-15 00:00 UTC (end exclusive)
+Method:   % available = (number of 5-min samples x 5 min) / (time in the month
+          inside the campaign window). Feb 2023 counts Feb 15-28 only;
+          Feb 2024 counts Feb 1-14 only.
+Made by:  EPCAPE/comparisons/data_availability/data_availability.ipynb
+
+1. Percent of time with data, by month
+----------------------------------------
+Month       Hours with data  Hours possible  % available
+Feb 2023               81.9             336         24.4
+Mar 2023              669.2             744         89.9
+Apr 2023              601.4             720         83.5
+May 2023              591.8             744         79.5
+Jun 2023              711.7             720         98.8
+Jul 2023              735.6             744         98.9
+Aug 2023              681.7             744         91.6
+Sep 2023              705.3             720         98.0
+Oct 2023              551.5             744         74.1
+Nov 2023              711.6             720         98.8
+Dec 2023              675.9             744         90.8
+Jan 2024              438.6             744         58.9
+Feb 2024              336.0             336        100.0
+Campaign             7492.2            8760         85.5
+
+2. Periods with no data of 1 day or longer
+----------------------------------------
+Start = end of the last 5-min interval with data; End = start of the next one.
+Start (UTC)        End (UTC)           Duration (days)
+2023-02-15 00:00   2023-02-16 16:40               1.69
+2023-02-17 16:10   2023-02-20 10:40               2.77
+2023-02-20 14:30   2023-02-22 12:25               1.91
+2023-02-22 12:40   2023-02-24 15:15               2.11
+2023-03-31 00:00   2023-04-01 00:00               1.00
+2023-04-16 16:30   2023-04-19 00:00               2.31
+2023-05-05 00:00   2023-05-08 01:55               3.08
+2023-05-30 13:30   2023-05-31 17:55               1.18
+2023-08-22 20:10   2023-08-23 20:50               1.03
+2023-10-17 00:00   2023-10-19 02:35               2.11
+2023-10-26 01:55   2023-10-30 17:50               4.66
+2023-12-16 00:00   2023-12-17 00:00               1.00
+2023-12-26 00:00   2023-12-27 00:00               1.00
+2024-01-02 00:05   2024-01-05 00:00               3.00
+2024-01-07 00:00   2024-01-10 19:20               3.81
+2024-01-14 02:45   2024-01-15 03:05               1.01
+2024-01-27 09:15   2024-01-29 18:50               2.40
+Total: 17 periods, 36.1 days (9.9% of the campaign)
+
+3. Periods with no data shorter than 1 day
+----------------------------------------
+Number of periods:  45
+Total time:         402.0 h (4.6% of the campaign)
+Median duration:    5.9 h
+Mean duration:      8.9 h
+Shortest / longest: 0.17 h / 23.2 h
+Number by duration:
+    < 1 h      1
+    1-6 h     22
+    6-12 h    10
+    12-24 h   12
+
+Note: the FM-120 records clear air as well (most samples have N < 1 cm-3), so
+a period with no data means the instrument was not recording, not that there
+was no cloud or haze.

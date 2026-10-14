@@ -1,0 +1,258 @@
+# %%
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import pandas as pd
+#import seaborn as sns
+
+# %%
+def plot_radiative_imbalance(
+    olr_da,
+    asr_da,
+    ax=None,
+    fig=None,
+    plot_kwargs=None,
+    fontsize=14,
+    cmap=mpl.colormaps['viridis'],
+    add_colorbar=True,
+    cax=None,
+    monthly=True,
+    connected=True,
+    line11=True,
+    norm=None,
+):
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+    if plot_kwargs is None:
+        plot_kwargs = {}
+
+    # Plot OLR vs ASR with color gradient for time dimension
+    if connected:
+        ax.plot(
+            olr_da,
+            asr_da,
+            color="black",
+            alpha=0.5,
+            zorder=5,
+            linewidth=0.5,
+        )
+
+    seasons = {'DJF':[12,1,2],'MAM':[3,4,5],'JJA':[6,7,8],'SON':[9,10,11]}
+    if monthly:
+        for (sea,mos),marker in zip(seasons.items(),['o','*','+','^']):
+            olr_dai = olr_da.sel(time=olr_da['time.month'].isin(mos))
+            asr_dai = asr_da.sel(time=asr_da['time.month'].isin(mos))
+            scatter = ax.scatter(
+                olr_dai,
+                asr_dai,
+                c=olr_dai['time.year']+0.083*olr_dai['time.month'], #fractional year coordinate
+                marker=marker,
+                cmap=cmap,
+                norm=norm,
+                zorder=10,
+                label=sea,
+                **plot_kwargs,
+            )
+        ax.legend(bbox_to_anchor=[0.5,-0.3],loc='lower center',ncols=2)
+    else:
+        scatter = ax.scatter(
+            olr_da,
+            asr_da,
+            c=olr_da['time.year']+0.083*olr_da['time.month'], #fractional year coordinate
+            marker=marker,
+            cmap=cmap,
+            norm=norm,
+            zorder=10,
+            **plot_kwargs,
+        )
+
+    # Add a colorbar with discrete intervals and extend='both' keyword
+    # bounds = pd.date_range(
+    #     start=pd.to_datetime(olr_da["time"].min().data),
+    #     end=pd.to_datetime(olr_da["time"].max().data), 
+    #     periods=min(olr_da.sizes['time'],255)) 
+    if norm is None:
+        bounds = np.arange(
+            olr_da['time.year'].min(),
+            olr_da['time.year'].max(),
+            max(1,(olr_da['time.year'].max()-olr_da['time.year'].min())/255))
+        norm = mpl.colors.BoundaryNorm(np.array(bounds), cmap.N, extend='both')
+
+    if add_colorbar:
+        if cax is None:
+            plt.colorbar(
+                mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
+                ax=ax, orientation='vertical',
+                label="Time",
+            )
+        else:
+            plt.colorbar(
+                mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
+                cax=cax, orientation='vertical',
+                label="Time",
+            )
+
+    # Plot the 1:1 line
+    min_val = min(olr_da.min().item(), asr_da.min().item())
+    max_val = max(olr_da.max().item(), asr_da.max().item())
+    ax.plot(
+        [min_val, max_val],
+        [min_val, max_val],
+        color="grey",
+        linestyle="--",
+        zorder=0,
+    )
+    #ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("OLR [Wm$^{-2}$]", fontsize=fontsize)
+    ax.set_ylabel("ASR [Wm$^{-2}$]", fontsize=fontsize)
+    if not line11:
+        ax.set_xlim(olr_da.min(), olr_da.max())
+        ax.set_ylim(asr_da.min(), asr_da.max())
+
+    if fig is None:
+        return ax
+    else:
+        return fig, ax
+
+
+def plot_radiative_imbalance_annual(
+    olr_da,
+    asr_da,
+    ax=None,
+    fig=None,
+    plot_kwargs=None,
+    fontsize=14,
+    cmap=mpl.colormaps['viridis'],
+    add_colorbar=True,
+    cax=None,
+    connected=True,
+    line11=True,
+    norm=None,
+):
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+    if plot_kwargs is None:
+        plot_kwargs = {}
+
+    # Plot OLR vs ASR with color gradient for year dimension
+    if "ens" not in olr_da.dims:
+        if connected:
+            ax.plot(
+                olr_da,
+                asr_da,
+                color="black",
+                alpha=0.5,
+                zorder=5,
+                linewidth=0.5,
+            )
+
+        scatter = ax.scatter(
+            olr_da,
+            asr_da,
+            c=olr_da['year'],
+            marker='o',
+            cmap=cmap,
+            norm=norm,
+            zorder=10,
+            **plot_kwargs,
+        )
+    else:
+        for i in range(len(olr_da['ens'])):
+            if connected:
+                ax.plot(
+                    olr_da.isel(ens=i),
+                    asr_da.isel(ens=i),
+                    color="black",
+                    alpha=0.5,
+                    zorder=5,
+                    linewidth=0.5,
+                )
+            scatter = ax.scatter(
+                olr_da.isel(ens=i),
+                asr_da.isel(ens=i),
+                c=olr_da['year'],
+                marker='o',
+                cmap=cmap,
+                norm=norm,
+                zorder=10,
+                **plot_kwargs,
+            )
+
+    # Add a colorbar with discrete intervals and extend='both' keyword
+    if norm is None:
+        bounds = np.arange(
+            olr_da['year'].min(),
+            olr_da['year'].max(),
+            max(1, (olr_da['year'].max() - olr_da['year'].min()) / 255),
+        )
+        norm = mpl.colors.BoundaryNorm(np.array(bounds), cmap.N, extend='both')
+
+    if add_colorbar:
+        if cax is None:
+            cbar = plt.colorbar(
+                mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
+                ax=ax, orientation='vertical',
+                label="Year",
+            )
+        else:
+            cbar = plt.colorbar(
+                mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
+                cax=cax, orientation='vertical',
+                label="Year",
+            )
+
+    # Plot the 1:1 line
+    if line11:
+        min_val = min(olr_da.min(), asr_da.min())
+        max_val = max(olr_da.max(), asr_da.max())
+        ax.plot(
+            [min_val, max_val],
+            [min_val, max_val],
+            color="grey",
+            linestyle="--",
+            zorder=0,
+        )
+    ax.set_xlabel("OLR [Wm$^{-2}$]", fontsize=fontsize)
+    ax.set_ylabel("ASR [Wm$^{-2}$]", fontsize=fontsize)
+    if not line11:
+        ax.set_xlim(olr_da.min(), olr_da.max())
+        ax.set_ylim(asr_da.min(), asr_da.max())
+
+    if add_colorbar:
+        if fig is None:
+            return ax, cbar
+        else:
+            return fig, ax, cbar
+    if fig is None:
+        return ax
+    else:
+        return fig, ax
+
+# %%
+
+def main():
+    olr = np.arange(0, 10, 0.5)  # Example ASR values
+    asr = 0.5 * (olr**2)
+    
+    fig, ax = plot_radiative_imbalance(
+        olr_da=xr.DataArray(olr, dims=["time"], coords={"time": np.arange(len(olr))}),
+        asr_da=xr.DataArray(asr, dims=["time"], coords={"time": np.arange(len(asr))}),
+        plot_kwargs={"marker": "o", "linestyle": "solid"},
+    )
+    
+    # Get rid of the plot edges and add gridlines through the origin
+    ax.spines["top"].set_visible(False)
+    ax.spines["bottom"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    ax.axhline(0, color="grey", linestyle="solid", linewidth=1.5)
+    ax.axvline(0, color="grey", linestyle="solid", linewidth=1.5)
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+    
+# %%
+
+if __name__ == '__main__':
+    main()

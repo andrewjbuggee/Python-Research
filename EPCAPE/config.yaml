@@ -212,9 +212,11 @@ ucsd_library:
 # University; ARM field campaign report DOE/SC-ARM-24-023). Not in the ARM archive or the
 # UCSD Library: daily CSV files of 5-min averages (00:00-23:55 UTC) received from the PIs
 # and placed in <data folder>/processed/<folder>/, one file per day, named YYYY-MM-DD.csv.
+# Since 2026-10-14 they sit in processed/FM120/, next to Kavin's monthly files
+# (processed/FM120/Monthly FM-120 Files/, YYYY-MM.csv; not read by the Python code).
 fm120:
-  folder: Daily Averaged FM-120 FIles
-  readme: readme_FM120.md
+  folder: FM120/Daily Averaged FM-120 FIles
+  readme: FM120/readme_FM120.md  # relative to processed/, like folder
   # Visibility at Mt. Soledad ("msd"), ~1-s samples in metres, UTC, in <data folder>/processed/.
   # Used to sort FM-120 intervals into cloud (visibility < 1 km) and haze (1-3 km).
   # The two files overlap on 2023-07-19 04:00-13:57; duplicates are dropped when read.
