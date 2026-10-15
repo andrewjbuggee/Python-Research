@@ -26,6 +26,8 @@
 *.pt
 *.err
 *.npz
+*.csv
+
 
 # weird hitran files
 hitran_ri/ascii/*
