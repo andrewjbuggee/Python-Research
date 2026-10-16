@@ -505,6 +505,14 @@ def lwp_qc_rain_free_gm2(
     biases the MWR high, so samples within ±`rain_window_min` minutes of any rain at the Pier Parsivel are
     dropped (``near_rain``). No cloud screen and no LWP range yet (``goes_like_samples`` adds them).
     Returns (samples at their own times, counts after each step).
+
+    The two QC fields both say whether the retrieval is recommended for use (file attributes):
+      qc_phys_lwp   bit 1 (Bad): "The quality of the retrieval is such that it is recommended it not be used."
+      phys_qc_flag  "Quality control flag indicating if the physical retrieval should be used":
+                    0 = retrievals_good, 1 = retrievals_bad.
+    In the EPCAPE record (lwp_mwrret2_M1_20230215_20240214.nc, checked 16 Oct 2026) they flag exactly the same
+    samples: 730,969 of 22,047,667 (3.3 %) fail both, no sample fails only one, and phys_qc_flag is never
+    missing. Requiring both is therefore redundant but harmless; 96.7 % of the samples pass.
     """
     lwp, _ = lwp_cloudy_gm2(ds, "phys_lwp", xr.ones_like(ds["phys_lwp"], dtype=bool),
                             require_zero=("phys_qc_flag",), window_min=0)  # QC only; every sample kept

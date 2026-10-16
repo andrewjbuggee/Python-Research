@@ -13,7 +13,9 @@ Each figure is made twice: daytime hours only, and all hours ("all time").
 How the MWR LWP becomes one value per hour (identical to Section 3c, "hour" sampling; the helpers are the same
 functions in quantities.py = Q):
   1. MWRRET v2 phys_lwp (epcmwrret2turnM1.c1, the 3-channel MWR mwr3c, ~1.3-s samples), qc_phys_lwp = 0 and
-     phys_qc_flag = 0 (Q.lwp_qc_rain_free_gm2).
+     phys_qc_flag = 0 (Q.lwp_qc_rain_free_gm2), i.e. only retrievals the VAP recommends for use: qc_phys_lwp
+     bit 1 = "recommended it not be used", phys_qc_flag 1 = "retrievals_bad". In this record the two fields
+     flag the same 730,969 of 22,047,667 samples (3.3 %), so either one alone would give the same result.
   2. Rain screen: samples within ±RAIN_EXCLUDE_MIN minutes of rain are dropped (a wet radome biases the MWR
      high). "Rain" = any 1-min sample with a rain rate > 0 (any accumulation; Q.near_rain), from the gauges
      chosen by RAIN_GAUGES.
