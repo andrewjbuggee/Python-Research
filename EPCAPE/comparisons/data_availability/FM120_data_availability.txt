@@ -2,28 +2,32 @@ FM-120 Fog Droplet Monitor (Mt. Soledad), EPCAPE: data availability
 ====================================================================
 Data:     5-min averages, data/processed/FM120/Monthly FM-120 Files/ (UTC)
 Campaign: 2023-02-15 00:00 to 2024-02-15 00:00 UTC (end exclusive)
-Method:   % available = (number of 5-min samples x 5 min) / (time in the month
-          inside the campaign window). Feb 2023 counts Feb 15-28 only;
-          Feb 2024 counts Feb 1-14 only.
+Method:   % available = (number of 5-min samples x 5 min) / (possible time).
+          Two versions of the possible time, differing only in the Februarys:
+            A. campaign days only: Feb 2023 = Feb 15-28, Feb 2024 = Feb 1-14
+            B. whole month: every month = all of its hours
+          A counts only data inside the campaign window; B counts all data
+          recorded in the month (adds 2024-02-15 00:00-17:00, after the campaign).
 Made by:  EPCAPE/comparisons/data_availability/data_availability.ipynb
 
 1. Percent of time with data, by month
 ----------------------------------------
-Month       Hours with data  Hours possible  % available
-Feb 2023               81.9             336         24.4
-Mar 2023              669.2             744         89.9
-Apr 2023              601.4             720         83.5
-May 2023              591.8             744         79.5
-Jun 2023              711.7             720         98.8
-Jul 2023              735.6             744         98.9
-Aug 2023              681.7             744         91.6
-Sep 2023              705.3             720         98.0
-Oct 2023              551.5             744         74.1
-Nov 2023              711.6             720         98.8
-Dec 2023              675.9             744         90.8
-Jan 2024              438.6             744         58.9
-Feb 2024              336.0             336        100.0
-Campaign             7492.2            8760         85.5
+              A. Campaign days only               B. Whole month        
+Month      Hours w/ data  Possible     %   Hours w/ data  Possible     %
+Feb 2023            81.9       336  24.4            81.9       672  12.2
+Mar 2023           669.2       744  89.9           669.2       744  89.9
+Apr 2023           601.4       720  83.5           601.4       720  83.5
+May 2023           591.8       744  79.5           591.8       744  79.5
+Jun 2023           711.7       720  98.8           711.7       720  98.8
+Jul 2023           735.6       744  98.9           735.6       744  98.9
+Aug 2023           681.7       744  91.6           681.7       744  91.6
+Sep 2023           705.3       720  98.0           705.3       720  98.0
+Oct 2023           551.5       744  74.1           551.5       744  74.1
+Nov 2023           711.6       720  98.8           711.6       720  98.8
+Dec 2023           675.9       744  90.8           675.9       744  90.8
+Jan 2024           438.6       744  58.9           438.6       744  58.9
+Feb 2024           336.0       336 100.0           353.1       696  50.7
+All               7492.2      8760  85.5          7509.2      9456  79.4
 
 2. Periods with no data of 1 day or longer
 ----------------------------------------
