@@ -268,6 +268,26 @@ def test_arscl_state_and_per_sample_low_cloud_mask():
     assert kept.tolist() == [80.0] and counts["low cloud base overhead"] == 1
 
 
+def test_nonlow_cloud_states_and_highest_arscl_top():
+    # ceilometer: low base, high base (non-low), clear, a base failing QC (unknown)
+    t = pd.date_range("2023-07-01 18:00", periods=4, freq="16s")
+    ceil = xr.Dataset({"first_cbh": ("time", [400.0, 5000.0, np.nan, 800.0]),
+                       "qc_first_cbh": ("time", [0, 0, 0, 1]),
+                       "detection_status": ("time", [1, 1, 0, 1])}, coords={"time": t})
+    nonlow = q.ceilometer_nonlow_cloud_state(ceil, max_cbh_m=3500).to_numpy()
+    low = q.ceilometer_low_cloud_state(ceil, max_cbh_m=3500).to_numpy()
+    np.testing.assert_array_equal(nonlow, [0.0, 1.0, 0.0, np.nan])
+    np.testing.assert_array_equal(np.isnan(nonlow), np.isnan(low))  # same known samples, so TCF - LCF is exact
+    # ARSCL: low deck under cirrus (highest top 9 km), single low layer, clear (-1 everywhere), missing
+    ta = pd.date_range("2023-07-01 18:00", periods=4, freq="4s")
+    top = np.array([[600.0, 9000.0], [700.0, -1.0], [-1.0, -1.0], [np.nan, np.nan]])
+    arscl = xr.Dataset({"cloud_layer_top_height": (("time", "layer"), top)}, coords={"time": ta})
+    highest = q.arscl_highest_top_m(arscl)
+    np.testing.assert_array_equal(highest.to_numpy(), [9000.0, 700.0, -1.0, np.nan])
+    np.testing.assert_array_equal(q.arscl_nonlow_cloud_state(highest, max_top_m=3500).to_numpy(),
+                                  [1.0, 0.0, 0.0, np.nan])
+
+
 @pytest.mark.parametrize("sampling, expected", [
     ("hour", 40.0),          # every sample, 10-250 per sample: 20 (clear but >= 10) and 60 -> 40
     ("cloud_sample", 60.0),  # only the samples under low cloud, then 10-250: 60

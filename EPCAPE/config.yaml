@@ -189,6 +189,32 @@ products:
     datastream: epcmetM1.b1
     variables: [tbrg_precip_total]
 
+  rain_mwrret2_M1:
+    description: Rain intensity carried in the MWRRET v2 files (from the MWR3C's own rain sensor, epcmwr3cM1.b1), Scripps Pier (M1)
+    datastream: epcmwrret2turnM1.c1
+    # mm/s at the MWRRET v2 time stamps (~1.3 s); no qc_ field. The "surface precipitation field in the ground based
+    # measurement files" Seethala Chellappan screened the MWR with (email 19 Oct 2026; inference that it is this one).
+    variables: [rain_intensity]
+
+  precip_arscl_M1:
+    description: Rain-gauge precipitation rate carried in the KAZR-ARSCL files, Scripps Pier (M1)
+    datastream: epcarsclkazr1kolliasM1.c1
+    # precip_mean (mm/h, 4 s) with qc_precip_mean (bit 3 = missing in the input file)
+    variables: [precip_mean]
+
+  goes18_visst_grid_X1:
+    description: GOES-18 SatCORPS (VISST) gridded cloud products (Minnis), EPCAPE domain (X1); 30-min images, 0.5 deg boxes
+    datastream: epcvisstgridg18minnisX1.c1
+    # 30 lat x 36 lon boxes of 0.5 deg (28.25-42.75 N, 129.75-112.25 W); the Pier (32.865 N, 117.254 W) falls in the
+    # box centred 32.75 N, 117.25 W. ~6.9 MB/day complete. Dimensions: level 1 total, 2 low (0-2 km), 3 mid (>2-<6 km),
+    # 4 high (>6 km); cld_type 1 total, 2 ice, 3 water, 4 supercooled; cld_phase 1 ice, 2 water, 3 supercooled.
+    # Reduced to a few boxes around the Pier by comparisons/lwp_mwr_vs_goes/download_goes18.py (load_product cannot
+    # combine the whole grid along time in reasonable memory).
+    layout: reduce_pier_boxes
+    variables: [latitude, longitude, cloud_percentage, cloud_percentage_level, water_path, water_path_sd,
+                optical_depth_linear, optical_depth_log, cloud_height_top, cloud_height_top_level,
+                cloud_height_base, particle_size, solar_zenith_angle, scan_time]
+
 # Russell-group EPCAPE products in the UC San Diego Library Digital Collections
 # ("Aerosol Microphysics and Chemical Measurements at Mt. Soledad and Scripps Pier
 # during EPCAPE", https://library.ucsd.edu/dc/collection/bb0898306q).

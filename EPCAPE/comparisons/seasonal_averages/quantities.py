@@ -461,6 +461,68 @@ def arscl_low_cloud_state(ds: xr.Dataset, *, max_cbh_m: float = 3500.0) -> pd.Se
     return pd.Series(state, index=pd.DatetimeIndex(ds["time"].values), name="low_cloud_state")
 
 
+# Seethala Chellappan's GOES-18 statistics also require "TCF - LCF <= 10 %" (total minus low cloud fraction: little
+# cloud that is not low) and "CTH < 2 km" (cloud-top height). The next three functions give their ground-based
+# stand-ins (used by check_seasonal_averages.ipynb, Section 3d).
+def ceilometer_nonlow_cloud_state(ds: xr.Dataset, *, max_cbh_m: float = 3500.0) -> pd.Series:
+    """Cloud overhead that is NOT low, per Pier ceilometer sample (epcceilM1.b1, 16 s): 1, 0 or NaN (unknown).
+
+      1 (non-low cloud)  detection_status 1-3 and a QC = 0 first (lowest) base above max_cbh_m;
+      0                  status 0 or 5 (clear), or a QC = 0 first base at or below max_cbh_m (low cloud);
+      NaN (unknown)      status 4, or a status 1-3 base failing QC: the same unknowns as ceilometer_low_cloud_state.
+    first_cbh is the LOWEST base, so a sample is "cloudy" (any base) exactly when it is low (state of
+    ceilometer_low_cloud_state = 1) or non-low (this state = 1), never both. Over the same known samples,
+    ``low_cloud_fraction`` of this state is therefore TCF - LCF, with TCF = fraction with any base and LCF = the
+    low-cloud fraction. Limits: looking up, the ceilometer cannot see cloud above a low deck, nor above its range
+    (first_cbh reaches at most 7,620 m in the EPCAPE record); a satellite looking down sees exactly those.
+    """
+    status = ds["detection_status"].values
+    cbh, _ = qc0_values(ds, "first_cbh")  # first_cbh with every QC != 0 sample set to NaN
+    cbh = cbh.values
+    base = np.isin(status, [1, 2, 3]) & np.isfinite(cbh)  # a cloud base of valid height (QC = 0)
+    state = np.full(status.shape, np.nan)
+    state[np.isin(status, [0, 5]) | (base & (cbh <= max_cbh_m))] = 0.0
+    state[base & (cbh > max_cbh_m)] = 1.0
+    return pd.Series(state, index=pd.DatetimeIndex(ds["time"].values), name="nonlow_cloud_state")
+
+
+def arscl_highest_top_m(ds: xr.Dataset) -> pd.Series:
+    """Top (m above ground) of the HIGHEST KAZR-ARSCL hydrometeor layer, per 4-s sample.
+
+    The ground-based stand-in for a satellite's cloud-top height: a satellite sees the top of the uppermost
+    cloud, and the KAZR radar can see an upper layer through a low deck that stops the ceilometer and lidar.
+    cloud_layer_top_height(time, layer) holds up to 10 layers; its flag value -1 means "clear_sky" (file
+    attribute flag_meanings), which also fills the unused layers. It has no qc_ field. Returns
+      the highest top (>= 0)  where at least one layer exists;
+      -1                      where every layer is -1: no hydrometeor layer detected;
+      NaN                     where the sample has no valid value (missing data).
+    -1 is not always clear sky: in the EPCAPE record (checked 19 Oct 2026) ARSCL has no layer at 33 % of the
+    Pier ceilometer's low-cloud samples, while its own cloud_base_best_estimate has a base at 99.5 % of them.
+    The radar/lidar layer mask misses much thin low cloud.
+    """
+    top = ds["cloud_layer_top_height"].values  # (time, layer), m above ground; -1 = clear / unused layer
+    layer = np.isfinite(top) & (top >= 0)
+    highest = np.where(layer, top, -np.inf).max(axis=1)  # -inf where no layer
+    clear = (top == -1).all(axis=1)
+    out = np.where(layer.any(axis=1), highest, np.where(clear, -1.0, np.nan))
+    return pd.Series(out, index=pd.DatetimeIndex(ds["time"].values), name="highest_top_m")
+
+
+def arscl_nonlow_cloud_state(highest_top_m: pd.Series, *, max_top_m: float = 3500.0) -> pd.Series:
+    """Cloud overhead whose top is NOT low, per ARSCL sample, from ``arscl_highest_top_m``: 1, 0 or NaN.
+
+    The top-down (satellite-like) alternative to ``ceilometer_nonlow_cloud_state``: a sample counts toward
+    TCF - LCF when its highest layer top is above max_top_m, even if a low layer lies underneath (a satellite
+    would classify that pixel by its upper cloud too).
+      1   highest top > max_top_m;   0   no layer (-1) or every top <= max_top_m;   NaN   missing data.
+    """
+    top = highest_top_m.to_numpy()
+    state = np.full(top.shape, np.nan)
+    state[(top == -1) | ((top >= 0) & (top <= max_top_m))] = 0.0
+    state[top > max_top_m] = 1.0
+    return pd.Series(state, index=highest_top_m.index, name="nonlow_cloud_state")
+
+
 def low_cloud_fraction(state: pd.Series, *, window_min: float = 60.0, min_coverage: float = 0.5) -> pd.DataFrame:
     """Cloud frequency: the fraction of each window's samples with a low cloud base overhead.
 
