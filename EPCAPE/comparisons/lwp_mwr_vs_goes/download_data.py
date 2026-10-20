@@ -5,7 +5,9 @@
                         campaign). ARM Live's subset service took ~25 s per file for this datastream
                         (19 Oct 2026) against ~2-8 s for a complete file, so complete files are fetched,
                         then reduced to the 3 x 3 boxes around the Pier (goes18.reduce_pier_boxes ->
-                        processed/goes18_visst_pier_X1_<start>_<end>.nc, a few MB).
+                        processed/goes18_visst_pier_X1_<start>_<end>.nc, 34 MB), then to the
+                        Pier box alone (goes18.extract_pier_box -> processed/goes18_visst_pierbox_X1_*.nc, 10 MB;
+                        the only file the notebook reads). The daily files can be deleted afterwards.
   rain_mwrret2_M1       rain_intensity carried in the MWRRET v2 files (MWR3C rain sensor), subset + combined
   precip_arscl_M1       precip_mean (rain gauge) carried in the KAZR-ARSCL files, subset + combined
 
@@ -71,6 +73,7 @@ def main(argv=None) -> int:
         lat_deg, lon_deg = float(ceil["lat"].values.ravel()[0]), float(ceil["lon"].values.ravel()[0])
     try:
         goes18.reduce_pier_boxes(lat_deg, lon_deg, machine=machine)
+        goes18.extract_pier_box(machine=machine)  # the Pier box alone: the file the notebook reads
     except (FileNotFoundError, ValueError, OSError) as exc:
         problems["reduce"] = str(exc)
 

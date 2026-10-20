@@ -155,6 +155,53 @@ def load_pier(machine: Optional[Machine] = None) -> xr.Dataset:
         return ds.load()
 
 
+# What the MWR vs GOES-18 LWP comparison reads from the Pier box (box_table); everything else is dropped by
+# extract_pier_box. cld_type keeps "total" and "water" so GOES_CLOUD_KIND can still choose either.
+COMPARISON_VARIABLES = ["water_path", "cloud_percentage_level", "optical_depth_linear", "cloud_height_top",
+                        "particle_size", "solar_zenith_angle", "scan_datetime"]
+
+
+def pier_box_path(machine: Optional[Machine] = None) -> Path:
+    """processed/goes18_visst_pierbox_X1_<start>_<end>.nc (the output of ``extract_pier_box``)."""
+    cfg = load_config()
+    machine = machine or active_machine(cfg)
+    start, end = campaign_dates(cfg)
+    return machine.processed_dir() / f"goes18_visst_pierbox_X1_{start:%Y%m%d}_{end:%Y%m%d}.nc"
+
+
+def extract_pier_box(machine: Optional[Machine] = None, log: Callable[[str], None] = print) -> Path:
+    """The Pier box alone, with only COMPARISON_VARIABLES, from the 3 x 3 file of ``reduce_pier_boxes``.
+
+    This is the only GOES-18 file the comparison notebook needs, so the ~3.5 GB of daily grid files can be
+    deleted once it exists (re-download them with download_data.py to rebuild it, or to use other boxes).
+    The lat and lon dimensions are kept with length 1, so ``box_table(ds, i=0, j=0)`` reads it."""
+    with xr.open_dataset(pier_path(machine)) as ds:
+        k = int(str(ds.attrs["site_box_index"]).split("lat=")[1].split(",")[0])  # the Pier box's index (1)
+        out = ds[COMPARISON_VARIABLES].isel(lat=[k], lon=[k]).load()
+        out.attrs = dict(ds.attrs)
+    out.attrs["title"] = "GOES-18 SatCORPS (VISST) gridded cloud products, the 0.5 deg box containing the Scripps Pier"
+    out.attrs["site_box_index"] = "lat=0, lon=0 (the only box)"
+    out.attrs["variables_kept"] = ("only what comparisons/lwp_mwr_vs_goes reads (goes18.COMPARISON_VARIABLES); "
+                                   f"cut from {pier_path(machine).name}")
+    path = pier_box_path(machine)
+    enc = {v: {"zlib": True, "complevel": 4} for v in out.data_vars if v != "scan_datetime"}
+    enc["time"] = {"units": "seconds since 1970-01-01", "dtype": "float64"}
+    enc["scan_datetime"] = {"units": "seconds since 1970-01-01", "dtype": "float64"}
+    out.to_netcdf(path, encoding=enc)
+    log(f"Wrote {path} ({path.stat().st_size / 1e6:.1f} MB, {out.sizes['time']:,} images)")
+    return path
+
+
+def load_pier_box(machine: Optional[Machine] = None) -> xr.Dataset:
+    """The file of ``extract_pier_box``, in memory (read it with ``box_table(ds, i=0, j=0)``)."""
+    path = pier_box_path(machine)
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} is missing. Create it with\n"
+                                f"  python comparisons/lwp_mwr_vs_goes/download_data.py")
+    with xr.open_dataset(path) as ds:
+        return ds.load()
+
+
 def box_table(ds: xr.Dataset, *, i: int = 1, j: int = 1, cloud_kind: str = "total") -> pd.DataFrame:
     """The constraint quantities of one grid box, one row per image (index = nominal image time, UTC).
 
