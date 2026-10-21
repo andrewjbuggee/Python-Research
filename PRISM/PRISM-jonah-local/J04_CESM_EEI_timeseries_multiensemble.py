@@ -340,12 +340,16 @@ if __name__ == "__main__":
     # Spatially averaged data (J02 output). Case folders (CESM2_LME, ...) sit directly inside it.
     # Laptop: <repo>/data/RadInt_procdata; Casper: PRISM_data/spatial_averages_data
     data_root = f"{SPATIAL_AVERAGES_DIR}/"
-    # OHC time series (J09/J10 output). No per-case OHC files exist locally yet, so on the laptop
-    # USE_PLACEHOLDER_OHC (below) stays on; on Casper set it False once spatial_OHC_data is populated.
+    # OHC time series (J09/J10 output): one *.pop.h.OHC.*.nc file per TEMP file, holding
+    # OHC_global_mean (time, ohc_depth) [J m-2] and attrs["ocean_area_m2"].
+    # On Casper, PRISM_data/spatial_OHC_data can be a symlink to Jonah's copy (see USE_PLACEHOLDER_OHC below).
     data_root_ohc = f"{SPATIAL_OHC_DIR}/"
 
     CASE_CONFIGS_ATM = deepcopy(CASE_CONFIGS_TEMPLATE)
     CASE_CONFIGS_OCN = deepcopy(CASE_CONFIGS_TEMPLATE)
+    # J09 writes ARISE-1.0 OHC to spatial_OHC_data/ARISE-1.0/ (its CASE_CONFIG key), not to the
+    # ARISE_SAI/ARISE-SAI-1.0/ layout of the atmosphere data, so the ocean path differs here
+    CASE_CONFIGS_OCN["ARISE-1.0"]["path"] = "ARISE-1.0/"
 
     for config in CASE_CONFIGS_ATM.values():
         config["path"] = str(Path(data_root) / config.pop("path"))
@@ -364,14 +368,15 @@ if __name__ == "__main__":
         data_dict[var] = load_data_with_configs(CASE_CONFIGS_ATM, [var], year_dim=year_dim, load_into_memory=False)
 
     # ------------------------------------------------------------------
-    # *** PLACEHOLDER OHC DATA ***
-    # The real per-case OHC time series (Jonah's spatial_OHC_data/) are not available locally yet.
-    # While USE_PLACEHOLDER_OHC = True, EVERY case is given the SAME single OHC series
-    # (cesm2_ohc_global_timeseries.nc, one CESM2-WACCM run, 2035-2084) so that the script runs.
-    # The OHC curves in the figures are therefore NOT physically meaningful.
-    # Set USE_PLACEHOLDER_OHC = False once the real OHC files are in data_root_ohc.
+    # OHC source: real per-case files (J09 output) or the PLACEHOLDER
+    # The real files are used whenever data_root_ohc exists and contains anything. On Casper,
+    # point it at Jonah's copy with a symlink (no copy, no quota):
+    #   ln -s /glade/work/jonahshaw/PRISM_data/spatial_OHC_data /glade/work/$USER/PRISM_data/spatial_OHC_data
+    # Otherwise (e.g. the laptop) EVERY case is given the SAME single OHC series
+    # (cesm2_ohc_global_timeseries.nc, one CESM2-WACCM run, 2035-2084) so that the script runs;
+    # those OHC curves are NOT physically meaningful. Force either choice by setting this to True/False.
     # ------------------------------------------------------------------
-    USE_PLACEHOLDER_OHC = True
+    USE_PLACEHOLDER_OHC = not (Path(data_root_ohc).is_dir() and any(Path(data_root_ohc).iterdir()))
     placeholder_ohc_file = str(PLACEHOLDER_OHC_FILE)
     # Approximate global ocean surface area [m^2] (~71% of the 5.1e14 m^2 Earth surface); placeholder value only
     placeholder_ocean_area_m2 = 3.6e14
@@ -381,7 +386,22 @@ if __name__ == "__main__":
             CASE_CONFIGS_OCN, data_dict["TS"], placeholder_ohc_file, placeholder_ocean_area_m2
         )
     else:
+        logging.info(f"Loading real OHC data from {data_root_ohc}")
         ohc_dict = load_data_with_configs(CASE_CONFIGS_OCN, ohc_varlist, year_dim=year_dim, load_into_memory=False)
+        # load_data_with_configs skips (with only a warning) any case it finds no files for, and the
+        # plotting loops below would then stop with a bare KeyError. List every missing case up front instead.
+        missing_ohc = [
+            f"{case_label}: {case_str}  (searched {config['path']})"
+            for case_label, config in CASE_CONFIGS_OCN.items()
+            for case_str in config["subdir_cases"]
+            if case_str not in ohc_dict.get(case_label, {})
+        ]
+        if missing_ohc:
+            raise FileNotFoundError(
+                "No OHC files found for these cases (expected *<case_str>*.OHC.*nc from J09):\n  "
+                + "\n  ".join(missing_ohc)
+                + "\nSet USE_PLACEHOLDER_OHC = True to run with the placeholder instead."
+            )
 
     # %%
     # CAM global surface area: 
@@ -451,7 +471,9 @@ if __name__ == "__main__":
         asr_ds = data_dict[asr_var][case_label][case_str][asr_var].sel(spatial="G").squeeze().compute()
         olr_ds = data_dict[olr_var][case_label][case_str][olr_var].sel(spatial="G").squeeze().compute()
         ts_ds = data_dict[ts_var][case_label][case_str][ts_var].sel(spatial="G").squeeze().compute()
-        ohc_ds = ohc_dict[case_label][case_str].squeeze()
+        # .compute(), like the atmosphere variables: the real OHC is a lazy dask array with one chunk per
+        # file, and the 10-year rolling mean in compute_decadal2 fails on chunks shorter than 10 years
+        ohc_ds = ohc_dict[case_label][case_str].squeeze().compute()
         ohc_ds = ohc_ds["OHC_global_mean"].sel(ohc_depth=-1) * ohc_ds.attrs["ocean_area_m2"] / earth_SA_cam
         ohc_ds = ohc_ds - ohc_ds.isel(time=0)  # Convert OHC to anomaly
 
@@ -648,7 +670,9 @@ if __name__ == "__main__":
         asr_ds = data_dict[asr_var][case_label][case_str][asr_var].sel(spatial="G").squeeze().compute()
         olr_ds = data_dict[olr_var][case_label][case_str][olr_var].sel(spatial="G").squeeze().compute()
         ts_ds = data_dict[ts_var][case_label][case_str][ts_var].sel(spatial="G").squeeze().compute()
-        ohc_ds = ohc_dict[case_label][case_str].squeeze()
+        # .compute(), like the atmosphere variables: the real OHC is a lazy dask array with one chunk per
+        # file, and the 10-year rolling mean in compute_decadal2 fails on chunks shorter than 10 years
+        ohc_ds = ohc_dict[case_label][case_str].squeeze().compute()
         ohc_ds = ohc_ds["OHC_global_mean"].sel(ohc_depth=-1) * ohc_ds.attrs["ocean_area_m2"] / earth_SA_cam
         ohc_ds = ohc_ds - ohc_ds.isel(time=0)  # Convert OHC to anomaly
 
@@ -833,7 +857,9 @@ if __name__ == "__main__":
         asr_ds = data_dict[asr_var][case_label][case_str][asr_var].sel(spatial="G").squeeze().compute()
         olr_ds = data_dict[olr_var][case_label][case_str][olr_var].sel(spatial="G").squeeze().compute()
         ts_ds = data_dict[ts_var][case_label][case_str][ts_var].sel(spatial="G").squeeze().compute()
-        ohc_ds = ohc_dict[case_label][case_str].squeeze()
+        # .compute(), like the atmosphere variables: the real OHC is a lazy dask array with one chunk per
+        # file, and the 10-year rolling mean in compute_decadal2 fails on chunks shorter than 10 years
+        ohc_ds = ohc_dict[case_label][case_str].squeeze().compute()
         ohc_ds = ohc_ds["OHC_global_mean"].sel(ohc_depth=-1) * ohc_ds.attrs["ocean_area_m2"] / earth_SA_cam
         ohc_ds = ohc_ds - ohc_ds.isel(time=0)  # Convert OHC to anomaly
 

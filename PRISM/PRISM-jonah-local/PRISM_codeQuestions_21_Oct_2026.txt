@@ -1,0 +1,35 @@
+PRISM code questions for Jonah -- 21 Oct 2026
+Source: J04_CESM_EEI_timeseries_multiensemble.py run on Casper (append logic in J15_shared_functions.py)
+
+1. Placeholder OHC data
+   J04 prints "USING PLACEHOLDER OHC DATA": every case uses the same single CESM2-WACCM
+   OHC series (data/OHC_data/cesm2_ohc_global_timeseries.nc, 2035-2084), so all OHC
+   panels are identical and not physically meaningful.
+   Q: Where are the real per-case OHC files (J09/J10 output in spatial_OHC_data)?
+      Is /glade/work/jonahshaw/PRISM_data/spatial_OHC_data readable by other users?
+
+2. MCB runs appended onto a different model's SSP2-4.5 history
+   MCB cases (b.e21.BSSP245smbb...MCB-050PCT, b.e21.BSSP245cmip6...CMIP6-MCB-*) are "B"
+   compsets (CESM2/CAM6), but are appended onto b.e21.BWSSP245cmip6...WACCM ("BW",
+   CESM2-WACCM). smbb also uses different biomass-burning forcing than the cmip6 history.
+   Because the future-figure iEEI integration starts at the first available year, MCB
+   iEEI accumulates WACCM EEI before the branch year and CAM6 EEI after it.
+   Q: Is CAM6-on-WACCM intentional, or should the history be a CESM2 (non-WACCM)
+      SSP2-4.5 run? Is there a visible step in ASR/OLR at the MCB branch year?
+
+3. Ensemble members paired by number only
+   The append matches member N to history member N, with no check of the actual branch
+   member. Log: "Ensemble 11 not found in append case ... Using first available
+   ensemble 1" (WACCM SSP2-4.5 has 10 members). Single-member CMIP6-MCB runs
+   (025/050/075/125PCT) all borrow WACCM member 1.
+   Q: Did each MCB/ARISE member branch from the same-numbered SSP2-4.5 member?
+      Is the fallback to member 1 intended?
+
+4. Missing / limited members (data, not code)
+   - MCB-050PCT smbb: member 008 absent from the data (10 members: 1-7, 9-11).
+   - CESM2-LM: only member 002 present.
+   Q: Is member 008 expected to exist? Should more CESM2-LM members be included?
+
+Harmless log items (no action): cftime SerializationWarning (year-850 dates), case
+loading repeated once per variable (FLNT, FSNT, TS), stray empty
+"<Figure size 640x480 with 0 Axes>".
