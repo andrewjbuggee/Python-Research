@@ -217,4 +217,5 @@ data/spatial_maps_ohc/
 data/spatial_maps_ohc_old/
 job_logs/
 daskworkers/
+data/scratch/
 figures/

@@ -14,6 +14,7 @@ from J15_shared_functions import (
     load_data_with_configs,
     CASE_CONFIGS_TEMPLATE,
 )
+from prism_paths import SPATIAL_AVERAGES_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -204,9 +205,9 @@ def add_colorfill(
 
 if __name__ == "__main__":
 
-    # Local copy of the unzipped spatially averaged data. The case folders
-    # (CESM2_LME, CESM2_WACCM_1850control, ...) sit one level down, inside RadInt_procdata
-    data_root = "/Users/andrewbuggee/Documents/VS_CODE/Python-Research/PRISM/PRISM-jonah-local/data/RadInt_procdata/"
+    # Spatially averaged data (J02 output). Case folders (CESM2_LME, CESM2_WACCM_1850control, ...)
+    # sit directly inside it. Laptop: <repo>/data/RadInt_procdata; Casper: PRISM_data/spatial_averages_data
+    data_root = f"{SPATIAL_AVERAGES_DIR}/"
     CASE_CONFIGS = deepcopy(CASE_CONFIGS_TEMPLATE)
 
     for config in CASE_CONFIGS.values():

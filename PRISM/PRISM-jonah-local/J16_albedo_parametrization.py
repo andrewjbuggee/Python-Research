@@ -19,14 +19,15 @@ from J15_shared_functions import (
 )
 
 import logging
+from prism_paths import FIGURES_DIR, SPATIAL_AVERAGES_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 # %%
 
 if __name__ == "__main__":
-    data_root = "/glade/work/jonahshaw/PRISM_data/spatial_averages_data/"
-    # data_root_sfens = "/glade/u/home/jonahshaw/Scripts/git_repos/PRISM"
+    data_root = f"{SPATIAL_AVERAGES_DIR}/"
+    # data_root_sfens = f"{REPO_ROOT}"
 
     # CASE_CONFIGS_ATM = deepcopy(CASE_CONFIGS_TEMPLATE)
 
@@ -123,7 +124,7 @@ if __name__ == "__main__":
             ax.grid(True, alpha=0.3)
             ax.legend()
 
-            output_dir = Path("/glade/u/home/jonahshaw/Scripts/git_repos/PRISM/figures")
+            output_dir = Path(f"{FIGURES_DIR}")
 
             fig.savefig(
                 output_dir

@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 import xarray as xr
 import logging
+from prism_paths import CMIP6_TIMESERIES_DIR, CONTROL_BASELINES_ATM_DIR, CONTROL_BASELINES_OCN_DIR, DERIVED_VARS_DIR, SPATIAL_OCEANFLUX_DIR, SPATIAL_OHC_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -106,38 +107,38 @@ def compute_background_state_ohc(
 if __name__ == "__main__":
 
     # If on glade
-    save_path_atm = Path("/glade/work/jonahshaw/PRISM_data/control_baselines_atm/")
-    save_path_ocn = Path("/glade/work/jonahshaw/PRISM_data/control_baselines_ocn/")
+    save_path_atm = Path(f"{CONTROL_BASELINES_ATM_DIR}/")
+    save_path_ocn = Path(f"{CONTROL_BASELINES_OCN_DIR}/")
 
     # Path to variables that have been derived from CESM.
-    derivedpath_atm_root = "/glade/work/jonahshaw/PRISM_data/derived_vars/"
-    derivedpath_ohc_root = "/glade/work/jonahshaw/PRISM_data/spatial_OHC_data/"
-    derivedpath_ohf_root = "/glade/work/jonahshaw/PRISM_data/spatial_oceanflux_data/"
+    derivedpath_atm_root = f"{DERIVED_VARS_DIR}/"
+    derivedpath_ohc_root = f"{SPATIAL_OHC_DIR}/"
+    derivedpath_ohf_root = f"{SPATIAL_OCEANFLUX_DIR}/"
 
     # Configure settings
     case_dict = {
         "CESM2_WACCM_HIST_1850_1864": {
-            "sources": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", f"{derivedpath_atm_root}/CESM2_WACCM_HIST/"],
+            "sources": [f"{CMIP6_TIMESERIES_DIR}/", f"{derivedpath_atm_root}/CESM2_WACCM_HIST/"],
             "file_pattern": "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??/atm/proc/tseries/month_1/b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??.cam.h0.*.nc",
             "tslice": slice("1850", "1864"),
         },
         "CESM2_WACCM_HIST_2000_2014": {
-            "sources": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", f"{derivedpath_atm_root}/CESM2_WACCM_HIST/"],
+            "sources": [f"{CMIP6_TIMESERIES_DIR}/", f"{derivedpath_atm_root}/CESM2_WACCM_HIST/"],
             "file_pattern": "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??/atm/proc/tseries/month_1/b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??.cam.h0.*.nc",
             "tslice": slice("2000", "2014"),
         },
         "CESM2_WACCM_HIST_2015_2034": {
-            "sources": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", f"{derivedpath_atm_root}/CESM2_WACCM_HIST/"],
+            "sources": [f"{CMIP6_TIMESERIES_DIR}/", f"{derivedpath_atm_root}/CESM2_WACCM_HIST/"],
             "file_pattern": "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??/atm/proc/tseries/month_1/b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??.cam.h0.*.nc",
             "tslice": slice("2015", "2034"),
         },
         "CESM2_WACCM_1850control_0100_0499": {
-            "sources": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", f"{derivedpath_atm_root}/CESM2_WACCM_1850control/"],
+            "sources": [f"{CMIP6_TIMESERIES_DIR}/", f"{derivedpath_atm_root}/CESM2_WACCM_1850control/"],
             "file_pattern": "b.e21.BW1850.f09_g17.CMIP6-piControl.001/atm/proc/tseries/month_1/b.e21.BW1850.f09_g17.CMIP6-piControl.001.cam.h0.*.nc",
             "tslice": slice("0100", None),
         },
         "CESM2_WACCM_1850control_0050_0075": {
-            "sources": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", f"{derivedpath_atm_root}/CESM2_WACCM_1850control/"],
+            "sources": [f"{CMIP6_TIMESERIES_DIR}/", f"{derivedpath_atm_root}/CESM2_WACCM_1850control/"],
             "file_pattern": "b.e21.BW1850.f09_g17.CMIP6-piControl.001/atm/proc/tseries/month_1/b.e21.BW1850.f09_g17.CMIP6-piControl.001.cam.h0.*.nc",
             "tslice": slice("0050", "0075"),
         },
@@ -197,8 +198,8 @@ if __name__ == "__main__":
     # Testing code
     # import matplotlib.pyplot as plt
 
-    # testlist = ["/glade/work/jonahshaw/PRISM_data/control_baselines_ocn/CESM2_WACCM_HIST_1850_1864/CESM2_WACCM_HIST_1850_1864_OHC.nc", "/glade/work/jonahshaw/PRISM_data/control_baselines_ocn/CESM2_WACCM_HIST_1850_1864/CESM2_WACCM_HIST_1850_1864_OHF.nc"]
-    # testlist2 = ["/glade/work/jonahshaw/PRISM_data/control_baselines_ocn/CESM2_WACCM_HIST_2000_2014/CESM2_WACCM_HIST_2000_2014_OHC.nc", "/glade/work/jonahshaw/PRISM_data/control_baselines_ocn/CESM2_WACCM_HIST_2000_2014/CESM2_WACCM_HIST_2000_2014_OHF.nc"]
+    # testlist = [f"{CONTROL_BASELINES_OCN_DIR}/CESM2_WACCM_HIST_1850_1864/CESM2_WACCM_HIST_1850_1864_OHC.nc", f"{CONTROL_BASELINES_OCN_DIR}/CESM2_WACCM_HIST_1850_1864/CESM2_WACCM_HIST_1850_1864_OHF.nc"]
+    # testlist2 = [f"{CONTROL_BASELINES_OCN_DIR}/CESM2_WACCM_HIST_2000_2014/CESM2_WACCM_HIST_2000_2014_OHC.nc", f"{CONTROL_BASELINES_OCN_DIR}/CESM2_WACCM_HIST_2000_2014/CESM2_WACCM_HIST_2000_2014_OHF.nc"]
 
     # test_ds = xr.open_mfdataset(testlist)
     # test_ds2 = xr.open_mfdataset(testlist2)
@@ -212,8 +213,8 @@ if __name__ == "__main__":
     # (test_ds2["OHC"].isel(ohc_depth=0)).plot(ax=axs[1,1])
     # (test_ds2["OHC"] - test_ds["OHC"]).isel(ohc_depth=0).plot(ax=axs[1,2])
 
-    # testlist3 = ["/glade/work/jonahshaw/PRISM_data/control_baselines_atm/CESM2_WACCM_HIST_1850_1864/CESM2_WACCM_HIST_1850_1864_FLNT.nc", "/glade/work/jonahshaw/PRISM_data/control_baselines_atm/CESM2_WACCM_HIST_1850_1864/CESM2_WACCM_HIST_1850_1864_FNNT.nc"]
-    # testlist4 = ["/glade/work/jonahshaw/PRISM_data/control_baselines_atm/CESM2_WACCM_HIST_2000_2014/CESM2_WACCM_HIST_2000_2014_FLNT.nc", "/glade/work/jonahshaw/PRISM_data/control_baselines_atm/CESM2_WACCM_HIST_2000_2014/CESM2_WACCM_HIST_2000_2014_FNNT.nc"]
+    # testlist3 = [f"{CONTROL_BASELINES_ATM_DIR}/CESM2_WACCM_HIST_1850_1864/CESM2_WACCM_HIST_1850_1864_FLNT.nc", f"{CONTROL_BASELINES_ATM_DIR}/CESM2_WACCM_HIST_1850_1864/CESM2_WACCM_HIST_1850_1864_FNNT.nc"]
+    # testlist4 = [f"{CONTROL_BASELINES_ATM_DIR}/CESM2_WACCM_HIST_2000_2014/CESM2_WACCM_HIST_2000_2014_FLNT.nc", f"{CONTROL_BASELINES_ATM_DIR}/CESM2_WACCM_HIST_2000_2014/CESM2_WACCM_HIST_2000_2014_FNNT.nc"]
     # atm_test = xr.open_mfdataset(testlist3)
     # atm_test2 = xr.open_mfdataset(testlist4)
 

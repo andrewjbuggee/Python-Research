@@ -5,6 +5,7 @@ Download ARISE1.0 data from AWS S3 bucket
 import numpy as np
 import s3fs
 from pathlib import Path
+from prism_paths import ARISE_1_0_DIR
 
 # %%
 # Index files by variable name (the token between '.h0.' and the date range)
@@ -57,7 +58,7 @@ if __name__ == "__main__":
     CASE = "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-DELAYED-2045.001"
     SUBDIR = "atm/proc/tseries/month_1"
     OCN_SUBDIR = "ocn/proc/tseries/month_1"
-    LOCAL_DIR = Path("/glade/work/jonahshaw/PRISM_data/ARISE-1.0/") # JKS adjust
+    LOCAL_DIR = Path(f"{ARISE_1_0_DIR}/") # JKS adjust
 
     VARIABLES = [
         "CLDTOT", "FLNR", "FLNS", "FLNSC", "FLNT", "FLNTC", "FLNTCLR",

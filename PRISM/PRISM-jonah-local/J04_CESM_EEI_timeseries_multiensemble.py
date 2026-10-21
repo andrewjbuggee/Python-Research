@@ -17,6 +17,7 @@ from J15_shared_functions import (
     title_dict,
     CASE_CONFIGS_TEMPLATE,
 )
+from prism_paths import PLACEHOLDER_OHC_FILE, SPATIAL_AVERAGES_DIR, SPATIAL_OHC_DIR
 
 import logging
 
@@ -334,11 +335,12 @@ def build_placeholder_ohc_dict(case_configs, ts_dict, ohc_file, ocean_area_m2):
 # %%
 
 if __name__ == "__main__":
-    # Local copy of the unzipped data. Case folders (CESM2_LME, ...) sit inside RadInt_procdata
-    data_root = "/Users/andrewbuggee/Documents/VS_CODE/Python-Research/PRISM/PRISM-jonah-local/data/RadInt_procdata/"
-    # OHC time series: no per-case OHC files exist locally yet, so USE_PLACEHOLDER_OHC (below) is on.
-    # Point this at the real spatial_OHC_data/ copy and set USE_PLACEHOLDER_OHC = False when available
-    data_root_ohc = "/Users/andrewbuggee/Documents/VS_CODE/Python-Research/PRISM/PRISM-jonah-local/data/RadInt_procdata/"
+    # Spatially averaged data (J02 output). Case folders (CESM2_LME, ...) sit directly inside it.
+    # Laptop: <repo>/data/RadInt_procdata; Casper: PRISM_data/spatial_averages_data
+    data_root = f"{SPATIAL_AVERAGES_DIR}/"
+    # OHC time series (J09/J10 output). No per-case OHC files exist locally yet, so on the laptop
+    # USE_PLACEHOLDER_OHC (below) stays on; on Casper set it False once spatial_OHC_data is populated.
+    data_root_ohc = f"{SPATIAL_OHC_DIR}/"
 
     CASE_CONFIGS_ATM = deepcopy(CASE_CONFIGS_TEMPLATE)
     CASE_CONFIGS_OCN = deepcopy(CASE_CONFIGS_TEMPLATE)
@@ -368,7 +370,7 @@ if __name__ == "__main__":
     # Set USE_PLACEHOLDER_OHC = False once the real OHC files are in data_root_ohc.
     # ------------------------------------------------------------------
     USE_PLACEHOLDER_OHC = True
-    placeholder_ohc_file = "/Users/andrewbuggee/Documents/VS_CODE/Python-Research/rad_journal_club_paper/PRISM/data/OHC_data/cesm2_ohc_global_timeseries.nc"
+    placeholder_ohc_file = str(PLACEHOLDER_OHC_FILE)
     # Approximate global ocean surface area [m^2] (~71% of the 5.1e14 m^2 Earth surface); placeholder value only
     placeholder_ocean_area_m2 = 3.6e14
 

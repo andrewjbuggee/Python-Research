@@ -10,6 +10,10 @@ import pandas as pd
 from matplotlib.ticker import MultipleLocator
 
 import logging
+import sys
+# prism_paths.py lives one level up, in the repo root
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from prism_paths import REPO_ROOT, SPATIAL_OCEANFLUX_DIR, SPATIAL_OHC_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -696,11 +700,9 @@ def load_ensemble_cases(datapath_subdir, case_str, varlist):
 # %%
 
 if __name__ == "__main__":
-    machine = "curc"
-    if machine == "glade":
-        root_dir = "/glade/u/home/jonahshaw/Scripts/git_repos/PRISM/"
-    if machine == "curc":
-        root_dir = "/home/josh2250/projects/PRISM/"
+    # Root of this checkout (laptop or Casper), resolved by prism_paths.
+    # Jonah's CURC location was "/home/josh2250/projects/PRISM/".
+    root_dir = f"{REPO_ROOT}/"
     CASE_CONFIGS1 = {
         "CESM_LME":{
             "path": root_dir + "data/RadInt_procdata/CESM_LME/",
@@ -771,7 +773,7 @@ if __name__ == "__main__":
 
     # Configs for loading OHC data
     if machine == "glade":
-        ohc_data_root = "/glade/work/jonahshaw/PRISM_data/spatial_OHC_data/"
+        ohc_data_root = f"{SPATIAL_OHC_DIR}/"
     if machine == "curc":
         ohc_data_root = "/pl/active/kaygroup/jshaw/RadInt_ohcdata/"
 
@@ -883,7 +885,7 @@ if testing:
     ocean_subcase_label = subcase_label.replace("0??", "001")
     ohc_files = glob.glob(f"{ohc_data_root}/{case_label}/{ocean_subcase_label}/ocn/proc/tseries/month_1/{ocean_subcase_label}.pop.h.OHC.??????-??????.nc")
     ohc_ds = xr.open_mfdataset(ohc_files, chunks={"time": 1}, preprocess=lambda ds: ds[["OHC_global_mean"]].sel(ohc_depth=-1)).compute()
-    ohf_files = glob.glob(f"/glade/work/jonahshaw/PRISM_data/spatial_oceanflux_data/{case_label}/{ocean_subcase_label}/ocn/proc/tseries/month_1/{ocean_subcase_label}.pop.h.OHF.??????-??????.nc")
+    ohf_files = glob.glob(f"{SPATIAL_OCEANFLUX_DIR}/{case_label}/{ocean_subcase_label}/ocn/proc/tseries/month_1/{ocean_subcase_label}.pop.h.OHF.??????-??????.nc")
     ohf_files.sort()
     ohf_ds = xr.open_mfdataset(ohf_files, chunks={"time": 1}, preprocess=lambda ds: ds[["OHF_global_mean"]]).compute()
 
@@ -975,9 +977,9 @@ testing = True
 if testing:
     import glob
     ocean_subcase_label = subcase_label #.replace("0??", "001")
-    ohc_files = glob.glob(f"/glade/work/jonahshaw/PRISM_data/spatial_OHC_data/{case_label}/{ocean_subcase_label}/ocn/proc/tseries/month_1/{ocean_subcase_label}.pop.h.OHC.??????-??????.nc")
+    ohc_files = glob.glob(f"{SPATIAL_OHC_DIR}/{case_label}/{ocean_subcase_label}/ocn/proc/tseries/month_1/{ocean_subcase_label}.pop.h.OHC.??????-??????.nc")
     ohc_ds = xr.open_mfdataset(ohc_files, chunks={"time": 1}, preprocess=lambda ds: ds[["OHC_global_mean"]].sel(ohc_depth=-1)).compute()
-    ohf_files = glob.glob(f"/glade/work/jonahshaw/PRISM_data/spatial_oceanflux_data/{case_label}/{ocean_subcase_label}/ocn/proc/tseries/month_1/{ocean_subcase_label}.pop.h.OHF.??????-??????.nc")
+    ohf_files = glob.glob(f"{SPATIAL_OCEANFLUX_DIR}/{case_label}/{ocean_subcase_label}/ocn/proc/tseries/month_1/{ocean_subcase_label}.pop.h.OHF.??????-??????.nc")
     ohf_files.sort()
     ohf_ds = xr.open_mfdataset(ohf_files, chunks={"time": 1}, preprocess=lambda ds: ds[["OHF_global_mean"]]).compute()
 

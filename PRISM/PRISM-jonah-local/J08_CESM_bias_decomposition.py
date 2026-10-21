@@ -23,6 +23,7 @@ from J15_shared_functions import (
     title_dict,
     CASE_CONFIGS_TEMPLATE,
 )
+from prism_paths import ERROR_ATM_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -448,7 +449,7 @@ def plot_control_uncertainty_scatter(
 
 if __name__ == "__main__":
     control_case = "CESM2_WACCM_HIST_2000_2014"
-    data_root = f"/glade/work/jonahshaw/PRISM_data/error_relativetobaseline_atm/{control_case}/"
+    data_root = f"{ERROR_ATM_DIR}/{control_case}/"
     CASE_CONFIGS_ATM = deepcopy(CASE_CONFIGS_TEMPLATE)
 
     # Remove cases that are not used here
