@@ -1,0 +1,78 @@
+PRISM code changes and progress -- 20-21 Oct 2026
+Repo: Python-Research/PRISM/PRISM-jonah-local (Jonah Shaw's CESM EEI/NMSE code)
+Status: all changes below are committed (8ebbd36 .. 75584f6). J04 runs on Casper with real OHC.
+
+------------------------------------------------------------------------------
+SETUP (Casper)
+------------------------------------------------------------------------------
+- Casper login works as of 20 Oct (SAM provisioning was the cause of the earlier denial).
+  Project code: UCSD0090 (export PBS_ACCOUNT=UCSD0090 in ~/.bashrc).
+- Clone: /glade/u/home/abuggee/Python-Research (sparse checkout of PRISM/PRISM-jonah-local).
+  Workflow: edit/test on laptop -> push -> git pull on Casper.
+- Python: OnDemand Jupyter with the NPL kernel (module load conda; conda activate npl).
+  Run scripts with %run in a notebook, or from a terminal. Jupyter sessions are charged PBS jobs.
+- Data on Casper:
+    /glade/work/abuggee/PRISM_data/spatial_averages_data   (rsynced from laptop RadInt_procdata)
+    /glade/work/abuggee/PRISM_data/spatial_OHC_data        -> symlink to
+        /glade/work/jonahshaw/PRISM_data/spatial_OHC_data   (Jonah's J09 OHC output, read-only)
+
+------------------------------------------------------------------------------
+CODE CHANGES
+------------------------------------------------------------------------------
+1. prism_paths.py (new, 8ebbd36) -- all paths in one place
+   - Detects machine: PRISM_SYSTEM env var, else "casper" if /glade exists, else "laptop".
+   - WORK_ROOT: Casper /glade/work/$USER/PRISM_data; laptop <repo>/data
+     (override with PRISM_WORK_ROOT). Product dirs hang off it: SPATIAL_AVERAGES_DIR,
+     SPATIAL_OHC_DIR, DERIVED_VARS_DIR, CONTROL_BASELINES_*, ERROR_ATM_DIR, ...
+   - Shared inputs: CMIP6_TIMESERIES_DIR, GDEX_DIR. Repo dirs: FIGURES_DIR, JOB_SCRIPTS_DIR, ...
+   - `python prism_paths.py` prints every resolved path (flags missing ones).
+   - All J*.py scripts now import from prism_paths instead of hardcoding jonahshaw paths.
+
+2. PBS project code (717ed22)
+   - prism_paths.PBS_ACCOUNT = $PBS_ACCOUNT_CASPER or $PBS_ACCOUNT, else per-user default
+     (jonahshaw -> UCUC0007). require_pbs_account() fails loudly if none is set.
+   - job_scripts/*.sh: removed hardcoded #PBS -A and Jonah's -o/-e paths; scripts take
+     PRISM_ROOT and PRISM_CONDA_ENV from the environment.
+   - job_scripts/submit_prism_job.sh (new): wrapper that adds -A <code> and PRISM_ROOT, e.g.
+       job_scripts/submit_prism_job.sh spatial_averaging_job.sh
+   - Interactive Jupyter/visualization work needs a project code only to start the session.
+
+3. Figures (7ab5acb)
+   - savefig calls in J03, J04, J08, J12 (both) write to FIGURES_DIR and create it first
+     (figures/ is gitignored, so it is missing in a fresh clone).
+
+4. J04 uses real OHC (4d28375, 5ce6ea9)
+   - USE_PLACEHOLDER_OHC is now automatic: real data if SPATIAL_OHC_DIR exists and is
+     non-empty, otherwise the old placeholder (one CESM2-WACCM series for every case).
+   - ARISE-1.0 ocean path set to "ARISE-1.0/" (J09's folder), not the atmosphere layout.
+   - Fails early with a list of any case that has no OHC files (instead of a KeyError later).
+   - Kernel crash fix: J04 was loading the full OHC maps (4 x 384 x 320 per month), which it
+     never uses. J15 load_ensemble_cases() gained an optional keep_vars argument; J04 finds
+     files by "OHC" but keeps only OHC_global_mean. Other callers are unaffected.
+   - OHC series is .compute()d after selecting ohc_depth=-1 (the 10-yr rolling mean failed
+     on lazy chunks shorter than 10 years).
+
+5. Jxx_extract_ohc_globalmean.py (new, 75584f6) -- small local OHC copy (NOT YET RUN)
+   - Purpose: debug J04 on the laptop with real OHC without downloading the maps.
+   - Copies only OHC_global_mean (+ ocean_area_m2 attr) from each J09 *.OHC.*nc file, keeping
+     the same sub-folders and file names, so it is a drop-in spatial_OHC_data.
+   - Default: in = SPATIAL_OHC_DIR, out = <WORK_ROOT>/spatial_OHC_globalmean;
+     --cases to subset, --overwrite to redo; restarts skip finished files.
+   - Tested on a synthetic J09-style tree: values bit-identical, ~9 MB for 701 files,
+     J04 ran end to end on the copy. Expect tens of MB for the real tree.
+   - To use:
+       Casper:  cd ~/Python-Research/PRISM/PRISM-jonah-local && python Jxx_extract_ohc_globalmean.py
+       Laptop:  rsync -av abuggee@casper.hpc.ucar.edu:/glade/work/abuggee/PRISM_data/spatial_OHC_globalmean/ \
+                  data/spatial_OHC_data/
+     data/spatial_OHC_data/ is gitignored. J04 then picks it up automatically.
+
+------------------------------------------------------------------------------
+OPEN ITEMS
+------------------------------------------------------------------------------
+- Questions for Jonah: PRISM_codeQuestions_21_Oct_2026.txt (repo root). Main ones:
+  MCB runs (CESM2/CAM6, "B" compsets) appended onto the CESM2-WACCM ("BW") SSP2-4.5 history;
+  ensemble members paired by number only (member 11 falls back to member 1); missing
+  MCB smbb member 008; CESM2-LM has only member 002. Same splice applies to MCB OHC.
+- Check for a step in ASR/OLR at the MCB branch year in the future figures.
+- Not fixed (Jonah's code): J12_plot_spatialmaps_multiensemble and closure_testing run code
+  at import; J06 needs dask_jobqueue (not in laptop env); bare except in J15 single-case loader.
