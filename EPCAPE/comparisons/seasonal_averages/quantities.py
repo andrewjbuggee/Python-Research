@@ -250,6 +250,7 @@ def lwp_cloudy_gm2(
     *,
     require_zero: Sequence[str] = (),
     window_min: float = 5,
+    min_gm2: Optional[float] = None,
 ) -> Tuple[pd.Series, Dict[str, object]]:
     """Liquid water path (g m-2) over cloudy samples only, averaged over `window_min` minutes.
 
@@ -260,6 +261,10 @@ def lwp_cloudy_gm2(
       3. Keep only samples where `cloudy` is True (see cloudy_mwrret1/2), so
          clear-sky retrievals (LWP ~ 0, often slightly negative) never enter.
       4. Convert to g m-2 from the file's units attribute.
+      5. If `min_gm2` is given, keep only samples with LWP > `min_gm2` (strictly
+         greater; e.g. 0 drops the zero and negative retrievals that remain under
+         a detected cloud base). Applied to each sample, BEFORE any averaging.
+         None (default) applies no lower limit.
     Then the samples are averaged over windows `window_min` minutes long (any
     non-negative number; see ``window_mean``):
       * window_min > 0: each value is the mean of the cloudy samples in one
@@ -293,8 +298,17 @@ def lwp_cloudy_gm2(
     infos.append({"variable": f"cloudy samples (for {var})", "has_qc": False, "n": int(cloudy.size),
                   "n_finite": n_before_cloud, "n_kept": n_cloudy})
 
-    # 4. units -> g m-2, then average over window_min minutes (0 = keep every sample)
+    # 4. units -> g m-2
     values = units.water_path_to_gm2(values)
+
+    # 5. optional lower limit on each sample (strictly greater than min_gm2)
+    if min_gm2 is not None:
+        n_before_min = int(np.isfinite(values).values.sum())
+        values = values.where(values > min_gm2)
+        infos.append({"variable": f"{var} > {min_gm2:g} g m-2", "has_qc": False, "n": int(values.size),
+                      "n_finite": n_before_min, "n_kept": int(np.isfinite(values).values.sum())})
+
+    # 6. average over window_min minutes (0 = keep every sample)
     series = window_mean(to_series(values), window_min).rename(f"{var}_cloudy_gm2")
     info = {"qc": infos, "cloudy_fraction": n_cloudy / n_before_cloud if n_before_cloud else np.nan}
     return series, info

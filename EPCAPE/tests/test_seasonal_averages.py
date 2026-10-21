@@ -215,6 +215,17 @@ def test_cloudy_masks_and_cloudy_lwp():
     raw2, _ = q.lwp_cloudy_gm2(r2, "phys_lwp", q.cloudy_mwrret2(r2), require_zero=("phys_qc_flag",), window_min=0)
     assert raw2.tolist() == [50.0, 70.0, 100.0] and list(raw2.index) == [t[0], t[2], t[5]]
 
+    # min_gm2: keep only LWP > min_gm2 per sample (zero and negative retrievals under a cloud base dropped)
+    r3 = r2.copy()
+    r3["phys_lwp"] = ("time", [50.0, -3.0, 0.0, 80.0, 90.0, -2.0])
+    r3["phys_lwp"].attrs["units"] = "g/m^2"
+    all3, _ = q.lwp_cloudy_gm2(r3, "phys_lwp", q.cloudy_mwrret2(r3), require_zero=("phys_qc_flag",), window_min=0)
+    assert all3.tolist() == [50.0, 0.0, -2.0]  # default: no lower limit
+    pos3, info3 = q.lwp_cloudy_gm2(r3, "phys_lwp", q.cloudy_mwrret2(r3), require_zero=("phys_qc_flag",),
+                                   window_min=0, min_gm2=0.0)
+    assert pos3.tolist() == [50.0] and list(pos3.index) == [t[0]]
+    assert info3["qc"][-1]["n_finite"] == 3 and info3["qc"][-1]["n_kept"] == 1
+
 
 def test_solar_zenith_at_the_pier_on_the_june_solstice():
     # Local solar noon at the Scripps Pier (32.867 N, 117.257 W) is ~19:50 UTC; at the June solstice the
