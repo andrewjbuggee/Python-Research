@@ -10,6 +10,7 @@ import subprocess
 import xarray as xr
 import numpy as np
 import logging
+from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, DERIVED_VARS_DIR, GDEX_DIR, JOB_SCRIPTS_DIR, REPO_ROOT
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -224,13 +225,14 @@ def submit_new_vars_job(filepath, savepath):
         savepath (_type_): _description_
     """
 
-    script_path = "/glade/u/home/jonahshaw/Scripts/git_repos/PRISM/job_scripts/compute_newvars_single.sh"
+    script_path = f"{JOB_SCRIPTS_DIR}/compute_newvars_single.sh"
     # print(f"qsub -v FILE_PATH={filepath},SAVE_PATH={savepath} {script_path}")
     subprocess.run(
         [
             "qsub",
             "-v",
-            f"FILE_PATH={filepath},SAVE_PATH={savepath}",
+            # PRISM_ROOT tells the job script where this checkout lives (PBS copies the script to a spool dir)
+            f"FILE_PATH={filepath},SAVE_PATH={savepath},PRISM_ROOT={REPO_ROOT}",
             script_path,
         ],
         check=True,
@@ -241,16 +243,16 @@ def submit_new_vars_job(filepath, savepath):
 if __name__ == "__main__":
     machine = "glade"
     if machine == "glade":
-        savepath_root = "/glade/work/jonahshaw/PRISM_data/derived_vars/"
+        savepath_root = f"{DERIVED_VARS_DIR}/"
 
     case_dict = {
-        "ARISE-1.0": ["/glade/work/jonahshaw/PRISM_data/ARISE-1.0/"],
-        "ARISE_SAI": ["/gdex/data/d651059/ARISE-SAI-1.5"],
-        "CESM2_LME": ["/gdex/data/d651078"],
-        "CESM2_WACCM_SSP2-4.5": ["/gdex/data/d651045/CESM2-WACCM-SSP245"],
-        "CESM2_WACCM_SSP2-4.5_MCB": ["/gdex/data/d314006"],
-        "CESM2_WACCM_1850control": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", ["b.e21.BW1850.f09_g17.CMIP6-piControl.001"]],
-        "CESM2_WACCM_HIST": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", ["b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.001", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.002", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.003"]],
+        "ARISE-1.0": [f"{ARISE_1_0_DIR}/"],
+        "ARISE_SAI": [f"{GDEX_DIR}/d651059/ARISE-SAI-1.5"],
+        "CESM2_LME": [f"{GDEX_DIR}/d651078"],
+        "CESM2_WACCM_SSP2-4.5": [f"{GDEX_DIR}/d651045/CESM2-WACCM-SSP245"],
+        "CESM2_WACCM_SSP2-4.5_MCB": [f"{GDEX_DIR}/d314006"],
+        "CESM2_WACCM_1850control": [f"{CMIP6_TIMESERIES_DIR}/", ["b.e21.BW1850.f09_g17.CMIP6-piControl.001"]],
+        "CESM2_WACCM_HIST": [f"{CMIP6_TIMESERIES_DIR}/", ["b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.001", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.002", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.003"]],
     }
 
     for case in case_dict:

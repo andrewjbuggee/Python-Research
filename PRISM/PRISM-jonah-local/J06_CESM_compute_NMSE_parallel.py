@@ -28,6 +28,7 @@ import time
 import dask
 from dask_jobqueue import PBSCluster
 from dask.distributed import Client
+from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, CONTROL_BASELINES_ATM_DIR, DASK_LOCAL_DIR, DERIVED_VARS_DIR, ERROR_ATM_DIR, GDEX_DIR, SPATIAL_OCEANFLUX_DIR, SPATIAL_OHC_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -255,7 +256,8 @@ def crawl_and_process_dask(
         walltime='00:20:00',
         project='UCUC0007',
         resource_spec='select=1:ncpus=1:mem=16GB',
-        local_directory='/glade/u/home/jonahshaw/Scripts/git_repos/PRISM/daskworkers/',
+        # Dask spill/scratch files go to scratch, not the 50 GB home quota
+        local_directory=str(DASK_LOCAL_DIR),
     )
     cluster.scale(10)
     client = Client(cluster)
@@ -331,13 +333,13 @@ def shift_noleap_time_back_one_month(time_values):
 # %%
 if __name__ == "__main__":
     # Glade paths
-    control_loadpath_atm = Path("/glade/work/jonahshaw/PRISM_data/control_baselines_atm/")
-    save_path_atm = Path("/glade/work/jonahshaw/PRISM_data/error_relativetobaseline_atm/")
+    control_loadpath_atm = Path(f"{CONTROL_BASELINES_ATM_DIR}/")
+    save_path_atm = Path(f"{ERROR_ATM_DIR}/")
 
     # Path to variables that have been derived from CESM.
-    derivedpath_atm_root = "/glade/work/jonahshaw/PRISM_data/derived_vars/"
-    derivedpath_ohc_root = "/glade/work/jonahshaw/PRISM_data/spatial_OHC_data/"
-    derivedpath_ohf_root = "/glade/work/jonahshaw/PRISM_data/spatial_oceanflux_data/"
+    derivedpath_atm_root = f"{DERIVED_VARS_DIR}/"
+    derivedpath_ohc_root = f"{SPATIAL_OHC_DIR}/"
+    derivedpath_ohf_root = f"{SPATIAL_OCEANFLUX_DIR}/"
 
     # Keys are the controls and the values are lists of cases to compare to that control.
     compare_cases = {
@@ -351,29 +353,29 @@ if __name__ == "__main__":
     # Configure settings for each case to be loaded
     case_dict = {
         "CESM2_WACCM_1850control": {
-            "sources": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", f"{derivedpath_atm_root}/CESM2_WACCM_1850control/"],
+            "sources": [f"{CMIP6_TIMESERIES_DIR}/", f"{derivedpath_atm_root}/CESM2_WACCM_1850control/"],
             "subsources": ["b.e21.BW1850.f09_g17.CMIP6-piControl.001"],
             "file_pattern": "atm/proc/tseries/month_1/b.e21.BW1850.f09_g17.CMIP6-piControl.001.cam.h0.*.nc",
         },
         "CESM2_WACCM_HIST": {
-            "sources": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", f"{derivedpath_atm_root}/CESM2_WACCM_HIST/"],
+            "sources": [f"{CMIP6_TIMESERIES_DIR}/", f"{derivedpath_atm_root}/CESM2_WACCM_HIST/"],
             "subsources": ["b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.001", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.002", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.003"],
             "file_pattern": "atm/proc/tseries/month_1/b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??.cam.h0.*.nc",
         },
         "ARISE_SAI": {
-            "sources": ["/gdex/data/d651059/ARISE-SAI-1.5/", f"{derivedpath_atm_root}/ARISE_SAI/"],
+            "sources": [f"{GDEX_DIR}/d651059/ARISE-SAI-1.5/", f"{derivedpath_atm_root}/ARISE_SAI/"],
             "file_pattern": "*/atm/proc/tseries/month_1/b.e21.BW.f09_g17.SSP245*.cam.h0.*.nc",
         },
         "ARISE-1.0": {
-            "sources": ["/glade/work/jonahshaw/PRISM_data/ARISE-1.0/", f"{derivedpath_atm_root}/ARISE-1.0/"],
+            "sources": [f"{ARISE_1_0_DIR}/", f"{derivedpath_atm_root}/ARISE-1.0/"],
             "file_pattern": "*/atm/proc/tseries/month_1/b.e21.BW.f09_g17.SSP245*.cam.h0.*.nc",
         },
         "CESM2_WACCM_SSP2-4.5": {
-            "sources": ["/gdex/data/d651045/CESM2-WACCM-SSP245/", f"{derivedpath_atm_root}/CESM2_WACCM_SSP2-4.5/"],
+            "sources": [f"{GDEX_DIR}/d651045/CESM2-WACCM-SSP245/", f"{derivedpath_atm_root}/CESM2_WACCM_SSP2-4.5/"],
             "file_pattern": "*/atm/proc/tseries/month_1/b.e21.BWSSP245cmip6.f09_g17.*.nc", 
         },
         "CESM2_WACCM_SSP2-4.5_MCB": {
-            "sources": ["/gdex/data/d314006/", f"{derivedpath_atm_root}/CESM2_WACCM_SSP2-4.5_MCB/"],
+            "sources": [f"{GDEX_DIR}/d314006/", f"{derivedpath_atm_root}/CESM2_WACCM_SSP2-4.5_MCB/"],
             "file_pattern": "*/atm/month_1/b.e21.*.nc",
         },
     }

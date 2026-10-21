@@ -17,11 +17,12 @@ import numpy as np
 import xarray as xr
 from pathlib import Path
 import warnings
+from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, GDEX_DIR, JOB_SCRIPTS_DIR, OHC_ANCILLARY_DIR, REPO_ROOT, SPATIAL_OCEANFLUX_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 
-ancillary_dir = "/glade/work/jonahshaw/PRISM_data/spatial_OHC_data/ancillary_files/"
+ancillary_dir = f"{OHC_ANCILLARY_DIR}/"
 ancillary_file = os.path.join(ancillary_dir, "ohc_ancillary_data.nc")
 
 # %%
@@ -57,7 +58,8 @@ def submit_oceanflux_job(filepath, savepath):
         savepath (_type_): _description_
     """
 
-    os.system(f"qsub -v INPUT_FILE={filepath},OUTPUT_FILE={savepath} /glade/u/home/jonahshaw/Scripts/git_repos/PRISM/job_scripts/compute_oceanflux_single.sh")
+    # PRISM_ROOT tells the job script where this checkout lives (PBS copies the script to a spool dir)
+    os.system(f"qsub -v INPUT_FILE={filepath},OUTPUT_FILE={savepath},PRISM_ROOT={REPO_ROOT} {JOB_SCRIPTS_DIR}/compute_oceanflux_single.sh")
 
 
 def compute_oceanflux_single_file(filepath, savepath):
@@ -169,26 +171,26 @@ if __name__ == "__main__":
     # If on glade
     CASE_CONFIG = {
         "CESM2_LME": {
-            "data_dir": "/gdex/data/d651078",
+            "data_dir": f"{GDEX_DIR}/d651078",
             "file_patterns": [
                 "b.e21.BWma1850.f19_g17.PMIP4-PaleoStrat.850CEcontrol.008/ocn/proc/tseries/month_1/",
                 "b.e21.BWmaHIST.f19_g17.PMIP4-past1000.002/ocn/proc/tseries/month_1/",
             ]
         },
         "CESM2_WACCM_HIST": {
-            "data_dir": "/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/",
+            "data_dir": f"{CMIP6_TIMESERIES_DIR}/",
             "file_patterns": ["b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??/ocn/proc/tseries/month_1/"]
         },
         "CESM2_WACCM_1850control": {
-            "data_dir": "/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/b.e21.BW1850.f09_g17.CMIP6-piControl.001",
+            "data_dir": f"{CMIP6_TIMESERIES_DIR}/b.e21.BW1850.f09_g17.CMIP6-piControl.001",
             "file_patterns": ["b.e21.BW1850.f09_g17.CMIP6-piControl.001/ocn/proc/tseries/month_1/"]
         },
         "CESM2_WACCM_SSP2-4.5": {
-            "data_dir": "/gdex/data/d651045/CESM2-WACCM-SSP245",
+            "data_dir": f"{GDEX_DIR}/d651045/CESM2-WACCM-SSP245",
             "file_patterns": ["b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??/ocn/proc/tseries/month_1/"]
         },
         "ARISE_SAI": {
-            "data_dir": "/gdex/data/d651059/ARISE-SAI-1.5",
+            "data_dir": f"{GDEX_DIR}/d651059/ARISE-SAI-1.5",
             "file_patterns": [
                 "b.e21.BW.f09_g17.SSP245-G6-1p5K-SAI.0??/ocn/proc/tseries/month_1/",
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-DEFAULT.0??/ocn/proc/tseries/month_1/",
@@ -196,7 +198,7 @@ if __name__ == "__main__":
             ]
         },
         "CESM2_WACCM_SSP2-4.5_MCB": {
-            "data_dir": "/gdex/data/d314006",
+            "data_dir": f"{GDEX_DIR}/d314006",
             "file_patterns": [
                 "CMIP6-MCB-???PCT/ocn/month_1/",
                 "MCB-050PCT-ensm*/ocn/month_1/",
@@ -204,7 +206,7 @@ if __name__ == "__main__":
             ]
         },
         "ARISE-1.0": {
-            "data_dir": "/glade/work/jonahshaw/PRISM_data/ARISE-1.0/",
+            "data_dir": f"{ARISE_1_0_DIR}/",
             "file_patterns": [
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-DELAYED-2045.0??/ocn/proc/tseries/month_1/",
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-LOWER-0.5.0??/ocn/proc/tseries/month_1/",
@@ -217,7 +219,7 @@ if __name__ == "__main__":
     if not os.path.exists(ancillary_dir):
         os.makedirs(ancillary_dir, exist_ok=True)
         if not os.path.exists(ancillary_file):
-            test_file = "/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/b.e21.BW1850.f09_g17.CMIP6-piControl.001/ocn/proc/tseries/month_1/b.e21.BW1850.f09_g17.CMIP6-piControl.001.pop.h.TEMP.000101-009912.nc"
+            test_file = f"{CMIP6_TIMESERIES_DIR}/b.e21.BW1850.f09_g17.CMIP6-piControl.001/ocn/proc/tseries/month_1/b.e21.BW1850.f09_g17.CMIP6-piControl.001.pop.h.TEMP.000101-009912.nc"
             test_ds = xr.open_dataset(test_file)
             test_ds[["TAREA", "UAREA", "KMT", "z_w_bot", "dz"]].to_netcdf(ancillary_file)
 
@@ -226,7 +228,7 @@ if __name__ == "__main__":
         for pattern in CASE_CONFIG[case]["file_patterns"]:
             test_out = crawl_and_process(
                 input_dir=rawdata_root,
-                output_dir=f"/glade/work/jonahshaw/PRISM_data/spatial_oceanflux_data/{case}/",
+                output_dir=f"{SPATIAL_OCEANFLUX_DIR}/{case}/",
                 match_pattern=pattern,
                 process_fn=submit_oceanflux_job,
                 process_path_fn=lambda p: p.replace("QFLUX", "OHF")

@@ -23,6 +23,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
 import logging
+from prism_paths import REPO_SPATIAL_MAPS_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -126,7 +127,7 @@ def plot_difference_map(
 if __name__ == "__main__":
 
 
-    spatial_proc_dir = "/glade/u/home/jonahshaw/Scripts/git_repos/PRISM/data/spatial_maps/"
+    spatial_proc_dir = f"{REPO_SPATIAL_MAPS_DIR}/"
     CASE_CONFIGS1 = {
         "CESM2_WACCM_1850control" :{
             "path": spatial_proc_dir + "CESM2_WACCM_1850control/",

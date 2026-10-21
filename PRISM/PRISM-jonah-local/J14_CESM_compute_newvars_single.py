@@ -17,6 +17,7 @@ from J14_CESM_compute_newvars_parallel import (
     compute_surfaceimbalance_wrapper,
     crawl_and_process2,
 )
+from prism_paths import DERIVED_VARS_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -26,7 +27,7 @@ if __name__ == "__main__":
     # Set output path
     machine = "glade"
     if machine == "glade":
-        savepath_root = "/glade/work/jonahshaw/PRISM_data/derived_vars/"
+        savepath_root = f"{DERIVED_VARS_DIR}/"
     # Identify files with the FLNT variable:
     match_var = "FLNT"
     # Make sure there are two arguments: input file path and output file path

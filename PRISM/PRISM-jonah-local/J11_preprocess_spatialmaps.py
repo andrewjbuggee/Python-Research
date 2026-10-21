@@ -21,6 +21,7 @@ from J15_shared_functions import (
     compute_decadal2,
     load_data_with_configs,
 )
+from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, DERIVED_VARS_DIR, GDEX_DIR, SPATIAL_OHC_DIR, WORK_ROOT
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -147,10 +148,10 @@ def detrend_ds(ds, dim, deg=1):
 
 if __name__ == "__main__":
     # Where processed OHC data is stored
-    ohc_data_root = "/glade/work/jonahshaw/PRISM_data/spatial_OHC_data/"
+    ohc_data_root = f"{SPATIAL_OHC_DIR}/"
 
     # Where the output data will be stored
-    output_data_root = "/glade/work/jonahshaw/PRISM_data/"
+    output_data_root = f"{WORK_ROOT}/"
     ohc_spatial_save_root = f"{output_data_root}/spatial_maps_ohc/"
     atm_spatial_save_root = f"{output_data_root}/spatial_maps_atm/"
 
@@ -163,7 +164,7 @@ if __name__ == "__main__":
     # Configuration for CAM variables from the control cases (1850 control and 2015-2034 period)
     CASE_CONFIGS_CONTROL_ATM = {
         "CESM2_WACCM_1850control" :{
-            "path": "/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/",
+            "path": f"{CMIP6_TIMESERIES_DIR}/",
             "subdir_cases": ["b.e21.BW1850.f09_g17.CMIP6-piControl.001"],
             "append_cases": {
                 "b.e21.BW1850.f09_g17.CMIP6-piControl.001": None,
@@ -171,7 +172,7 @@ if __name__ == "__main__":
             "ufunc": None,
         },
         "CESM2_WACCM_SSP2-4.5": {
-             "path": "/gdex/data/d651045/CESM2-WACCM-SSP245/",
+             "path": f"{GDEX_DIR}/d651045/CESM2-WACCM-SSP245/",
              "subdir_cases": ["b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??"],
              "append_cases": {
                  "b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??": None,
@@ -183,7 +184,7 @@ if __name__ == "__main__":
     # Configuration for CAM variables from the test cases (everything using SSP2-4.5)
     CASE_CONFIGS1 = {
         "CESM2_WACCM_SSP2-4.5": {
-             "path": "/gdex/data/d651045/CESM2-WACCM-SSP245/",
+             "path": f"{GDEX_DIR}/d651045/CESM2-WACCM-SSP245/",
              "subdir_cases": ["b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??"],
              "append_cases": {
                  "b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??": None,
@@ -191,7 +192,7 @@ if __name__ == "__main__":
              "ufunc": lambda ds: weighted_periodmean(ds, slice("2060", "2069"), account_for_leap=False),
         },
         "ARISE_SAI": {
-            "path": "/gdex/data/d651059/ARISE-SAI-1.5/",
+            "path": f"{GDEX_DIR}/d651059/ARISE-SAI-1.5/",
             "subdir_cases": [
                 "1p5K-SAI.0??",
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-DEFAULT.0??",
@@ -205,7 +206,7 @@ if __name__ == "__main__":
             "ufunc": lambda ds: weighted_periodmean(ds, slice("2060", "2069"), account_for_leap=False),
         },
         "ARISE-1.0": {
-            "path": "/glade/work/jonahshaw/PRISM_data/ARISE-1.0/",
+            "path": f"{ARISE_1_0_DIR}/",
             "subdir_cases": [
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-DELAYED-2045.0??",
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-LOWER-0.5.0??",
@@ -217,7 +218,7 @@ if __name__ == "__main__":
             "ufunc": lambda ds: weighted_periodmean(ds, slice("2060", "2069"), account_for_leap=False),
         },
         "CESM2_WACCM_SSP2-4.5_MCB": {
-            "path": "/gdex/data/d314006/",
+            "path": f"{GDEX_DIR}/d314006/",
             "subdir_cases": [
                 "b.e21.BSSP245smbb.f09_g17.MCB-050PCT.0??",
                 "b.e21.BSSP245cmip6.f09_g17.CMIP6-baseline.000",
@@ -318,7 +319,7 @@ if __name__ == "__main__":
     # Load configs must be repeated for the derived variables compute from CAM.
     CASE_CONFIGS_CONTROL_ATM_DERIVED = {
         "CESM2_WACCM_1850control" :{
-            "path": "/glade/work/jonahshaw/PRISM_data/derived_vars/CESM2_WACCM_1850control/",
+            "path": f"{DERIVED_VARS_DIR}/CESM2_WACCM_1850control/",
             "subdir_cases": ["b.e21.BW1850.f09_g17.CMIP6-piControl.001"],
             "append_cases": {
                 "b.e21.BW1850.f09_g17.CMIP6-piControl.001": None,
@@ -326,7 +327,7 @@ if __name__ == "__main__":
             "ufunc": None,
         },
         "CESM2_WACCM_SSP2-4.5": {
-            "path": "/glade/work/jonahshaw/PRISM_data/derived_vars/CESM2_WACCM_SSP2-4.5/",
+            "path": f"{DERIVED_VARS_DIR}/CESM2_WACCM_SSP2-4.5/",
             "subdir_cases": ["b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??"],
             "append_cases": {
                 "b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??": None,
@@ -338,7 +339,7 @@ if __name__ == "__main__":
     # Configuration for CAM variables from the test cases (everything using SSP2-4.5)
     CASE_CONFIGS1_DERIVED = {
         "CESM2_WACCM_SSP2-4.5": {
-            "path": "/glade/work/jonahshaw/PRISM_data/derived_vars/CESM2_WACCM_SSP2-4.5/",
+            "path": f"{DERIVED_VARS_DIR}/CESM2_WACCM_SSP2-4.5/",
             "subdir_cases": ["b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??"],
             "append_cases": {
                 "b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.0??": None,
@@ -346,7 +347,7 @@ if __name__ == "__main__":
             "ufunc": lambda ds: weighted_periodmean(ds, slice("2060", "2069"), account_for_leap=False),
         },
         "ARISE-SAI": {
-            "path": "/glade/work/jonahshaw/PRISM_data/derived_vars/ARISE_SAI/",
+            "path": f"{DERIVED_VARS_DIR}/ARISE_SAI/",
             "subdir_cases": [
                 "1p5K-SAI.0??",
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-DEFAULT.0??",
@@ -360,7 +361,7 @@ if __name__ == "__main__":
             "ufunc": lambda ds: weighted_periodmean(ds, slice("2060", "2069"), account_for_leap=False),
         },
         "ARISE-1.0": {
-            "path": "/glade/work/jonahshaw/PRISM_data/derived_vars/ARISE-1.0/",
+            "path": f"{DERIVED_VARS_DIR}/ARISE-1.0/",
             "subdir_cases": [
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-DELAYED-2045.0??",
                 "b.e21.BW.f09_g17.SSP245-TSMLT-GAUSS-LOWER-0.5.0??",
@@ -372,7 +373,7 @@ if __name__ == "__main__":
             "ufunc": lambda ds: weighted_periodmean(ds, slice("2060", "2069"), account_for_leap=False),
         },
         "CESM2_WACCM_SSP2-4.5_MCB": {
-            "path": "/glade/work/jonahshaw/PRISM_data/derived_vars/CESM2_WACCM_SSP2-4.5_MCB/",
+            "path": f"{DERIVED_VARS_DIR}/CESM2_WACCM_SSP2-4.5_MCB/",
             "subdir_cases": [
                 "b.e21.BSSP245smbb.f09_g17.MCB-050PCT.0??",
                 "b.e21.BSSP245cmip6.f09_g17.CMIP6-baseline.000",

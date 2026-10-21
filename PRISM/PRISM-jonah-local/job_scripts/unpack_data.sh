@@ -1,6 +1,7 @@
 #!/bin/bash
 
-cd /glade/u/home/jonahshaw/Scripts/git_repos/PRISM
+# Repo root: $PRISM_ROOT if set, otherwise the parent of this job_scripts/ folder
+cd "${PRISM_ROOT:-$(dirname "$0")/..}"
 # Process global/hemispheric means
 unzip -n zipped_data/CESM_LME_data.zip -d data/
 unzip -n zipped_data/CESM2_LME_data.zip -d data/

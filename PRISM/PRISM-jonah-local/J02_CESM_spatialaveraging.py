@@ -5,6 +5,7 @@ import os
 import xarray as xr
 import numpy as np
 import logging
+from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, DERIVED_VARS_DIR, GDEX_DIR, SPATIAL_AVERAGES_DIR
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -90,18 +91,18 @@ def crawl_and_process2(input_dir, output_dir, process_fn, **fn_args):
 if __name__ == "__main__":
     machine = "glade"
     if machine == "glade":
-        savepath_root = "/glade/work/jonahshaw/PRISM_data/spatial_averages_data/"
+        savepath_root = f"{SPATIAL_AVERAGES_DIR}/"
         # Path to variables used only here
-        derivedpath_root = "/glade/work/jonahshaw/PRISM_data/derived_vars/"
+        derivedpath_root = f"{DERIVED_VARS_DIR}/"
 
     case_dict = {
-        "ARISE-1.0": ["/glade/work/jonahshaw/PRISM_data/ARISE-1.0/"],
-        "ARISE_SAI": ["/gdex/data/d651059/ARISE-SAI-1.5"],
-        "CESM2_LME": ["/gdex/data/d651078"],
-        "CESM2_WACCM_SSP2-4.5": ["/gdex/data/d651045/CESM2-WACCM-SSP245"],
-        "CESM2_WACCM_SSP2-4.5_MCB": ["/gdex/data/d314006"],
-        "CESM2_WACCM_1850control": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", ["b.e21.BW1850.f09_g17.CMIP6-piControl.001"]],
-        "CESM2_WACCM_HIST": ["/glade/campaign/collections/cmip/CMIP6/timeseries-cmip6/", ["b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.001", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.002", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.003"]],
+        "ARISE-1.0": [f"{ARISE_1_0_DIR}/"],
+        "ARISE_SAI": [f"{GDEX_DIR}/d651059/ARISE-SAI-1.5"],
+        "CESM2_LME": [f"{GDEX_DIR}/d651078"],
+        "CESM2_WACCM_SSP2-4.5": [f"{GDEX_DIR}/d651045/CESM2-WACCM-SSP245"],
+        "CESM2_WACCM_SSP2-4.5_MCB": [f"{GDEX_DIR}/d314006"],
+        "CESM2_WACCM_1850control": [f"{CMIP6_TIMESERIES_DIR}/", ["b.e21.BW1850.f09_g17.CMIP6-piControl.001"]],
+        "CESM2_WACCM_HIST": [f"{CMIP6_TIMESERIES_DIR}/", ["b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.001", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.002", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.003"]],
     }
 
     for case in case_dict:
