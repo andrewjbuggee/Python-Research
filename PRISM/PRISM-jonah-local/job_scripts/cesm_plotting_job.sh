@@ -1,15 +1,16 @@
 #!/bin/bash -l
 #PBS -N cesm_plotting
-#PBS -A UCUC0007
 #PBS -l select=1:ncpus=4:mem=8GB:ngpus=0
 #PBS -l walltime=0:59:59
 #PBS -q casper
 #PBS -j oe
+# Project code (-A) is NOT set here: #PBS lines cannot vary by user. Submit with
+#   job_scripts/submit_prism_job.sh <this script>   (adds -A for the current user)
 
 # ---- PRISM paths -------------------------------------------------------------
 # PBS runs a spooled copy of this script, so the repo location cannot be taken from
-# the script's own path. PRISM_ROOT must point at the PRISM-jonah-local checkout:
-# export it in ~/.bashrc, or submit with  qsub -v PRISM_ROOT=/path/to/PRISM-jonah-local
+# the script's own path. PRISM_ROOT must point at the PRISM-jonah-local checkout;
+# submit_prism_job.sh passes it (or export it in ~/.bashrc).
 : "${PRISM_ROOT:?Set PRISM_ROOT to the PRISM-jonah-local checkout (see job_scripts header)}"
 # Conda environment used to run the Python scripts (override with PRISM_CONDA_ENV)
 PRISM_CONDA_ENV="${PRISM_CONDA_ENV:-/glade/work/$USER/conda-envs/prism}"

@@ -28,7 +28,7 @@ import time
 import dask
 from dask_jobqueue import PBSCluster
 from dask.distributed import Client
-from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, CONTROL_BASELINES_ATM_DIR, DASK_LOCAL_DIR, DERIVED_VARS_DIR, ERROR_ATM_DIR, GDEX_DIR, SPATIAL_OCEANFLUX_DIR, SPATIAL_OHC_DIR
+from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, CONTROL_BASELINES_ATM_DIR, DASK_LOCAL_DIR, DERIVED_VARS_DIR, ERROR_ATM_DIR, GDEX_DIR, SPATIAL_OCEANFLUX_DIR, SPATIAL_OHC_DIR, require_pbs_account
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -254,7 +254,8 @@ def crawl_and_process_dask(
         memory='16GB',
         queue='casper',
         walltime='00:20:00',
-        project='UCUC0007',
+        # Project code of whoever runs this (see prism_paths.PBS_ACCOUNT)
+        project=require_pbs_account(),
         resource_spec='select=1:ncpus=1:mem=16GB',
         # Dask spill/scratch files go to scratch, not the 50 GB home quota
         local_directory=str(DASK_LOCAL_DIR),

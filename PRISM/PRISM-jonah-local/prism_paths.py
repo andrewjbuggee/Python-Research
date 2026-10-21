@@ -25,7 +25,11 @@ with ONE exception: the spatially averaged data is called "spatial_averages_data
 GLADE but "RadInt_procdata" in the unzipped laptop copy (that is the folder name inside
 procdata.zip / zipped_data). SPATIAL_AVERAGES_DIR hides that difference.
 
-Run `python prism_paths.py` to print the resolved paths for the current machine.
+PBS_ACCOUNT (the project code jobs are charged to) is chosen per user, like WORK_ROOT:
+PBS_ACCOUNT_CASPER / PBS_ACCOUNT from the environment, else a per-user default.
+
+Run `python prism_paths.py` to print the resolved paths for the current machine, or
+`python prism_paths.py --account` to print only the project code.
 """
 
 import getpass
@@ -110,6 +114,36 @@ PLACEHOLDER_OHC_FILE = REPO_ROOT / "data" / "OHC_data" / "cesm2_ohc_global_times
 # Dask worker spill directory (J06). Scratch on Casper keeps it out of the 50 GB home quota.
 DASK_LOCAL_DIR = SCRATCH_DIR / "PRISM_dask_workers"
 
+# ----------------------------------------------------------------------------
+# PBS project code (the allocation that NCAR charges for each job)
+# ----------------------------------------------------------------------------
+# Chosen by WHO is running, the same way WORK_ROOT is chosen from $USER: each person's
+# jobs must bill their own allocation, and PBS rejects a project code the user is not on.
+# Order of precedence:
+#   1. PBS_ACCOUNT_CASPER, then PBS_ACCOUNT (the variables NCAR's qcmd/qinteractive
+#      already read, so one line in ~/.bashrc covers PRISM too), see
+#      https://ncar-hpc-docs.readthedocs.io/en/latest/pbs/
+#   2. The per-user default below.
+# Add your own code here if you prefer it in the repo over ~/.bashrc.
+_DEFAULT_PBS_ACCOUNTS = {
+    "jonahshaw": "UCUC0007",  # Jonah Shaw (CU Boulder allocation)
+}
+PBS_ACCOUNT = (
+    os.environ.get("PBS_ACCOUNT_CASPER")
+    or os.environ.get("PBS_ACCOUNT")
+    or _DEFAULT_PBS_ACCOUNTS.get(USER)
+)
+
+
+def require_pbs_account() -> str:
+    """Return PBS_ACCOUNT, or fail loudly before any job is submitted without one."""
+    if not PBS_ACCOUNT:
+        raise RuntimeError(
+            f"No PBS project code for user {USER!r}. Add `export PBS_ACCOUNT=<code>` to "
+            "~/.bashrc, or add the user to _DEFAULT_PBS_ACCOUNTS in prism_paths.py."
+        )
+    return PBS_ACCOUNT
+
 
 def summary() -> str:
     """Human-readable listing of every resolved path, for sanity checks."""
@@ -126,4 +160,10 @@ def summary() -> str:
 
 
 if __name__ == "__main__":
-    print(summary())
+    import sys
+
+    # `python prism_paths.py --account` prints only the project code, for shell scripts
+    if "--account" in sys.argv[1:]:
+        print(require_pbs_account())
+    else:
+        print(summary())

@@ -17,7 +17,7 @@ import numpy as np
 import xarray as xr
 from pathlib import Path
 import warnings
-from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, GDEX_DIR, JOB_SCRIPTS_DIR, OHC_ANCILLARY_DIR, REPO_ROOT, SPATIAL_OCEANFLUX_DIR
+from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, GDEX_DIR, JOB_SCRIPTS_DIR, OHC_ANCILLARY_DIR, REPO_ROOT, SPATIAL_OCEANFLUX_DIR, require_pbs_account
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -58,8 +58,9 @@ def submit_oceanflux_job(filepath, savepath):
         savepath (_type_): _description_
     """
 
+    # -A: project code of whoever runs this (prism_paths.PBS_ACCOUNT).
     # PRISM_ROOT tells the job script where this checkout lives (PBS copies the script to a spool dir)
-    os.system(f"qsub -v INPUT_FILE={filepath},OUTPUT_FILE={savepath},PRISM_ROOT={REPO_ROOT} {JOB_SCRIPTS_DIR}/compute_oceanflux_single.sh")
+    os.system(f"qsub -A {require_pbs_account()} -v INPUT_FILE={filepath},OUTPUT_FILE={savepath},PRISM_ROOT={REPO_ROOT} {JOB_SCRIPTS_DIR}/compute_oceanflux_single.sh")
 
 
 def compute_oceanflux_single_file(filepath, savepath):

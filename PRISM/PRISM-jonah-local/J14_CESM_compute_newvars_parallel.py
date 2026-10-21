@@ -10,7 +10,7 @@ import subprocess
 import xarray as xr
 import numpy as np
 import logging
-from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, DERIVED_VARS_DIR, GDEX_DIR, JOB_SCRIPTS_DIR, REPO_ROOT
+from prism_paths import ARISE_1_0_DIR, CMIP6_TIMESERIES_DIR, DERIVED_VARS_DIR, GDEX_DIR, JOB_SCRIPTS_DIR, REPO_ROOT, require_pbs_account
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -230,6 +230,9 @@ def submit_new_vars_job(filepath, savepath):
     subprocess.run(
         [
             "qsub",
+            # Project code of whoever runs this (prism_paths.PBS_ACCOUNT)
+            "-A",
+            require_pbs_account(),
             "-v",
             # PRISM_ROOT tells the job script where this checkout lives (PBS copies the script to a spool dir)
             f"FILE_PATH={filepath},SAVE_PATH={savepath},PRISM_ROOT={REPO_ROOT}",
