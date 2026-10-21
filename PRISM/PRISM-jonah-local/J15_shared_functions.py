@@ -220,6 +220,7 @@ def load_ensemble_cases(
     varlist,
     identifier: str=None,
     time_dim: str="time",
+    keep_vars: list=None,
 ):
     """
     Load case data with support for wildcard patterns matching multiple ensemble members.
@@ -239,12 +240,18 @@ def load_ensemble_cases(
         datapath_subdir (str): Path to subdirectory containing case files
         case_str (str): Case string, may contain wildcards (* or ?)
         varlist (List[str]): List of variable names to search for
+        keep_vars (List[str], optional): Variables to keep from each file. Defaults to varlist.
+            Use when the file-name variable differs from the variables needed, e.g. J09 OHC files
+            (*.OHC.*nc) hold both the full OHC map and OHC_global_mean; keep_vars=["OHC_global_mean"]
+            drops the map in preprocess, so it is never read into memory.
     
     Returns:
         xarray.Dataset: Loaded dataset. If wildcards were used, includes new 'ens' dimension.
                        Returns None if no files are found.
     """
     has_wildcard = "*" in case_str or "?" in case_str
+    # Variables selected from each file by the preprocess step (file search still uses varlist)
+    keep_vars = varlist if keep_vars is None else keep_vars
     
     if not has_wildcard:
         # Original behavior: no wildcards, use standard file finding
@@ -262,7 +269,7 @@ def load_ensemble_cases(
         try:
             all_ds = xr.open_mfdataset(
                 all_files,
-                preprocess=lambda ds: ds[varlist],
+                preprocess=lambda ds: ds[keep_vars],
                 combine="nested",
                 concat_dim=time_dim,
             )
@@ -307,7 +314,7 @@ def load_ensemble_cases(
                     ens_files,
                     combine='by_coords',
                     compat='no_conflicts',
-                    preprocess=lambda ds: ds[varlist],
+                    preprocess=lambda ds: ds[keep_vars],
                 )
                 
                 # Add ensemble number as a data variable first, then expand the dimension

@@ -360,7 +360,11 @@ if __name__ == "__main__":
     # Load the data using the generalized loading function
     data_varlist = ['FLNT', 'FSNT', 'TS']
     year_dim = "time"
-    ohc_varlist = ["OHC", "OHC_global_mean"]
+    # J09 OHC files are found by the "OHC" in their names (*.pop.h.OHC.*.nc), but only the global-mean
+    # series is kept: the full OHC map (ohc_depth x 384 x 320 per month) is never used here and,
+    # across all cases and members, is large enough to crash the Jupyter kernel.
+    ohc_varlist = ["OHC"]
+    ohc_keep_vars = ["OHC_global_mean"]
 
     # Load data using the generalized function (requires 4 nodes on CURC)
     data_dict = {}
@@ -387,7 +391,9 @@ if __name__ == "__main__":
         )
     else:
         logging.info(f"Loading real OHC data from {data_root_ohc}")
-        ohc_dict = load_data_with_configs(CASE_CONFIGS_OCN, ohc_varlist, year_dim=year_dim, load_into_memory=False)
+        ohc_dict = load_data_with_configs(
+            CASE_CONFIGS_OCN, ohc_varlist, year_dim=year_dim, load_into_memory=False, keep_vars=ohc_keep_vars
+        )
         # load_data_with_configs skips (with only a warning) any case it finds no files for, and the
         # plotting loops below would then stop with a bare KeyError. List every missing case up front instead.
         missing_ohc = [
@@ -471,10 +477,12 @@ if __name__ == "__main__":
         asr_ds = data_dict[asr_var][case_label][case_str][asr_var].sel(spatial="G").squeeze().compute()
         olr_ds = data_dict[olr_var][case_label][case_str][olr_var].sel(spatial="G").squeeze().compute()
         ts_ds = data_dict[ts_var][case_label][case_str][ts_var].sel(spatial="G").squeeze().compute()
-        # .compute(), like the atmosphere variables: the real OHC is a lazy dask array with one chunk per
-        # file, and the 10-year rolling mean in compute_decadal2 fails on chunks shorter than 10 years
-        ohc_ds = ohc_dict[case_label][case_str].squeeze().compute()
-        ohc_ds = ohc_ds["OHC_global_mean"].sel(ohc_depth=-1) * ohc_ds.attrs["ocean_area_m2"] / earth_SA_cam
+        # Full-depth (ohc_depth=-1) global-mean OHC [J m-2 of ocean] -> [J m-2 of Earth surface].
+        # .compute() only this small series, like the atmosphere variables: the real OHC is a lazy dask
+        # array with one chunk per file, and the 10-year rolling mean in compute_decadal2 fails on chunks
+        # shorter than 10 years
+        ohc_case = ohc_dict[case_label][case_str].squeeze()
+        ohc_ds = ohc_case["OHC_global_mean"].sel(ohc_depth=-1).compute() * ohc_case.attrs["ocean_area_m2"] / earth_SA_cam
         ohc_ds = ohc_ds - ohc_ds.isel(time=0)  # Convert OHC to anomaly
 
         # Compute annual means
@@ -670,10 +678,12 @@ if __name__ == "__main__":
         asr_ds = data_dict[asr_var][case_label][case_str][asr_var].sel(spatial="G").squeeze().compute()
         olr_ds = data_dict[olr_var][case_label][case_str][olr_var].sel(spatial="G").squeeze().compute()
         ts_ds = data_dict[ts_var][case_label][case_str][ts_var].sel(spatial="G").squeeze().compute()
-        # .compute(), like the atmosphere variables: the real OHC is a lazy dask array with one chunk per
-        # file, and the 10-year rolling mean in compute_decadal2 fails on chunks shorter than 10 years
-        ohc_ds = ohc_dict[case_label][case_str].squeeze().compute()
-        ohc_ds = ohc_ds["OHC_global_mean"].sel(ohc_depth=-1) * ohc_ds.attrs["ocean_area_m2"] / earth_SA_cam
+        # Full-depth (ohc_depth=-1) global-mean OHC [J m-2 of ocean] -> [J m-2 of Earth surface].
+        # .compute() only this small series, like the atmosphere variables: the real OHC is a lazy dask
+        # array with one chunk per file, and the 10-year rolling mean in compute_decadal2 fails on chunks
+        # shorter than 10 years
+        ohc_case = ohc_dict[case_label][case_str].squeeze()
+        ohc_ds = ohc_case["OHC_global_mean"].sel(ohc_depth=-1).compute() * ohc_case.attrs["ocean_area_m2"] / earth_SA_cam
         ohc_ds = ohc_ds - ohc_ds.isel(time=0)  # Convert OHC to anomaly
 
         # Because OHC and iEEI normalized to a time period, add the ending value of the preceding case to the current case for continuity
@@ -857,10 +867,12 @@ if __name__ == "__main__":
         asr_ds = data_dict[asr_var][case_label][case_str][asr_var].sel(spatial="G").squeeze().compute()
         olr_ds = data_dict[olr_var][case_label][case_str][olr_var].sel(spatial="G").squeeze().compute()
         ts_ds = data_dict[ts_var][case_label][case_str][ts_var].sel(spatial="G").squeeze().compute()
-        # .compute(), like the atmosphere variables: the real OHC is a lazy dask array with one chunk per
-        # file, and the 10-year rolling mean in compute_decadal2 fails on chunks shorter than 10 years
-        ohc_ds = ohc_dict[case_label][case_str].squeeze().compute()
-        ohc_ds = ohc_ds["OHC_global_mean"].sel(ohc_depth=-1) * ohc_ds.attrs["ocean_area_m2"] / earth_SA_cam
+        # Full-depth (ohc_depth=-1) global-mean OHC [J m-2 of ocean] -> [J m-2 of Earth surface].
+        # .compute() only this small series, like the atmosphere variables: the real OHC is a lazy dask
+        # array with one chunk per file, and the 10-year rolling mean in compute_decadal2 fails on chunks
+        # shorter than 10 years
+        ohc_case = ohc_dict[case_label][case_str].squeeze()
+        ohc_ds = ohc_case["OHC_global_mean"].sel(ohc_depth=-1).compute() * ohc_case.attrs["ocean_area_m2"] / earth_SA_cam
         ohc_ds = ohc_ds - ohc_ds.isel(time=0)  # Convert OHC to anomaly
 
         # Because OHC and iEEI normalized to a time period, add the ending value of the preceding case to the current case for continuity
