@@ -23,7 +23,9 @@ from J15_shared_functions import (
     title_dict,
     CASE_CONFIGS_TEMPLATE,
 )
-from prism_paths import ERROR_ATM_DIR
+from prism_paths import ERROR_ATM_DIR, FIGURES_DIR
+# figures/ is gitignored, so it is missing in a fresh clone; create it before any savefig
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -525,7 +527,7 @@ if __name__ == "__main__":
     axs[2].legend()
 
     # %%
-    fig.savefig("figures/figure_NMSEdraft.png", dpi=300, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / "figure_NMSEdraft.png", dpi=300, bbox_inches='tight')
     logging.info("Saved figure_NMSEdraft.png")
     plt.close(fig)
 

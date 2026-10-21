@@ -23,7 +23,9 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
 import logging
-from prism_paths import REPO_SPATIAL_MAPS_DIR
+from prism_paths import FIGURES_DIR, REPO_SPATIAL_MAPS_DIR
+# figures/ is gitignored, so it is missing in a fresh clone; create it before any savefig
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -291,7 +293,7 @@ for ax, label in zip(axes[:, 0], PLOT_CONFIGS1.keys()):
 for ax, var_name in zip(axes[0, :], energy_vars):
     plt.text(-0.1, 0.5, var_name, transform=ax.transAxes, ha='right', va='center', fontsize=10, rotation=90)
 
-fig.savefig("figures/figure4_ensmean.png", dpi=300, bbox_inches='tight')
+fig.savefig(FIGURES_DIR / "figure4_ensmean.png", dpi=300, bbox_inches='tight')
 logging.info("Saved figure4_ensmean.png")
 plt.close(fig)
 # %%

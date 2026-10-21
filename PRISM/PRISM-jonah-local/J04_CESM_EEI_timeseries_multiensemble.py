@@ -17,7 +17,9 @@ from J15_shared_functions import (
     title_dict,
     CASE_CONFIGS_TEMPLATE,
 )
-from prism_paths import PLACEHOLDER_OHC_FILE, SPATIAL_AVERAGES_DIR, SPATIAL_OHC_DIR
+from prism_paths import FIGURES_DIR, PLACEHOLDER_OHC_FILE, SPATIAL_AVERAGES_DIR, SPATIAL_OHC_DIR
+# figures/ is gitignored, so it is missing in a fresh clone; create it before any savefig
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 import logging
 
@@ -564,7 +566,7 @@ if __name__ == "__main__":
     # %%
     if USE_PLACEHOLDER_OHC:
         fig.text(0.5, 0.995, PLACEHOLDER_OHC_LABEL, ha="center", va="top", color="red", fontsize=14, fontweight="bold")
-    fig.savefig("figures/figure_timeseries_past.png", dpi=300, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / "figure_timeseries_past.png", dpi=300, bbox_inches='tight')
     logging.info("Saved figure_timeseries_past.png")
     plt.close(fig)
 
@@ -754,7 +756,7 @@ if __name__ == "__main__":
     # %%
     if USE_PLACEHOLDER_OHC:
         fig.text(0.5, 0.995, PLACEHOLDER_OHC_LABEL, ha="center", va="top", color="red", fontsize=14, fontweight="bold")
-    fig.savefig("figures/figure_timeseries_future.png", dpi=300, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / "figure_timeseries_future.png", dpi=300, bbox_inches='tight')
     logging.info("Saved figure_timeseries_future.png")
     plt.close(fig)
     # %%
@@ -960,7 +962,7 @@ if __name__ == "__main__":
     # %%
     if USE_PLACEHOLDER_OHC:
         fig.text(0.5, 0.995, PLACEHOLDER_OHC_LABEL, ha="center", va="top", color="red", fontsize=14, fontweight="bold")
-    fig.savefig("figures/figure_timeseries_futureALL.png", dpi=300, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / "figure_timeseries_futureALL.png", dpi=300, bbox_inches='tight')
     logging.info("Saved figure_timeseries_futureALL.png")
     plt.close(fig)
 

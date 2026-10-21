@@ -31,7 +31,9 @@ from J15_shared_functions import (
     title_dict,
     CASE_CONFIGS_TEMPLATE,
 )
-from prism_paths import REPO_SPATIAL_MAPS_DIR, SPATIAL_MAPS_ATM_DIR
+from prism_paths import FIGURES_DIR, REPO_SPATIAL_MAPS_DIR, SPATIAL_MAPS_ATM_DIR
+# figures/ is gitignored, so it is missing in a fresh clone; create it before any savefig
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -363,7 +365,7 @@ for ax, var_name in zip(axes[0, :], energy_vars):
     plt.text(-0.1, 0.5, var_name, transform=ax.transAxes, ha='right', va='center', fontsize=10, rotation=90)
 
 # %%
-fig.savefig("figures/figure4_ensmean_1850.png", dpi=300, bbox_inches='tight')
+fig.savefig(FIGURES_DIR / "figure4_ensmean_1850.png", dpi=300, bbox_inches='tight')
 logging.info("Saved figure4_ensmean_1850.png")
 plt.close(fig)
 # %%
@@ -429,7 +431,7 @@ for ax, var_name in zip(axes[0, :], energy_vars):
 
 # %%
 
-fig.savefig("figures/figure4_ensmean_2015_2034.png", dpi=300, bbox_inches='tight')
+fig.savefig(FIGURES_DIR / "figure4_ensmean_2015_2034.png", dpi=300, bbox_inches='tight')
 logging.info("Saved figure4_ensmean_2015_2034.png")
 plt.close(fig)
 
@@ -523,7 +525,7 @@ for ax, var_name in zip(axes[0, :], energy_vars):
     ax.text(-0.1, 0.5, var_name, transform=ax.transAxes, ha='right', va='center', fontsize=14, rotation=90)
 
 # %%
-fig.savefig("figures/figure4_allcases_2015_2034.png", dpi=300, bbox_inches='tight')
+fig.savefig(FIGURES_DIR / "figure4_allcases_2015_2034.png", dpi=300, bbox_inches='tight')
 logging.info("Saved figure4_allcases_2015_2034.png")
 plt.close(fig)
 # %%

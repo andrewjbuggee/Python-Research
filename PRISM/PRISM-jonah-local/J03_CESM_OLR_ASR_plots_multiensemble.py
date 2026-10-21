@@ -14,7 +14,9 @@ from J15_shared_functions import (
     load_data_with_configs,
     CASE_CONFIGS_TEMPLATE,
 )
-from prism_paths import SPATIAL_AVERAGES_DIR
+from prism_paths import FIGURES_DIR, SPATIAL_AVERAGES_DIR
+# figures/ is gitignored, so it is missing in a fresh clone; create it before any savefig
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -401,7 +403,7 @@ if __name__ == "__main__":
     add_arrow(axs[0], 242, 1, fontsize=10)
     axs[-1].set_ylabel("")
     # %%
-    fig.savefig("figures/figure_OLR_ASR_past.png", dpi=300, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / "figure_OLR_ASR_past.png", dpi=300, bbox_inches='tight')
     logging.info("Saved figure_OLR_ASR_past.png")
     plt.close(fig)
 
@@ -539,7 +541,7 @@ if __name__ == "__main__":
     fig.text(0.09, 0.5, "ASR (Wm$^{-2}$)", ha="center", va="center", fontsize=15, rotation=90)
 
     # %%
-    fig.savefig("figures/figure_OLR_ASR_future.png", dpi=300, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / "figure_OLR_ASR_future.png", dpi=300, bbox_inches='tight')
     logging.info("Saved figure_OLR_ASR_future.png")
     plt.close(fig)
     # %%
