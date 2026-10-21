@@ -215,6 +215,7 @@ data/control_baselines_ohc/
 data/spatial_maps/
 data/spatial_maps_ohc/
 data/spatial_maps_ohc_old/
+data/spatial_OHC_data/
 job_logs/
 daskworkers/
 data/scratch/
