@@ -1,0 +1,292 @@
+EPCAPE seasonal-averages table: why Seethala Chellappan's LaRC file differs from the estimates made directly from
+ARM data (cloud-top height, cloud-base height, PBL height)
+=====================================================================================================================
+Andrew Buggee, 23 Oct 2026
+
+In one paragraph
+----------------
+Seethala's file (EPCAPE_CTH_CBH_PBLH_SChellappan_LaRC.csv) samples the ground-based records "GOES-like". Raw data is 
+averaged over 30-minute intervals when the data over that interval is below 2 km (CTH < 2km for KAZR data, CBH < 2km
+for Ceilometer data). Thus, Each ground-based value is a half-hour mean. Interestingly, only about half of the
+all the half-hour averaged data that I computed from ARM is kept in Seethala's file. The deciding
+condition is not in the ground-based data, so it is most likely a GOES-18 condition; the file does not document it.
+The half-hours it keeps have deeper boundary layers and higher clouds than the ones it drops. As a result, the
+file's seasonal means sit 80-130 m above estimates made directly from the ARM records. I've update the seasonal averages
+table to use Seethala's computations. 
+
+
+1. Files and products
+---------------------
+Seethala's LaRC file
+  14 Oct 2026 copy (the one BAMS Fig. 4 v3_1 reads):
+    EPCAPE/data/processed/PBLH - Damao Zhang/EPCAPE_CTH_CBH_PBLH_SChellappan_LaRC.csv
+    2,962 rows, 2023-02-15 03:30:21 to 2024-02-10 07:30:21 (UTC).
+  Kavin's 1 Sep 2026 copy (the one behind the table):
+    MATLAB/Matlab-Research/EPCAPE/Kavin_code_for_BAMS/Annual Echo Plot/EPCAPE_CTH_CBH_PBLH_SChellappan_LaRC.csv
+    2,937 rows, from 2023-03-01 (no February 2023).
+  Columns: GOES18_CTH, KAZR_CTH, CEIL_CBH, PBLH_THERMO, PBLH_MPL (m).
+    - Every row has all five columns.
+    - Every value is < 2 km (column maxima 1940-1991 m).
+    - Time stamps are hh:00:20 or hh:30:21, i.e. the GOES-18 image times. They are UTC, confirmed by the exact
+      rebuilds in section 2.
+
+ARM records (the "direct" estimates, check_seasonal_averages.ipynb)
+  Cloud top:  KAZR-ARSCL epcarsclkazr1kolliasM1.c1 (dod arsclkazr1kollias-c1-4.0).
+              4-s samples, up to 10 hydrometeor layers. No QC field.
+              Notebook Section 4: top of the LOWEST layer, every 4-s sample with top <= 3500 m.
+  Cloud base: Pier ceilometer epcceilM1.b1, 16-s samples.
+              Notebook Section 7: first_cbh with qc_first_cbh = 0, detection_status 1-3, base <= 3500 m,
+              every 16-s sample.
+  PBL height: PBLHTTHERMO epcpblhtthermoM1.c1 (dod pblhtthermo-c1-1.0), pbl_height, 10-min values.
+              Long name: "Planetary boundary layer height from combined Raman Lidar and TROPoe theta profiles".
+              Notebook Section 5 (= table row 15): each 10-min value whose 5-min bin holds a KAZR-ARSCL
+              lowest-layer top <= 3500 m.
+
+Damao Zhang's PBL-height files (the source of the file's two PBLH columns)
+  EPCAPE/data/processed/PBLH - Damao Zhang/epcpblht_be_ml_daily_pblhtmpl_py/epcpblht_be_ml.YYYYMMDD.000000.nc
+  10-min values, 6 Feb 2023 - 13 Feb 2024. Missing values are written as -9.999e6.
+    - pblht_thermo: "boundary layer height from potential temperature profile from TROPoe, using the Heffter
+      method"
+    - pblht_mpl: "boundary layer height from MPL using the method described in Saywer and Li (2013)"
+    - The same files also hold Damao's machine-learning best estimates (predicted_pblht_lidar_be_rf_clf / _rf_reg /
+      _lgb).
+
+
+2. How the file's columns are built (rebuilt from the ARM / Damao data)
+-----------------------------------------------------------------------
+Every ground-based column is a mean over the half hour [hh:00, hh:30) or [hh:30, hh+1:00) that holds the GOES time.
+It is a mean of all samples in that half hour, not a single sample at the image time.
+
+  PBLH_THERMO  Mean of Damao's three 10-min pblht_thermo values in the half hour.
+               Reproduced exactly: 2,962 of 2,962 rows.
+  PBLH_MPL     The same recipe with pblht_mpl.
+               Reproduced exactly: 2,962 of 2,962 rows.
+  CEIL_CBH     Mean of the ceilometer first_cbh samples with qc_first_cbh = 0, detection_status 1-3 and base < 2000 m
+               (about 112 samples per half hour).
+               Reproduced exactly at 98.6 % of rows; mean difference -0.3 m.
+  KAZR_CTH     At each 4-s ARSCL sample, take the HIGHEST layer top among the layers whose top is < 2000 m (layers
+               above 2 km are ignored, so a low deck under cirrus still counts). Then average over the half hour.
+               Reproduced exactly at 82.1 % of rows. Mean difference 0.1 m; 5th-95th percentile of the difference
+               -0.2 to +0.3 m. The remaining rows are off by a few metres to ~100 m (a different ARSCL version? not
+               checked).
+               Note the definition: the file's cloud top is the top of the highest layer below 2 km, a satellite-like
+               "top-down" view. The notebook's cloud top is the top of the LOWEST layer.
+  GOES18_CTH   Satellite cloud-top height for the Pier grid box (0.2 deg, per Seethala's notes in the table row 11
+               text). There is no ground-based equivalent, and it is not rebuilt here.
+
+The 2-km limit therefore enters in two ways:
+  (a) Sample by sample, before averaging: ceilometer bases >= 2 km and KAZR layers with tops >= 2 km are dropped.
+  (b) Row by row: a half hour is in the file only if GOES18_CTH, PBLH_THERMO and PBLH_MPL are all < 2 km.
+
+
+3. Seasonal statistics (m, mean ± std; table seasons in UTC)
+------------------------------------------------------------
+Seasons: Spring AMJ 2023, Summer JAS 2023, Fall OND 2023, Winter 15 Feb-31 Mar 2023 + 1 Jan-14 Feb 2024;
+EPCAPE = 15 Feb 2023 - 14 Feb 2024.
+
+The rows step from the direct ARM estimate to the file, one change at a time ("half-hour" = the file's windows).
+
+3a. Cloud-top height
+                                                                   EPCAPE      Spring     Summer     Fall        Winter
+  Table row 13 (Kavin)                                              920 ± 380   890 ± 330  774 ± 353  1057 ± 416  1192 ± 397
+  ARM: lowest-layer top <= 3.5 km, every 4-s sample (notebook)      902 ± 615   814 ± 356  616 ± 408  1212 ± 774  1482 ± 860
+  ARM: same, <= 2 km                                                781 ± 404   801 ± 327  592 ± 343   943 ± 482  1064 ± 496
+  ARM: same samples (< 2 km) as half-hour means, every half hour    823 ± 422   808 ± 328  572 ± 341   979 ± 455  1161 ± 415
+  ARM: lowest-layer top < 2 km, half-hour means, file's half hours  903 ± 350   875 ± 306  760 ± 328  1019 ± 392  1169 ± 357
+  ARM: file's recipe (highest top below 2 km), file's half hours    934 ± 379   898 ± 330  781 ± 352  1065 ± 412  1241 ± 383
+  File KAZR_CTH, 14 Oct copy (Fig. 4)                               934 ± 379   898 ± 330  780 ± 352  1066 ± 412  1240 ± 382
+  File KAZR_CTH, Kavin's 1 Sep copy                                 918 ± 375   894 ± 332  774 ± 353  1057 ± 416  1192 ± 397
+  File GOES18_CTH, 14 Oct copy                                     1044 ± 277  1063 ± 267  941 ± 244  1095 ± 335  1104 ± 289
+  File GOES18_CTH, Kavin's 1 Sep copy                              1037 ± 277  1062 ± 267  936 ± 245  1092 ± 333  1078 ± 297
+  Samples:
+    ARM every-sample rows: 2,205,853 4-s samples (<= 3.5 km) and 2,062,502 (<= 2 km).
+    ARM half hours, every half hour: 7,127.
+    File and the file's half hours: 2,962 (2,961 with ARM data): Spring 1,631, Summer 674, Fall 223, Winter 434.
+
+3b. Cloud-base height
+                                                                   EPCAPE      Spring     Summer     Fall        Winter
+  Table row 19 (Kavin)                                              661 ± 316   619 ± 270  554 ± 254   836 ± 389   929 ± 362
+  ARM: ceilometer <= 3.5 km, QC = 0, every 16-s sample (notebook)   633 ± 562   551 ± 353  417 ± 397   858 ± 730  1028 ± 747
+  ARM: same, <= 2 km                                                551 ± 397   542 ± 331  382 ± 273   661 ± 481   823 ± 495
+  ARM: same samples (< 2 km) as half-hour means, every half hour    590 ± 404   555 ± 318  394 ± 277   705 ± 483   880 ± 455
+  ARM: file's recipe, file's half hours                             675 ± 322   622 ± 269  558 ± 254   842 ± 385   973 ± 353
+  File CEIL_CBH, 14 Oct copy (Fig. 4)                               676 ± 322   622 ± 269  558 ± 254   844 ± 388   974 ± 353
+  File CEIL_CBH, Kavin's 1 Sep copy                                 662 ± 316   620 ± 270  554 ± 254   836 ± 389   929 ± 362
+  Samples:
+    ARM every-sample rows: 925,113 16-s samples (<= 3.5 km).
+    ARM half hours, every half hour: 9,872.
+    File: 2,962.
+
+3c. PBL height
+                                                                   EPCAPE      Spring     Summer     Fall        Winter
+  Table row 15 = ARM pbl_height, KAZR lowest top <= 3.5 km,
+                 every 10-min value (notebook Section 5)            804 ± 411   779 ± 290  618 ± 234   920 ± 472  1114 ± 595
+  ARM: same, KAZR top <= 2 km                                       789 ± 389   777 ± 286  621 ± 231   916 ± 432  1090 ± 586
+  ARM: row-15 values as half-hour means, every half hour            827 ± 429   794 ± 292  613 ± 234   919 ± 466  1165 ± 591
+  ARM: 2-km values as half-hour means, every half hour              819 ± 410   793 ± 291  617 ± 231   929 ± 420  1156 ± 577
+  ARM: file's recipe (3-value half-hour mean), file's half hours    936 ± 331   905 ± 248  781 ± 202  1040 ± 324  1241 ± 514
+  File PBLH_THERMO, 14 Oct copy (Fig. 4)                            907 ± 311   889 ± 254  768 ± 205  1018 ± 341  1137 ± 447
+  File PBLH_THERMO, Kavin's 1 Sep copy (= the earlier
+                    "PBLH-Thermo (Zhang)" table row, 899 m)         899 ± 305   886 ± 256  764 ± 206  1014 ± 343  1124 ± 442
+  Table row 16, PBLH-MPL (Kavin)                                    790 ± 274   765 ± 255  728 ± 248   844 ± 313   970 ± 288
+  File PBLH_MPL, Kavin's 1 Sep copy                                 790 ± 274   765 ± 255  728 ± 248   844 ± 313   971 ± 288
+  File PBLH_MPL, 14 Oct copy (Fig. 4)                               713 ± 341   671 ± 302  600 ± 292   845 ± 369   981 ± 379
+  Samples:
+    Row 15: 18,053 10-min values (Spring 7,453, Summer 5,766, Fall 1,266, Winter 3,568).
+    File: 2,962.
+  Medians [25th-75th percentile], which is what Fig. 4's boxes show:
+    Row 15 sample:     714 [512-983], 714 [573-885], 573 [456-795], 885 [512-1342], 1211 [573-1486]
+    File PBLH_THERMO:  855 [714-1092], 825 [714-1019], 741 [640-885], 983 [795-1342], 1200 [855-1438]
+  pbl_height (ARM) takes only 39 distinct values on a stretched height grid, so its medians move in whole grid steps.
+
+
+4. What separates the file from the direct ARM estimates (campaign means)
+-------------------------------------------------------------------------
+                                              Cloud top   Cloud base   PBL height
+  Direct ARM estimate (notebook)                 902          633         804     (3.5-km limit; every sample)
+  1. 2-km limit instead of 3.5 km               -121          -82         -15
+  2. Half-hour means instead of every sample     +42          +39         +30     (relative to the 2-km line)
+  3. Only the file's half hours                  +80          +85        +117     (PBLH: ARM values at those times)
+  4. Definition / product change                 +31           +1         -29
+       cloud top:  highest layer below 2 km instead of the lowest layer
+       cloud base: none (the +1 m is the rebuild residual of section 2)
+       PBL height: Damao's pblht_thermo instead of ARM's pbl_height
+  File (14 Oct copy)                             934          676         907
+
+  Step 1. The file never contains a height >= 2 km, so clouds and PBL tops at 2-3.5 km are missing. This step lowers
+          the means and roughly halves the spread: e.g. the cloud-top std falls from 615 m (direct) to 379 m (file).
+  Step 2. Every half hour counts once, however much of it was cloudy. The direct estimates instead weigh every
+          cloudy sample equally, so overcast half hours dominate them. Averaging also smooths the spread.
+  Step 3. The extra selection (section 5). This is the largest single step that raises the means, in all three
+          variables.
+  Step 4. PBL height only: Damao's pblht_thermo is not ARM's pbl_height (section 6).
+
+  For the PBL height, the averaging step (the main difference in method between the two calculations) moves the
+  campaign mean by only +23 m (804 -> 827, row-15 values as half-hour means). The choice of half hours moves it by
+  +109 m (827 -> 936).
+
+
+5. The extra selection: which half hours the file keeps
+-------------------------------------------------------
+[Exploratory check, 23 Oct 2026; the code was run interactively and is not in a script yet.]
+
+Candidates = half hours in which all four ground-based columns can be built and are < 2 km. That means the KAZR
+recipe, the ceilometer recipe, and both of Damao's PBL heights.
+  - There are 5,993 candidates among the 17,520 half hours of the campaign.
+  - Every one of the file's 2,962 rows is a candidate (100 %).
+  - The file keeps 49 % of the candidates.
+  - So the deciding condition is not in the ground-based data. The only column left is GOES18_CTH. The most likely
+    rule is: GOES-18 retrieved a cloud top < 2 km for the Pier box at that image time (possibly with other satellite
+    criteria). This is an inference; the file does not document it, and it was not tested here (no GOES-18 data at
+    0.2 deg).
+
+What the selection does
+  It works half hour by half hour, not by whole days.
+    - On the 208 days with file rows, 54.5 % of the candidates are kept.
+    - The kept share per day ranges widely: 10th percentile 0.13, median 0.58, 90th percentile 1.0.
+    - Only 558 candidates fall on the 51 days that have no file row at all; 30 of those days are in Jul-Sep 2023.
+  It keeps fewer night-time half hours.
+    - 57 % of day half hours are kept (07-18 PST) and 45 % at night (18-07 PST).
+    - By UTC hour, 35-42 % are kept at 08-14 UTC (00-06 PST) and 51-63 % at 16-05 UTC (08-21 PST).
+  It does not depend on how cloudy the half hour was.
+    - The KAZR cloud fraction (share of 4-s samples with a layer below 2 km) is 0.65 kept vs 0.66 dropped.
+    - The kept share is 0.49, 0.55 and 0.48 for half hours < 50 %, 50-90 % and > 90 % cloudy.
+  It drops the shallower decks and boundary layers:
+                                      KAZR CTH   ceilometer CBH   PBLH (Damao thermo)   cloud fraction
+      kept (2,962)                     934 m        676 m             908 m                 0.65
+      dropped (3,031)                  827 m        517 m             567 m                 0.66
+      day:   kept / dropped            935 / 949    684 / 647         917 / 640
+      night: kept / dropped            934 / 776    670 / 463         901 / 536
+      overcast half hours (> 90 %):    KAZR CTH kept 902 m vs dropped 750 m
+  It is not a simple consistency rule between the columns. 9.5 % of the file's rows have PBLH_THERMO below CEIL_CBH,
+  and 23.6 % have PBLH_MPL below CEIL_CBH.
+
+Possible physical reasons. These are guesses, not tested:
+  (i)  Satellite cloud-top heights for thin, shallow marine stratus under a strong inversion are often missed, or
+       placed too high (>= 2 km), especially at night when only infrared channels are available.
+  (ii) The 0.2-deg Pier box includes land, which a shallow coastal deck may not cover.
+
+
+6. PBL height: Damao's pblht_thermo is a different retrieval from ARM's pbl_height
+-----------------------------------------------------------------------------------
+  - ARM's pbl_height uses combined Raman-lidar and TROPoe theta profiles. Damao's pblht_thermo uses TROPoe theta with
+    the Heffter method; in his files it is one input to his machine-learning best estimate.
+  - At 48,334 shared 10-min times they are identical at 72.4 %. Where they differ, Damao's is lower (median -41 m);
+    |difference| > 100 m at 12.6 % of the shared times. The mean difference over all shared times is -57 m.
+  - Damao's original files (epcpblht_be_ml_daily_data) and his python-version files (_py) have the same pblht_thermo
+    (100 % identical). Only pblht_mpl was reprocessed (Damao, email of 13 Oct 2026).
+  - The pblht_mpl reprocessing is not small:
+      - identical at only 11.9 % of shared times;
+      - where different, new - old median -90 m;
+      - |difference| > 100 m at 52.5 %;
+      - in the file, the seasonal PBLH_MPL drops from 790 to 713 m (campaign) and from 728 to 600 m (summer).
+  - Damao recommends 'predicted_pblht_lidar_be_lgb' (LightGBM best estimate; email to Sanghee Han, 18-20 Nov 2024).
+    Neither the table nor the file uses it.
+    - Reference: Zhang, D., et al. (2025), Best estimate of the planetary boundary layer height from multiple
+      remote sensing measurements, Atmos. Meas. Tech., 18, 3453-3475, https://doi.org/10.5194/amt-18-3453-2025.
+    - The method is now the ARM VAP PBLHTBEML (Damao, 24 Apr 2026: his code implemented in ARM's ADI framework;
+      results "should be very similar"). Whether an EPCAPE PBLHTBEML datastream exists has not been checked.
+  - MPL reference (Damao): Sawyer, V. and Li, Z. (2013), Atmos. Environ., 79, 518-528,
+    https://doi.org/10.1016/j.atmosenv.2013.07.019.
+
+
+7. Where the table's values come from
+-------------------------------------
+  Row 13 Cloud Top Height (Kavin)   = file KAZR_CTH, Kavin's 1 Sep copy, table seasons in UTC.
+                                      Exact in summer, fall and winter.
+                                      Spring 894 vs 890 and campaign 918 vs 920; cause not found (PST or local-time
+                                      seasons and a Mar-May spring do not reproduce them).
+  Row 15 Boundary Layer Height      = ARM pbl_height while KAZR sees a lowest-layer top <= 3.5 km, every 10-min value
+                                      (notebook Section 5). Reproduced exactly.
+  Row 16 PBLH-MPL (Kavin)           = file PBLH_MPL, Kavin's 1 Sep copy (winter 971 vs 970; rounding).
+  Row 19 Cloud Base Height (Kavin)  = file CEIL_CBH, Kavin's 1 Sep copy.
+                                      Exact in summer, fall and winter; spring 620 vs 619 and campaign 662 vs 661.
+
+Consequences
+  - Rows 13, 16 and 19 are GOES-like (file) statistics; row 15 is a direct ARM statistic. They are not sampled the
+    same way. Part of the gap between row 15 (804 m) and row 13 (920 m) comes from the sampling, not from the
+    atmosphere: on the file's half hours, the ARM PBL height (936 m) is about equal to the file's cloud top (934 m).
+  - The table and BAMS Fig. 4 panel A use different copies of the file.
+    - The 14 Oct copy adds 70 rows (64 in February 2023, 6 later) and drops 45 rows of the 1 Sep copy.
+    - At the 2,892 shared times, GOES18_CTH, KAZR_CTH, CEIL_CBH and PBLH_THERMO are identical. PBLH_MPL was
+      reprocessed and is identical at only 6.2 % of them.
+    - Effect on the table's winter column: cloud top 1192 -> 1240 m, cloud base 929 -> 974 m, PBLH-MPL 970 -> 981 m.
+      Effect on the campaign PBLH-MPL: 790 -> 713 m.
+  - The file's spreads are smaller than the direct estimates' (2-km limit and half-hour averaging). E.g. the
+    cloud-top std is 379 m (file) vs 615 m (direct).
+
+
+8. Options and open questions
+-----------------------------
+Options for the table
+  (a) Take all the cloud and PBL heights from the 14 Oct file (GOES-like sampling), as Fig. 4 does, and state the
+      sampling in the note. Row 15 would become 907 ± 311 m (PBLH_THERMO) or stay ARM-based with a note.
+  (b) Take all of them directly from ARM data, as the notebook does, and state the limit (3.5 km or 2 km).
+  (c) Keep the rows as they are, but say in the notes which are GOES-like and which are direct.
+  Whichever is chosen, rows 13, 16 and 19 should be recomputed from the 14 Oct file if the table is to match Fig. 4.
+
+For Seethala
+  - What decides which GOES-18 half hours are in the file? GOES18_CTH < 2 km alone, or other conditions too (low
+    cloud fraction, cloud optical depth, retrieval quality flags)?
+  - Which KAZR-ARSCL version/datastream was used for KAZR_CTH? 18 % of rows differ slightly from
+    epcarsclkazr1kolliasM1.c1.
+  - The size and placement of the Pier grid box (0.2 deg?).
+
+For Damao
+  - Why does pblht_thermo differ from ARM's PBLHTTHERMO pbl_height at 28 % of times (inputs: TROPoe-only Heffter vs
+    Raman lidar + TROPoe)?
+  - Which PBL-height variable should the overview paper use (pblht_thermo, pblht_mpl, or
+    predicted_pblht_lidar_be_lgb)?
+  - Is PBLHTBEML available for EPCAPE from ARM?
+
+
+9. Reproducing these numbers (from the Python-Research folder; ~5 s each)
+-------------------------------------------------------------------------
+  python EPCAPE/comparisons/seasonal_averages/pblh_table_vs_larc_csv.py
+      PBLH tables (3c), the PBLH_THERMO / PBLH_MPL rebuild, and Damao vs ARM (section 6).
+      Outputs in pblh_table_vs_larc/.
+  python EPCAPE/comparisons/seasonal_averages/cloud_heights_table_vs_larc_csv.py
+      CTH and CBH tables (3a, 3b) and the KAZR_CTH / CEIL_CBH rebuild. Outputs in cloud_heights_vs_larc/.
+  python EPCAPE/comparisons/seasonal_averages/pblh_cloud_top_limit.py
+      Row 15 with a 3.5-km vs 2-km KAZR limit (sweep, bootstrap intervals). Outputs in pblh_cloud_top_limit/.
+  Section 5 (the selection analysis) is not yet in a script.
