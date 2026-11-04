@@ -3,6 +3,7 @@ J04 with Will Kamp's three-layer energy balance model overlaid on figure_timeser
 
 CESM2 stays as in J04 (solid). The simple model (simple_model_kamp.py, from WorkingModel.ipynb) is
 drawn dotted in the same color as the matching CESM2 variable, on the columns in SIMPLE_MODEL_COLUMNS.
+The ARISE-SAI column uses one of the model's two SAI controllers, chosen by SAI_CONTROLLER.
 Figures are saved with a "_with_simpleModel_verA" suffix so J04's own figures are not overwritten.
 """
 # %%
@@ -42,10 +43,19 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 # "none" holds CO2 at 280 ppm, so every simple-model quantity stays constant.
 # All SSPs share the same CO2 through 2023. This changes the simple model only; the CESM2 runs are fixed.
 SIMPLE_MODEL_SCENARIO = "ssp245"
-# Columns of the future figure that show the simple model (no-SAI, no-MCB model runs, so not ARISE-SAI or MCB)
-SIMPLE_MODEL_COLUMNS = ["CESM2-WACCM-HIST", "CESM2_WACCM_SSP2-4.5"]
+# SAI controller for the ARISE-SAI column:
+#   "constant_Ta"    : holds T_a at its value when the ramp begins (2035)
+#   "zero_imbalance" : holds the net TOA imbalance Q at zero; T_a is free to drift
+SAI_CONTROLLER = "constant_Ta"
+# Columns of the future figure that show the simple model, with the SAI controller each uses (None = no SAI).
+# The MCB column has none: the simple model does not simulate MCB.
+SIMPLE_MODEL_COLUMNS = {
+    "CESM2-WACCM-HIST": None,
+    "CESM2_WACCM_SSP2-4.5": None,
+    "ARISE-SAI": SAI_CONTROLLER,
+}
 # Column titles that differ from the case label
-COLUMN_TITLES = {"CESM2-WACCM-HIST": "Pre-industrial control"}
+COLUMN_TITLES = {"CESM2-WACCM-HIST": "Historical"}
 FIGURE_SUFFIX = "_with_simpleModel_verA"
 
 # %%
@@ -670,6 +680,10 @@ if __name__ == "__main__":
         "axb1_lims": (-0.1e9, 6e9),
         "axb2_lims": (286.0, 293.0),
     }
+    # The zero-imbalance controller takes model ASR and OLR down to ~233.5 W/m2 by 2099, below the usual
+    # 236 limit. Both axes keep a 13-unit span, so one tick on the left equals one tick on the right.
+    if SAI_CONTROLLER == "zero_imbalance":
+        ALL_SHARED_PLOT_LIMITS.update(ax1_lims=(232, 245), ax2_lims=(-9, 4))
     SOME_SHARED_PLOT_LIMITS = {
         "xlims": (2015, 2100),
         "keep_left_axes": False,
@@ -711,7 +725,11 @@ if __name__ == "__main__":
     logging.info("Creating Plot 2: Future scenarios (CESM2_WACCM_SSP2-4.5, ARISE-SAI, CESM2_WACCM_SSP2-4.5_MCB)")
     PLOT_CONFIGS = PLOT_CONFIGS2
     # One continuous 1850-2100 run: its iEEI and OHC are relative to 1850, so columns join with no offset
-    simple_model = simple_model_annual_fields(SIMPLE_MODEL_SCENARIO)
+    # One run per controller setting in use (None = no SAI), keyed by that setting
+    simple_model_runs = {
+        controller: simple_model_annual_fields(SIMPLE_MODEL_SCENARIO, sai_controller=controller)
+        for controller in set(SIMPLE_MODEL_COLUMNS.values())
+    }
 
     fig, axes = plt.subplots(2, 4, figsize=(20, 10))
     # Inner y-axis titles are hidden, so the gaps can be 20% narrower than the wspace=0.35 layout. wspace is a
@@ -802,7 +820,9 @@ if __name__ == "__main__":
         )
 
         if case_label in SIMPLE_MODEL_COLUMNS:
-            overlay_simple_model(ax1, ax2, axb, axb2, simple_model, asr_annual["year"].values, colors)
+            overlay_simple_model(
+                ax1, ax2, axb, axb2, simple_model_runs[SIMPLE_MODEL_COLUMNS[case_label]], asr_annual["year"].values, colors
+            )
 
         ax1.set_xlim(PLOT_CONFIGS[case_label]["xlims"])
         axb.set_xlim(PLOT_CONFIGS[case_label]["xlims"])
@@ -859,7 +879,7 @@ if __name__ == "__main__":
     fig.legend(
         handles=[
             Line2D([], [], color="black", linestyle="-", linewidth=2.5, label="CESM2"),
-            Line2D([], [], color="black", linestyle=":", linewidth=2.5, label=f"Simple model ({SIMPLE_MODEL_SCENARIO})"),
+            Line2D([], [], color="black", linestyle=":", linewidth=2.5, label=f"Simple model ({SIMPLE_MODEL_SCENARIO}; ARISE-SAI column: {SAI_CONTROLLER} controller)"),
         ],
         loc="upper center", bbox_to_anchor=(0.5, 0.97), ncol=2, frameon=False, fontsize=14,
     )
@@ -867,8 +887,8 @@ if __name__ == "__main__":
     # %%
     if USE_PLACEHOLDER_OHC:
         fig.text(0.5, 0.995, PLACEHOLDER_OHC_LABEL, ha="center", va="top", color="red", fontsize=14, fontweight="bold")
-    fig.savefig(FIGURES_DIR / f"figure_timeseries_future{FIGURE_SUFFIX}_{SIMPLE_MODEL_SCENARIO}.png", dpi=300, bbox_inches='tight')
-    logging.info(f"Saved figure_timeseries_future{FIGURE_SUFFIX}_{SIMPLE_MODEL_SCENARIO}.png")
+    fig.savefig(FIGURES_DIR / f"figure_timeseries_future{FIGURE_SUFFIX}_{SIMPLE_MODEL_SCENARIO}_{SAI_CONTROLLER}.png", dpi=300, bbox_inches='tight')
+    logging.info(f"Saved figure_timeseries_future{FIGURE_SUFFIX}_{SIMPLE_MODEL_SCENARIO}_{SAI_CONTROLLER}.png")
     plt.close(fig)
     # %%
 

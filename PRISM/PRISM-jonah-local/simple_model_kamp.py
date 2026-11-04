@@ -1,7 +1,8 @@
 """
 Will Kamp's three-layer energy balance model (EBM), importable from plotting scripts.
 
-The physics below (constants, CO2 record, run_ebm) is copied unchanged from cells 3-6 of
+The physics below (constants, CO2 record, run_ebm, SAI controllers) is copied unchanged from
+cells 3-6 and 11-12 of
     rad_journal_club_paper/PRISM/WorkingModel.ipynb   (commit c286966, 28 Oct 2026)
 A script cannot import a notebook, the notebook needs ipywidgets, and the Casper checkout
 contains only PRISM/PRISM-jonah-local, so the code and its two CO2 files (data/simple_model/)
@@ -251,29 +252,219 @@ def run_ebm(
     return sol.t, Ta, Tu, Tl, Q
 
 
-# == Conversion to the quantities J04 plots ===================================
-def simple_model_annual_fields(scenario: str = "ssp245", start_year: int = RUN_START_YEAR, end_year: int = RUN_END_YEAR) -> dict:
+# == Closed-loop SAI controllers ==============================================
+# ARISE-1.5-style two-phase structure (a simplified analog, not the actual ARISE PI controller):
+#   t < CTRL_START                         : no SAI
+#   CTRL_START <= t < CTRL_START+CTRL_RAMP : ramp-in, applying a linearly growing fraction of the solved d_alpha
+#   t >= CTRL_START+CTRL_RAMP              : full control, re-solving d_alpha every year
+CTRL_START = 2035  # year SAI ramp-in begins
+CTRL_RAMP = 10  # ramp-in duration [yr]
+
+
+def alpha_sai_for_absorbed_sw(T, R_target):
     """
-    Run the model without SAI and return annual means of the quantities in the J04 figures.
+    Invert alpha_net(): the SAI-layer albedo that makes the absorbed shortwave equal R_target [W/m2]
+    at temperature T. Solving A = (1-a_e)(1-x)/(1 - a_e*x) with A = R_target/S gives
+    x = [(1-a_e) - A] / [(1-a_e) - A*a_e]. Clipped to [0, 0.999): SAI can only add reflective aerosol.
+    """
+    a_e = float(alpha_earth(T))
+    A = R_target / S
+    denom = (1.0 - a_e) - A * a_e
+    if denom <= 0.0:
+        return 0.0
+    return float(np.clip(((1.0 - a_e) - A) / denom, 0.0, 0.999))
+
+
+def controller_d_alpha_step(T_target, Tu, t_year, scenario, gamma_au):
+    """
+    SAI albedo that holds Ta at the fixed T_target, given the current upper-ocean state. The atmosphere
+    relaxes well within a year, so setting dTa/dt = 0 at Ta = T_target gives the required absorbed flux,
+    R_target = eps(CO2(t))*sigma*T_target^4 + gamma_au*(T_target - Tu).
+    """
+    eps = emissivity(co2_ppm(t_year, scenario=scenario))
+    R_target = eps * SIGMA * T_target**4 + gamma_au * (T_target - Tu)
+    return alpha_sai_for_absorbed_sw(T_target, R_target)
+
+
+def _layer_derivs_fixed_alpha(t, y, C_a, C_u, C_l, gamma_au, gamma_ul, d_alpha, scenario):
+    """Three-layer RHS with a single, already-solved albedo offset held fixed."""
+    Ta, Tu, Tl = y
+    eps = emissivity(co2_ppm(t, scenario=scenario))
+    R = S * (1 - alpha_net(Ta, d_alpha)) - eps * SIGMA * Ta**4
+    f_au = gamma_au * (Ta - Tu)
+    f_ul = gamma_ul * (Tu - Tl)
+    return [(R - f_au) / C_a, (f_au - f_ul) / C_u, f_ul / C_l]
+
+
+def run_controller_ebm(
+    C_u=C_UPPER,
+    C_l=C_LOWER,
+    gamma_au=GAMMA_AU,
+    gamma_ul=GAMMA_UL,
+    scenario="ssp245",
+    t_span=None,
+    pts_per_year=8,
+    ctrl_start=CTRL_START,
+    ctrl_ramp=CTRL_RAMP,
+):
+    """
+    Constant-T_a controller. Integrates one calendar year at a time, re-solving d_alpha at the start of
+    each year and holding it fixed for that year. T_target is frozen at T_a when the ramp begins.
+
+    Returns t, Ta, Tu, Tl, Q, d_alpha (all on the same sub-year grid) and T_target [K].
+    """
+    C_a = C_ATMOS
+    t0, t_end = _resolve_t_span(t_span)
+    years = np.arange(t0, t_end)
+
+    t_chunks, Ta_chunks, Tu_chunks, Tl_chunks, da_chunks = [], [], [], [], []
+    y = list(initial_state(t0, C_a, C_u, C_l, gamma_au, gamma_ul, scenario))
+    T_target = None
+
+    for yr in years:
+        if yr < ctrl_start:
+            d_alpha = 0.0
+        else:
+            if T_target is None:
+                T_target = y[0]  # freeze the target at the state when the ramp begins
+            d_alpha_full = controller_d_alpha_step(T_target, y[1], yr, scenario, gamma_au)
+            ramp_frac = min(1.0, (yr - ctrl_start + 1) / ctrl_ramp)
+            d_alpha = ramp_frac * d_alpha_full
+
+        t_eval = np.linspace(yr, yr + 1, pts_per_year, endpoint=False)
+        sol = solve_ivp(
+            lambda t, yy: _layer_derivs_fixed_alpha(t, yy, C_a, C_u, C_l, gamma_au, gamma_ul, d_alpha, scenario),
+            (yr, yr + 1),
+            y,
+            t_eval=t_eval,
+            method="BDF",
+            rtol=1e-8,
+            atol=1e-10,
+            dense_output=True,
+        )
+
+        t_chunks.append(sol.t)
+        Ta_chunks.append(sol.y[0])
+        Tu_chunks.append(sol.y[1])
+        Tl_chunks.append(sol.y[2])
+        da_chunks.append(np.full_like(sol.t, d_alpha))
+        y = sol.sol(yr + 1)  # true state at the year boundary (t_eval excludes it via endpoint=False)
+
+    t = np.concatenate(t_chunks)
+    Ta = np.concatenate(Ta_chunks)
+    Tu = np.concatenate(Tu_chunks)
+    Tl = np.concatenate(Tl_chunks)
+    d_alpha_t = np.concatenate(da_chunks)
+
+    eps_t = emissivity(np.array([co2_ppm(ti, scenario=scenario) for ti in t]))
+    Q = S * (1 - alpha_net(Ta, d_alpha_t)) - eps_t * SIGMA * Ta**4
+    return t, Ta, Tu, Tl, Q, d_alpha_t, T_target
+
+
+def controller_d_alpha_step_qbal(Ta, t_year, scenario):
+    """SAI albedo that makes S(1-alpha) = OLR (zero TOA imbalance) at the given Ta."""
+    eps = emissivity(co2_ppm(t_year, scenario=scenario))
+    R_target = eps * SIGMA * Ta**4  # absorbed shortwave must equal OLR
+    return alpha_sai_for_absorbed_sw(Ta, R_target)
+
+
+def run_controller_ebm_qbal(
+    C_u=C_UPPER, C_l=C_LOWER, gamma_au=GAMMA_AU, gamma_ul=GAMMA_UL, scenario="ssp245", t_span=None, pts_per_year=1
+):
+    """
+    Zero-imbalance (Q=0) controller. Same yearly structure as run_controller_ebm, but each year solves for
+    the d_alpha that zeros Q given T_a at the start of that year, so T_a is free to drift.
+
+    Returns t, Ta, Tu, Tl, Q, d_alpha (all on the same sub-year grid).
+    """
+    C_a = C_ATMOS
+    t0, t_end = _resolve_t_span(t_span)
+    years = np.arange(t0, t_end)
+
+    t_chunks, Ta_chunks, Tu_chunks, Tl_chunks, da_chunks = [], [], [], [], []
+    y = list(initial_state(t0, C_a, C_u, C_l, gamma_au, gamma_ul, scenario))
+
+    for yr in years:
+        if yr < CTRL_START:
+            d_alpha = 0.0
+        else:
+            d_alpha_full = controller_d_alpha_step_qbal(y[0], yr, scenario)
+            ramp_frac = min(1.0, (yr - CTRL_START + 1) / CTRL_RAMP)
+            d_alpha = ramp_frac * d_alpha_full
+
+        t_eval = np.linspace(yr, yr + 1, pts_per_year, endpoint=False)
+        sol = solve_ivp(
+            lambda t, yy: _layer_derivs_fixed_alpha(t, yy, C_a, C_u, C_l, gamma_au, gamma_ul, d_alpha, scenario),
+            (yr, yr + 1),
+            y,
+            t_eval=t_eval,
+            method="BDF",
+            rtol=1e-8,
+            atol=1e-10,
+            dense_output=True,
+        )
+
+        t_chunks.append(sol.t)
+        Ta_chunks.append(sol.y[0])
+        Tu_chunks.append(sol.y[1])
+        Tl_chunks.append(sol.y[2])
+        da_chunks.append(np.full_like(sol.t, d_alpha))
+        y = sol.sol(yr + 1)  # true state at the year boundary
+
+    t = np.concatenate(t_chunks)
+    Ta = np.concatenate(Ta_chunks)
+    Tu = np.concatenate(Tu_chunks)
+    Tl = np.concatenate(Tl_chunks)
+    d_alpha_t = np.concatenate(da_chunks)
+
+    eps_t = emissivity(np.array([co2_ppm(ti, scenario=scenario) for ti in t]))
+    Q = S * (1 - alpha_net(Ta, d_alpha_t)) - eps_t * SIGMA * Ta**4
+    return t, Ta, Tu, Tl, Q, d_alpha_t
+
+
+# == Conversion to the quantities J04 plots ===================================
+# Allowed values of sai_controller in simple_model_annual_fields (None = no SAI)
+SAI_CONTROLLERS = ("constant_Ta", "zero_imbalance")
+
+
+def simple_model_annual_fields(
+    scenario: str = "ssp245", start_year: int = RUN_START_YEAR, end_year: int = RUN_END_YEAR, sai_controller: str = None
+) -> dict:
+    """
+    Run the model and return annual means of the quantities in the J04 figures.
+
+    sai_controller selects the SAI treatment: None (no SAI), "constant_Ta" (run_controller_ebm), or
+    "zero_imbalance" (run_controller_ebm_qbal). Controller runs have no SAI before CTRL_START.
 
     The run is continuous from start_year, so iEEI and OHC are both anomalies relative to start_year
     (zero at the start of 1850 by default). No offset is needed between historical and future periods.
 
     Returns a dict of 1-D arrays, one value per calendar year, year = start_year .. end_year - 1:
         year         calendar year; the value is the mean over [year, year + 1), as in J04's CESM2 annual means
-        asr_W_m2     absorbed shortwave, S(1 - alpha_earth(T_a))
+        asr_W_m2     absorbed shortwave, S(1 - alpha_net(T_a, alpha_SAI))
         olr_W_m2     outgoing longwave, eps(CO2) sigma T_a^4
         eei_W_m2     ASR - OLR (the model's Q)
         ieei_J_m2    time integral of EEI, per m2 of Earth
         ohc_J_m2     upper + lower ocean heat content anomaly, per m2 of Earth (C_u, C_l already
                      include F_OCEAN), the same basis as J04's CESM2 OHC
         ts_K         model atmospheric temperature T_a, the model's only near-surface temperature
+        alpha_sai    SAI-layer albedo [-], zero without SAI
     """
-    # Monthly output: 12 intervals per year, plus the end point. Matches J04's monthly CESM2 cumulative sum.
+    # Monthly output, matching J04's monthly CESM2 cumulative sum
     n_months = 12 * (end_year - start_year)
-    t_yr, ta_K, tu_K, tl_K, eei_W_m2 = run_ebm(scenario=scenario, t_span=(start_year, end_year), n_pts=n_months + 1)
+    t_span = (start_year, end_year)
+    if sai_controller is None:
+        # n_months + 1 points so the grid has 12 intervals per year; the end point is dropped below
+        t_yr, ta_K, tu_K, tl_K, eei_W_m2 = run_ebm(scenario=scenario, t_span=t_span, n_pts=n_months + 1)
+        alpha_sai = np.zeros_like(t_yr)
+    elif sai_controller == "constant_Ta":
+        t_yr, ta_K, tu_K, tl_K, eei_W_m2, alpha_sai, _ = run_controller_ebm(scenario=scenario, t_span=t_span, pts_per_year=12)
+    elif sai_controller == "zero_imbalance":
+        t_yr, ta_K, tu_K, tl_K, eei_W_m2, alpha_sai = run_controller_ebm_qbal(scenario=scenario, t_span=t_span, pts_per_year=12)
+    else:
+        raise ValueError(f"sai_controller={sai_controller!r} must be None or one of {SAI_CONTROLLERS}")
 
-    asr_W_m2 = S * (1.0 - alpha_net(ta_K))
+    asr_W_m2 = S * (1.0 - alpha_net(ta_K, alpha_sai))
     olr_W_m2 = asr_W_m2 - eei_W_m2
 
     # Cumulative trapezoid of EEI [W/m2] over time [yr], converted to J/m2. Zero at t = start_year.
@@ -283,7 +474,7 @@ def simple_model_annual_fields(scenario: str = "ssp245", start_year: int = RUN_S
     # Heat content change of the two ocean layers: C [W.yr/m2/K] * dT [K] * [s/yr] = J/m2
     ohc_J_m2 = (C_UPPER * (tu_K - tu_K[0]) + C_LOWER * (tl_K - tl_K[0])) * SEC_PER_YR
 
-    # Annual means over the n_months intervals. The final point (t = end_year) belongs to the next year.
+    # Annual means over the first n_months points. In a no-SAI run the final point (t = end_year) belongs to the next year.
     year = np.arange(start_year, end_year)
 
     def annual_mean(monthly_values):
@@ -297,4 +488,5 @@ def simple_model_annual_fields(scenario: str = "ssp245", start_year: int = RUN_S
         "ieei_J_m2": annual_mean(ieei_J_m2),
         "ohc_J_m2": annual_mean(ohc_J_m2),
         "ts_K": annual_mean(ta_K),
+        "alpha_sai": annual_mean(alpha_sai),
     }
