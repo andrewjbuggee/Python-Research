@@ -1,0 +1,53 @@
+CASPER QUICK START -- running PRISM scripts in an OnDemand Jupyter session
+User: abuggee | Project code: UCSD0090
+Repo on Casper: ~/Python-Research/PRISM/PRISM-jonah-local
+
+1. SEND CODE CHANGES (laptop)
+   Commit and push your edits. Data is NOT in git; it already lives on Glade.
+
+2. START A SESSION
+   - Log in to NCAR OnDemand: https://ondemand.hpc.ucar.edu  (unverified; fix if wrong)
+   - Start a Jupyter session on Casper with project code UCSD0090.
+   - Cores and walltime: charged as cores x time used, so request few cores (1-2 for plotting).
+     Walltime maximum is 24 h.
+   - Memory: does not affect the charge, so ask for enough.
+
+3. GET THE LATEST CODE
+   In JupyterLab: File > New > Terminal, then
+       cd ~/Python-Research/PRISM/PRISM-jonah-local
+       git pull
+
+4. RUN A SCRIPT -- pick one
+   Notebook (keeps variables for debugging): open a notebook with the NPL kernel, then
+       %cd ~/Python-Research/PRISM/PRISM-jonah-local
+       %run J04_CESM_EEI_timeseries_multiensemble.py
+   Terminal:
+       module load conda
+       conda activate npl
+       cd ~/Python-Research/PRISM/PRISM-jonah-local
+       python J04_CESM_EEI_timeseries_multiensemble.py
+   Opened a .py file directly? It has no kernel, so Run stays greyed out. Right-click the
+   editor > "Create Console for Editor", or use one of the options above.
+
+5. SEE THE RESULTS
+   Figures: ~/Python-Research/PRISM/PRISM-jonah-local/figures/ (open in the file browser).
+   figures/ is gitignored, so figures will not come back through git.
+
+6. END THE SESSION
+   Delete it from OnDemand's "My Interactive Sessions" when done. Closing the browser tab
+   does NOT stop it, and it keeps charging until deleted or out of walltime.
+
+WHERE THINGS LIVE
+   Code          ~/Python-Research/PRISM/PRISM-jonah-local        (home: 50 GB)
+   Spatial avgs  /glade/work/abuggee/PRISM_data/spatial_averages_data
+   OHC           /glade/work/abuggee/PRISM_data/spatial_OHC_data  (symlink to Jonah's copy)
+   Throwaway     /glade/derecho/scratch/abuggee                   (purged after 180 days)
+   Check paths:  python prism_paths.py   (flags anything missing; run from the repo, NPL not needed)
+
+IF SOMETHING GOES WRONG
+   "Kernel restarted", no traceback    Probably out of memory. Start a session with more memory.
+   ModuleNotFoundError: xarray         Wrong kernel/environment. Use NPL (step 4).
+   SyntaxError on a shell command      It is in a notebook cell. Prefix with ! or use a terminal.
+   Red PLACEHOLDER banner on figures   spatial_OHC_data is missing or empty. Check the symlink.
+   "No PBS project code" error         Add to ~/.bashrc:  export PBS_ACCOUNT=UCSD0090
+                                       (only needed by scripts that submit PBS jobs)

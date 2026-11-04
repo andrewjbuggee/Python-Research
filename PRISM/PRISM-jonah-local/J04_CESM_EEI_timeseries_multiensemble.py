@@ -52,6 +52,7 @@ def plot_eei_timeseries(
     asr_decadal, olr_decadal, eei_decadal, ieei_decadal,
     ax=None, fontsize=14, case_name="",time_dim="year",
     colors=sns.color_palette("colorblind", n_colors=3),
+    show_left_label=True,
 ):
     """
     Plot timeseries of ASR, OLR, EEI, and iEEI on a subplot with twinned y-axes.
@@ -68,6 +69,8 @@ def plot_eei_timeseries(
         Font size for labels and titles
     case_name : str, default ""
         Name of the case to use as subplot title
+    show_left_label : bool, default True
+        Whether to draw the "ASR, OLR" label on the left-hand y-axis
     
     Returns
     -------
@@ -128,16 +131,18 @@ def plot_eei_timeseries(
     
     # Set axis labels and colors
     ax1.set_xlabel("Year", fontsize=fontsize)
-    ax.text(
-        -0.15, 0.42, "ASR,",
-        transform=ax.transAxes, rotation=90,
-        ha="center", va="top", fontsize=fontsize, color=asr_color,
-    )
-    ax.text(
-        -0.15, 0.43, "OLR [Wm$^{-2}$]",
-        transform=ax.transAxes, rotation=90,
-        ha="center", va="bottom", fontsize=fontsize, color=olr_color,
-    )
+    # Two-colored label drawn as text, so set_ylabel('') cannot remove it; use show_left_label instead
+    if show_left_label:
+        ax.text(
+            -0.15, 0.42, "ASR,",
+            transform=ax.transAxes, rotation=90,
+            ha="center", va="top", fontsize=fontsize, color=asr_color,
+        )
+        ax.text(
+            -0.15, 0.43, "OLR [Wm$^{-2}$]",
+            transform=ax.transAxes, rotation=90,
+            ha="center", va="bottom", fontsize=fontsize, color=olr_color,
+        )
     ax1.tick_params(axis="y")
     ax2.set_ylabel("EEI [Wm$^{-2}$]", fontsize=fontsize, color=eei_color)
     ax2.tick_params(axis="y", labelcolor=eei_color)
@@ -160,7 +165,7 @@ def plot_ieei_ts_ohc(
     ieei_annual, ieei_decadal, ts_annual, ts_decadal, ohc_annual, ohc_decadal, ax=None,
     fontsize=14, time_dim="year",
     colors=sns.color_palette("colorblind", n_colors=6)[3:],
-    
+    show_left_label=True,
 ):
 
     if ax is None:
@@ -203,16 +208,18 @@ def plot_ieei_ts_ohc(
                 linewidth=2.5, alpha=1, label="OHC (decadal)")
 
     ax1.set_xlabel("Year", fontsize=fontsize)
-    ax1.text(
-        -0.15, 0.42, "iEEI,",
-        transform=ax.transAxes, rotation=90,
-        ha="center", va="top", fontsize=fontsize, color=ieei_color,
-    )
-    ax1.text(
-        -0.15, 0.43, "OHC [Jm$^{-2}$]",
-        transform=ax.transAxes, rotation=90,
-        ha="center", va="bottom", fontsize=fontsize, color=ohc_color,
-    )
+    # Two-colored label drawn as text, so set_ylabel('') cannot remove it; use show_left_label instead
+    if show_left_label:
+        ax1.text(
+            -0.15, 0.42, "iEEI,",
+            transform=ax.transAxes, rotation=90,
+            ha="center", va="top", fontsize=fontsize, color=ieei_color,
+        )
+        ax1.text(
+            -0.15, 0.43, "OHC [Jm$^{-2}$]",
+            transform=ax.transAxes, rotation=90,
+            ha="center", va="bottom", fontsize=fontsize, color=ohc_color,
+        )
     # ax1.set_ylabel("iEEI, OHC [Jm$^{-2}$]", fontsize=14)
     # ax1.tick_params(axis="y")
 
@@ -614,7 +621,7 @@ if __name__ == "__main__":
     SOME_SHARED_PLOT_LIMITS = {
         "xlims": (2015, 2100),
         "keep_left_axes": False,
-        "keep_right_axes": True,
+        "keep_right_axes": False,
         "preceding_case": ["CESM2-WACCM-HIST", "b.e21.BWHIST.f09_g17.CMIP6-historical-WACCM.0??"],
     }
     PLOT_CONFIGS2 = {
@@ -653,7 +660,9 @@ if __name__ == "__main__":
     PLOT_CONFIGS = PLOT_CONFIGS2
 
     fig, axes = plt.subplots(2, 4, figsize=(20, 10))
-    fig.subplots_adjust(wspace=0.35)
+    # Inner y-axes are hidden, so the gaps can be 20% narrower than the wspace=0.35 layout. wspace is a
+    # fraction of panel width, and panels widen as gaps shrink: 0.8 * 0.35 / (1 + 3*0.35*0.2/4) = 0.266
+    fig.subplots_adjust(wspace=0.266)
     
     case_list_2 = ["CESM2-WACCM-HIST", "CESM2_WACCM_SSP2-4.5", "ARISE-SAI", "CESM2_WACCM_SSP2-4.5_MCB"]
     start_year_2 = 1850
@@ -726,7 +735,7 @@ if __name__ == "__main__":
             asr_annual, olr_annual, eei_annual, None,
             asr_decadal, olr_decadal, eei_decadal, None,
             ax=ax, fontsize=14, case_name=case_label,
-            colors=colors,
+            colors=colors, show_left_label=PLOT_CONFIGS[case_label]["keep_left_axes"],
         )
 
         # Plot iEEI, TS, and OHC
@@ -735,18 +744,25 @@ if __name__ == "__main__":
             ts_annual=ts_annual, ts_decadal=ts_decadal,
             ohc_annual=ohc_annual, ohc_decadal=ohc_decadal,
             ax=axb, colors=colors[3:], fontsize=14, time_dim="year",
+            show_left_label=PLOT_CONFIGS[case_label]["keep_left_axes"],
         )
 
         ax1.set_xlim(PLOT_CONFIGS[case_label]["xlims"])
         axb.set_xlim(PLOT_CONFIGS[case_label]["xlims"])
         if "keep_left_axes" in PLOT_CONFIGS[case_label]:
             if not PLOT_CONFIGS[case_label]["keep_left_axes"]:
+                # All panels share y-limits, so only the outer columns need tick labels. Tick marks stay.
                 ax1.set_ylabel('')
                 axb.set_ylabel('')
+                ax1.tick_params(axis="y", labelleft=False)
+                axb.tick_params(axis="y", labelleft=False)
+                axb.yaxis.get_offset_text().set_visible(False)  # the "1e9" above the axis
         if "keep_right_axes" in PLOT_CONFIGS[case_label]:
             if not PLOT_CONFIGS[case_label]["keep_right_axes"]:
                 ax2.set_ylabel('')
                 axb2.set_ylabel('')
+                ax2.tick_params(axis="y", labelright=False)
+                axb2.tick_params(axis="y", labelright=False)
         # Set y-axis limits
         if "ax1_lims" in PLOT_CONFIGS[case_label]:
             ax1.set_ylim(*PLOT_CONFIGS[case_label]["ax1_lims"])
@@ -766,7 +782,8 @@ if __name__ == "__main__":
                 transform=ax1.transAxes, verticalalignment='top', horizontalalignment='right')
 
         # Add a horizontal line at y=0 for the EEI subplot
-        ax2.axhline(0, color='grey', linestyle='--', linewidth=1)
+        # Drawn in the EEI color to show it belongs to the right-hand axis
+        ax2.axhline(0, color=colors[2], linestyle='--', linewidth=1)
         ax.set_facecolor("whitesmoke")
         axb.set_facecolor("whitesmoke")
 
