@@ -216,6 +216,8 @@ data/spatial_maps/
 data/spatial_maps_ohc/
 data/spatial_maps_ohc_old/
 data/spatial_OHC_data/
+# Simple-model CO2 record (exception to *.csv above); needed on Casper
+!data/simple_model/*.csv
 job_logs/
 daskworkers/
 data/scratch/

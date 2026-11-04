@@ -660,7 +660,7 @@ if __name__ == "__main__":
     PLOT_CONFIGS = PLOT_CONFIGS2
 
     fig, axes = plt.subplots(2, 4, figsize=(20, 10))
-    # Inner y-axes are hidden, so the gaps can be 20% narrower than the wspace=0.35 layout. wspace is a
+    # Inner y-axis titles are hidden, so the gaps can be 20% narrower than the wspace=0.35 layout. wspace is a
     # fraction of panel width, and panels widen as gaps shrink: 0.8 * 0.35 / (1 + 3*0.35*0.2/4) = 0.266
     fig.subplots_adjust(wspace=0.266)
     
@@ -751,18 +751,12 @@ if __name__ == "__main__":
         axb.set_xlim(PLOT_CONFIGS[case_label]["xlims"])
         if "keep_left_axes" in PLOT_CONFIGS[case_label]:
             if not PLOT_CONFIGS[case_label]["keep_left_axes"]:
-                # All panels share y-limits, so only the outer columns need tick labels. Tick marks stay.
                 ax1.set_ylabel('')
                 axb.set_ylabel('')
-                ax1.tick_params(axis="y", labelleft=False)
-                axb.tick_params(axis="y", labelleft=False)
-                axb.yaxis.get_offset_text().set_visible(False)  # the "1e9" above the axis
         if "keep_right_axes" in PLOT_CONFIGS[case_label]:
             if not PLOT_CONFIGS[case_label]["keep_right_axes"]:
                 ax2.set_ylabel('')
                 axb2.set_ylabel('')
-                ax2.tick_params(axis="y", labelright=False)
-                axb2.tick_params(axis="y", labelright=False)
         # Set y-axis limits
         if "ax1_lims" in PLOT_CONFIGS[case_label]:
             ax1.set_ylim(*PLOT_CONFIGS[case_label]["ax1_lims"])

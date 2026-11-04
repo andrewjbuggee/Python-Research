@@ -111,6 +111,8 @@ FIGURES_DIR = REPO_ROOT / "figures"
 REPO_SPATIAL_MAPS_DIR = REPO_ROOT / "data" / "spatial_maps"
 # Placeholder single-run OHC series used by J04 until real per-case OHC files exist
 PLACEHOLDER_OHC_FILE = REPO_ROOT / "data" / "OHC_data" / "cesm2_ohc_global_timeseries.nc"
+# CO2 record for Will Kamp's simple model (simple_model_kamp.py); small CSVs tracked in git
+SIMPLE_MODEL_DATA_DIR = REPO_ROOT / "data" / "simple_model"
 # Dask worker spill directory (J06). Scratch on Casper keeps it out of the 50 GB home quota.
 DASK_LOCAL_DIR = SCRATCH_DIR / "PRISM_dask_workers"
 
