@@ -37,13 +37,16 @@ LOGIN NODES
    CSV and netCDF products:
        ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --years 2014-2024 --csvs all
        ./submit.sh --region arctic_circle --csvs hour_count,per_cell
-       Products: hour_count  per_cell  precip  cumulative  hourly  netcdf
+       Products: hour_count  per_cell  precip  cumulative  ice_vs_water  hourly  netcdf
 
    Figures:
        ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --years 2014-2024 --all
 
    Start small. A one-season run is a cheap test of a new domain:
        ./submit.sh --box 82 -175 65 -110 --years 2023 --csvs hour_count
+
+   Memory: --csvs jobs request 16 GB. Use --mem to change it, e.g. --mem 32GB. Each job's log
+   prints its peak memory, and qhist shows approximate usage in the Mem column.
 
    Watch:   qstat -u $USER
    Cost:    qhist -u $USER -d 1

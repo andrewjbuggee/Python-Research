@@ -8,7 +8,7 @@
 # select, walltime and the -v variables below.
 #
 # Variables passed with qsub -v:
-#   PRODUCT      hour_count | per_cell | precip | cumulative | hourly | netcdf
+#   PRODUCT      hour_count | per_cell | precip | cumulative | ice_vs_water | hourly | netcdf
 #   REGION       a name in era5_seb_variables.REGIONS, or box:N,W,S,E
 #   REGION_NAME  optional name for a box, used in the output folder
 #   YEARS        season START years, e.g. 2014-2024
@@ -31,6 +31,7 @@ case "$PRODUCT" in
   per_cell)   SCRIPT=make_era5_class_per_cell_csvs.py ;;
   precip)     SCRIPT=make_era5_precip_filter_sensitivity.py ;;
   cumulative) SCRIPT=make_era5_cumulative_hours_by_class.py ;;
+  ice_vs_water) SCRIPT=make_era5_ice_vs_water_clouds.py ;;
   hourly)     SCRIPT=make_era5_hourly_values_csvs.py ;;
   netcdf)     SCRIPT=make_era5_utqiagvik_filtered_netcdf.py ;;
   *) echo "unknown PRODUCT=$PRODUCT"; exit 1 ;;

@@ -30,7 +30,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # qsub itself is not documented to read PBS_ACCOUNT, so the code is passed with -A.
 PROJECT="${PBS_ACCOUNT_CASPER:-${PBS_ACCOUNT:-}}"; REGION="barrow"; YEARS="2014-2024"; SEASON="10-01:03-31"
 STAGES=""; ALL=0; NOTEBOOK=0; DRY=0; OUTDIR=""; EXTRA=""; CHAIN=1; CSVS=""; REGION_NAME=""
-CELL_WEIGHTING=""
+CELL_WEIGHTING=""; MEM_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --project|-A) PROJECT="$2"; shift 2 ;;
@@ -39,6 +39,7 @@ while [ $# -gt 0 ]; do
     --region-name) REGION_NAME="$2"; shift 2 ;;
     --csvs)       CSVS="$2"; shift 2 ;;
     --cell-weighting) CELL_WEIGHTING="$2"; shift 2 ;;     # area (default) | uniform
+    --mem)        MEM_OVERRIDE="$2"; shift 2 ;;           # e.g. 32GB; replaces each job's default
     --years)      YEARS="$2"; shift 2 ;;
     --season)     SEASON="$2"; shift 2 ;;
     --stages)     shift; while [ $# -gt 0 ] && [[ "$1" != --* ]]; do STAGES="$STAGES $1"; shift; done ;;
@@ -123,8 +124,11 @@ pbs_safe() { echo "${1//,/+}"; }      # also covers region specs like box:82,-17
 
 submit() {  # submit <jobname> <script> <ncpus> <mem> <walltime> <-v pairs> [depend-jobid]
   local name="$1" script="$2" ncpus="$3" mem="$4" wall="$5" vars="$6" dep="${7:-}"
+  # ompthreads: NCAR defaults it to 1, and the first Casper test (select with
+  # ncpus=4 and no ompthreads) logged NCPUS=1 and one reader thread while being
+  # charged for 4 cores. Docs: pbs/job-scripts, "pure OpenMP job on Casper".
   local cmd=(qsub -N "$name" -A "$PROJECT"
-             -l "select=1:ncpus=${ncpus}:mem=${mem}"
+             -l "select=1:ncpus=${ncpus}:ompthreads=${ncpus}:mem=${MEM_OVERRIDE:-$mem}"
              -l "walltime=${wall}"
              -o "${OUTDIR}/${name}.log"
              -v "$vars")
@@ -168,20 +172,27 @@ fi
 # figure stages above, from one lwph.prepare pass at 0.68 us per cell-hour:
 # pan-Arctic x 11 seasons (6.6e9 cell-hours) is about 1.2 CPU-hours per counting
 # pass, plus chunk decode. precip makes two passes. hourly also reads 23-level
-# pressure data for CloudTemp, so it gets more cores. These are ESTIMATES, not
+# pressure data for CloudTemp, so it gets more cores. Walltimes are ESTIMATES, not
 # measurements on Casper; lower them after a real run.
+#
+# Memory: 16 GB. MEASURED 2.07 GB (qhist) for hour_count on a 18,009-cell box, one
+# season. Block size shrinks as the domain grows, so that holds up to about 75,000
+# cells, where block_hours reaches its 24 h floor. CALCULATED for hourly on
+# arctic_circle: about 10 GB, from 48 h x 136,800 cells x 23 levels of float64 fields,
+# so its margin is thinner. A domain much larger than pan-Arctic needs --mem. Each
+# job log prints its peak; check those before relying on these on a new domain.
 csv_size_for() {
   case "$1" in
-    hour_count|per_cell|cumulative) echo "4 120GB 12:00:00" ;;
-    precip)              echo "4 120GB 23:00:00" ;;
-    hourly)              echo "8 200GB 23:00:00" ;;
-    netcdf)              echo "4 60GB 12:00:00" ;;
-    *) echo "unknown product $1 (hour_count per_cell precip cumulative hourly netcdf)" >&2; exit 1 ;;
+    hour_count|per_cell|cumulative|ice_vs_water) echo "4 16GB 12:00:00" ;;
+    precip)              echo "4 16GB 23:00:00" ;;
+    hourly)              echo "8 16GB 23:00:00" ;;
+    netcdf)              echo "4 16GB 12:00:00" ;;
+    *) echo "unknown product $1 (hour_count per_cell precip cumulative ice_vs_water hourly netcdf)" >&2; exit 1 ;;
   esac
 }
 
 if [ -n "$CSVS" ]; then
-  [ "$CSVS" = all ] && CSVS="hour_count,per_cell,precip,cumulative,hourly,netcdf"
+  [ "$CSVS" = all ] && CSVS="hour_count,per_cell,precip,cumulative,ice_vs_water,hourly,netcdf"
   # A domain without the ARM site has no UTQ netCDF to write; the script stops
   # with that message, and afterany lets the rest of the chain continue.
   FIRST_ID=""

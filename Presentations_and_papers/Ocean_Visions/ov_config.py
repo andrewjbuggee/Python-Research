@@ -57,6 +57,7 @@ Run ``python ov_config.py`` to print what the current settings resolve to.
 from __future__ import annotations
 
 import argparse
+import atexit
 import getpass
 import math
 import os
@@ -145,6 +146,16 @@ if ON_CASPER:
     # PBS exports NCPUS, the cores this job is charged for. Without a cap, numpy
     # starts one thread per physical core of a node shared with other jobs.
     _ncpus = os.environ.get("NCPUS")
+    # Peak memory in the job log, so that --mem can be set from a measurement.
+    # ru_maxrss is in kB on Linux. resource is imported here because this block
+    # only runs on Casper.
+    if os.environ.get("PBS_JOBID"):
+        import resource
+
+        atexit.register(lambda: print(
+            "  peak memory of this process: "
+            f"{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2:.2f} GB",
+            flush=True))
     if _ncpus:
         for _var in ("ERA5_WORKERS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                      "MKL_NUM_THREADS"):

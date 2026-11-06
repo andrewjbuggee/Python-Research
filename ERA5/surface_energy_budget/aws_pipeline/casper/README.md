@@ -101,6 +101,10 @@ The only cost of a long request is queue position, since PBS backfills short
 jobs first — trim them once a real run has written its timings to
 `manifest_<stages>.json`.
 
+The `--csvs` jobs request 16 GB (`--mem` overrides it). The one measured so far,
+`hour_count` on an 18,009-cell box, used 2.07 GB. The figure stages above keep their
+larger requests, which have not been measured on Casper yet.
+
 Keep `mem` under 350 GB: above that PBS routes to the `largemem` queue, which
 has far fewer nodes and longer waits. Over 733 GB it *must* go there.
 
