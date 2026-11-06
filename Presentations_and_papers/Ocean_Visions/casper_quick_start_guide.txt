@@ -23,6 +23,7 @@ LOGIN NODES
        cd ~/Python-Research && git pull
        cd ERA5/surface_energy_budget/aws_pipeline/casper
        ./setup_casper.sh          # first time only; writes ~/.era5_casper_env
+       module load conda && conda activate npl-2025b   # needed in each new shell
        python preflight.py        # checks GDEX access, packages and write space
    Put this in ~/.bashrc so submit.sh knows the project:
        export PBS_ACCOUNT=UCSD0090

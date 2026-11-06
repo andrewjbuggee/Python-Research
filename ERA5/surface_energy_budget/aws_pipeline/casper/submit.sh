@@ -194,6 +194,14 @@ if [ -n "$CSVS" ]; then
     echo "$out"
     if [ "$DRY" != 1 ]; then FIRST_ID="$(echo "$out" | tail -1 | tr -d '[:space:]')"; fi
   done
+  cat <<MSG
+
+Submitted, not finished. The output folder stays EMPTY until a job ends: each script
+writes its files after its last pass, and PBS delivers the .log at the end of the job.
+  qstat -u \$USER            # Q = queued, R = running; absent = finished
+  qhist -u \$USER -d 1       # finished jobs, with exit status and core-hours
+Results: ${OUTDIR}/<domain>_<span>/
+MSG
   exit 0
 fi
 

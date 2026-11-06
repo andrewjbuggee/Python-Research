@@ -224,6 +224,15 @@ def main(argv=None) -> int:
 
     check_platform()
     check_packages()
+    # Every later check imports these, so stop with the fix rather than a traceback.
+    missing = [f for f in _failures if f.startswith("import ")]
+    if missing:
+        print("=" * 78)
+        print(f"{len(missing)} required package(s) missing: this shell has no analysis "
+              "environment.\nActivate it, then run this again:\n"
+              "  module load conda && conda activate npl-2025b")
+        print("=" * 78)
+        return 1
     check_numpy_vs_laptop()
     check_modules()
     check_archive(not args.no_read)

@@ -18,7 +18,8 @@ ERA5/surface_energy_budget/aws_pipeline/casper/sync_to_casper.sh <user>@casper.h
 
 # Casper login node — once
 cd ~/Python-Research/ERA5/surface_energy_budget/aws_pipeline/casper
-./setup_casper.sh
+./setup_casper.sh                                   # also runs preflight
+module load conda && conda activate npl-2025b       # needed in each new shell to rerun it
 python preflight.py
 
 # Casper — a cheap smoke test first, then the real run
