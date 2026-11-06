@@ -377,11 +377,11 @@ def plot_figure(table: pd.DataFrame, thresholds: str, out_path: Path, region: st
     use = df.loc[(list(("October", "November")), keys), :]
     x_diff = float(
         (use["same_cell_water_minus_ice"].abs() + use["same_cell_jackknife_se"]).max()
-    ) * 1.45
+    ) * 1.5
 
     fig, axes = plt.subplots(
         1, 4, figsize=(14.0, 8.0), sharey=True,
-        gridspec_kw={"width_ratios": [1.65, 1.0, 1.65, 1.0], "wspace": 0.08},
+        gridspec_kw={"width_ratios": [1.5, 1.15, 1.5, 1.15], "wspace": 0.08},
     )
 
     for col, month in enumerate(("October", "November")):
@@ -423,7 +423,8 @@ def plot_figure(table: pd.DataFrame, thresholds: str, out_path: Path, region: st
             clear_of_zero = abs(diff) > 2.0 * se
             ax_diff.plot([diff - se, diff + se], [row_y, row_y], color=INK_PRIMARY, linewidth=1.4,
                          zorder=2, solid_capstyle="butt")
-            ax_diff.scatter(diff, row_y, s=44, zorder=3, linewidth=1.3, edgecolor=INK_PRIMARY,
+            # Small enough that a +/-1 SE line of about 0.03 still shows past it.
+            ax_diff.scatter(diff, row_y, s=22, zorder=3, linewidth=1.1, edgecolor=INK_PRIMARY,
                             color=INK_PRIMARY if clear_of_zero else "white")
             ax_diff.annotate(
                 f"{diff:+.2f}", (diff + se if diff >= 0 else diff - se, row_y),
