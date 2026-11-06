@@ -60,6 +60,7 @@ from plot_lwp_histogram_by_surface_class import (
     utc_hour_mask,
     window_label,
 )
+from plot_surface_class_timeseries import site_in_lat_lon
 from seb_analysis_common import load_seb_data, resolve_region_dir
 from types import SimpleNamespace
 
@@ -321,6 +322,52 @@ QUANTITIES = {
 }
 
 
+def _continuous_lon(lon_deg) -> np.ndarray:
+    """Longitudes with the dateline jump removed: 170 .. 179.75, -180 .. becomes
+    170 .. 179.75, 180 ..; an ordinary box comes back unchanged."""
+    return np.unwrap(np.asarray(lon_deg, dtype=float), period=360.0)
+
+
+def _central_lon(lon_deg) -> float:
+    """Centre of the box in -180..180, correct across the dateline too."""
+    return (float(np.mean(_continuous_lon(lon_deg))) + 180.0) % 360.0 - 180.0
+
+
+def _lon_frame(lon_deg):
+    """``(crs, x_deg)``: a PlateCarree frame in which longitude increases smoothly.
+
+    An ordinary box uses plain PlateCarree and its own longitudes. A box across
+    the dateline has non-monotonic longitudes, which break pcolormesh cell edges
+    and min/max extents, so it is drawn relative to its central longitude.
+    """
+    import cartopy.crs as ccrs
+
+    lon = np.asarray(lon_deg, dtype=float)
+    continuous = _continuous_lon(lon)
+    if np.array_equal(continuous, lon):
+        return ccrs.PlateCarree(), lon
+    centre = _central_lon(lon)
+    return ccrs.PlateCarree(central_longitude=centre), continuous - float(np.mean(continuous))
+
+
+def _grid_ticks(lo_deg: float, hi_deg: float, max_steps: int, pad: bool = False) -> list:
+    """Round gridline positions: the smallest round step giving at most max_steps.
+
+    ``pad`` adds one step at each end. On a polar projection the meridians fan
+    out, so the bottom corners can reach longitudes beyond the box's own.
+    """
+    span_deg = hi_deg - lo_deg
+    step = next((s for s in (1, 2, 5, 10, 15, 30, 45, 60, 90) if span_deg / s <= max_steps), 90)
+    first = np.floor(lo_deg / step) * step - (step if pad else 0)
+    last = np.ceil(hi_deg / step) * step + (step if pad else 0)
+    return [float(v) for v in np.arange(first, last + 0.5 * step, step)]
+
+
+def _site_on_map(M) -> bool:
+    """Is the ARM site inside this map? Otherwise M.site_lat is only the nearest edge cell."""
+    return site_in_lat_lon(M.lat, M.lon)
+
+
 def _projection(M):
     """North polar stereographic centred on the domain.
 
@@ -329,7 +376,8 @@ def _projection(M):
     shape of everything in it.
     """
     import cartopy.crs as ccrs
-    return ccrs.NorthPolarStereo(central_longitude=float(np.mean(M.lon)))
+    stereo = ccrs.SouthPolarStereo if float(np.mean(M.lat)) < 0 else ccrs.NorthPolarStereo
+    return stereo(central_longitude=_central_lon(M.lon))
 
 
 def projected_aspect(M) -> float:
@@ -344,10 +392,11 @@ def projected_aspect(M) -> float:
     import cartopy.crs as ccrs
 
     proj = _projection(M)
-    lo = np.linspace(M.lon.min(), M.lon.max(), 25)
+    frame, x_deg = _lon_frame(M.lon)
+    lo = np.linspace(x_deg.min(), x_deg.max(), 25)
     la = np.linspace(M.lat.min(), M.lat.max(), 25)
     LO, LA = np.meshgrid(lo, la)
-    xy = proj.transform_points(ccrs.PlateCarree(), LO.ravel(), LA.ravel())
+    xy = proj.transform_points(frame, LO.ravel(), LA.ravel())
     x, y = xy[:, 0], xy[:, 1]
     return float((x.max() - x.min()) / (y.max() - y.min()))
 
@@ -368,40 +417,50 @@ def _draw_one(ax, M, field, vmin, vmax, cmap, mark_site=True, labels=True,
     import cartopy.feature as cfeature
 
     pc = ccrs.PlateCarree()
-    lon_e, lat_e = _cell_edges(M.lon), _cell_edges(M.lat)
-    mesh = ax.pcolormesh(lon_e, lat_e, field, transform=pc, cmap=cmap,
+    frame, x_deg = _lon_frame(M.lon)
+    lon_e, lat_e = _cell_edges(x_deg), _cell_edges(M.lat)
+    mesh = ax.pcolormesh(lon_e, lat_e, field, transform=frame, cmap=cmap,
                          vmin=vmin, vmax=vmax, shading="flat")
     ax.add_feature(cfeature.COASTLINE.with_scale("50m"), linewidth=0.9,
                    edgecolor=COAST_COLOR, path_effects=_halo(2.4), zorder=4)
     ax.add_feature(cfeature.LAND.with_scale("50m"), facecolor="none",
                    edgecolor="none")
-    ax.set_extent([M.lon.min(), M.lon.max(), M.lat.min(), M.lat.max()], crs=pc)
+    ax.set_extent([x_deg.min(), x_deg.max(), M.lat.min(), M.lat.max()], crs=frame)
     # Labelled gridlines along the left and bottom only; on a polar
     # stereographic axes the top and right edges are curved and their labels
     # land inside neighbouring panels.
     sides = (labels if isinstance(labels, (list, tuple))
              else (["left", "bottom"] if labels else False))
+    continuous = _continuous_lon(M.lon)
+    x_range = (continuous.min(), continuous.max())
     gl = ax.gridlines(draw_labels=sides,
                       linewidth=0.45, color=GRID_COLOR, alpha=0.9,
                       path_effects=_halo(1.4),
-                      xlocs=list(range(-170, -140, 5)),
-                      ylocs=list(range(70, 81, 2)), rotate_labels=False,
+                      # Gridlines from the domain itself. Longitudes wrap to
+                      # -180..180 so a dateline box labels them correctly.
+                      xlocs=[(v + 180.0) % 360.0 - 180.0 for v in _grid_ticks(
+                          float(x_range[0]), float(x_range[1]), 4, pad=True)],
+                      ylocs=_grid_ticks(M.lat.min(), M.lat.max(), 5),
+                      rotate_labels=False,
                       x_inline=False, y_inline=False)
     gl.xlabel_style = gl.ylabel_style = {"size": tick_fontsize, "color": "0.3"}
-    if mark_site:
+    if mark_site and _site_on_map(M):
         ax.plot(M.site_lon, M.site_lat, marker="*", ms=13, mfc="red",
                 mec="white", mew=1.0, transform=pc, zorder=6)
     return mesh
 
 
 def _site_legend(fig, loc=(0.985, 0.012), fontsize=DEFAULT_MAP_LEGEND_FONTSIZE,
-                 anchor_corner="lower right"):
+                 anchor_corner="lower right", M=None):
     """The red star, named, in the figure margin rather than over the map.
 
     ``anchor_corner`` is the corner/edge of the legend box pinned to ``loc``
     (a figure-fraction point) -- e.g. "upper center" to hang the box below a
     point rather than the default bottom-right placement in the margin.
+    With ``M`` given, no legend is drawn when the site is outside that map.
     """
+    if M is not None and not _site_on_map(M):
+        return
     from matplotlib.lines import Line2D
     fig.legend([Line2D([0], [0], marker="*", ms=12, mfc="red", mec="white",
                        mew=1.0, ls="none")],
@@ -512,14 +571,23 @@ def fig_domain_thumbnail(A, out_dir=None, dpi: int | None = 350,
     lat = np.asarray(A.ds["latitude"].values, dtype=float)
     lon = np.asarray(A.ds["longitude"].values, dtype=float)
     lat0, lat1 = float(lat.min()), float(lat.max())
-    lon0, lon1 = float(lon.min()), float(lon.max())
+    # In a smooth frame, so a dateline box outlines the short way round.
+    frame, x_deg = _lon_frame(lon)
+    lon0, lon1 = float(x_deg.min()), float(x_deg.max())
     if central_longitude is None:
-        central_longitude = 0.5 * (lon0 + lon1)
-
-    proj = ccrs.NorthPolarStereo(central_longitude=central_longitude)
+        central_longitude = _central_lon(lon)
+    south = 0.5 * (lat0 + lat1) < 0
+    # Extend the disc if the domain reaches beyond the default edge.
+    if south:
+        lat_edge = max(-lat_min, lat1 + 4.0)
+        proj = ccrs.SouthPolarStereo(central_longitude=central_longitude)
+    else:
+        lat_edge = min(lat_min, lat0 - 4.0)
+        proj = ccrs.NorthPolarStereo(central_longitude=central_longitude)
     fig = plt.figure(figsize=(size_in, size_in + (0.3 if title else 0.0)))
     ax = fig.add_subplot(1, 1, 1, projection=proj)
-    ax.set_extent([-180, 180, lat_min, 90], ccrs.PlateCarree())
+    ax.set_extent([-180, 180, -90, lat_edge] if south else [-180, 180, lat_edge, 90],
+                  ccrs.PlateCarree())
     # Clip the square stereographic extent to its inscribed circle, the
     # usual polar-map recipe: a boundary path in axes coordinates.
     theta = np.linspace(0.0, 2.0 * np.pi, 240)
@@ -533,7 +601,7 @@ def fig_domain_thumbnail(A, out_dir=None, dpi: int | None = 350,
                    edgecolor="0.3", linewidth=0.5, zorder=1)
     ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=False, linewidth=0.4,
                  color="0.55", alpha=0.7, linestyle="-",
-                 xlocs=range(-180, 180, 45), ylocs=range(50, 90, 5), zorder=2)
+                 xlocs=range(-180, 180, 45), ylocs=range(-85, 90, 5), zorder=2)
 
     # The domain as a ring of many points, so the two parallels draw as the
     # arcs they are on this projection rather than as chords.
@@ -542,9 +610,9 @@ def fig_domain_thumbnail(A, out_dir=None, dpi: int | None = 350,
                                np.linspace(lon1, lon0, n), np.full(n, lon0)])
     ring_lat = np.concatenate([np.full(n, lat0), np.linspace(lat0, lat1, n),
                                np.full(n, lat1), np.linspace(lat1, lat0, n)])
-    ax.plot(ring_lon, ring_lat, transform=ccrs.PlateCarree(), color=box_color,
+    ax.plot(ring_lon, ring_lat, transform=frame, color=box_color,
             linewidth=box_linewidth, solid_capstyle="round", zorder=5)
-    if mark_site:
+    if mark_site and site_in_lat_lon(lat, lon):
         ax.plot(SITE_LON, SITE_LAT, transform=ccrs.PlateCarree(), marker="o",
                 markersize=3.5, color=box_color, markeredgecolor="white",
                 markeredgewidth=0.6, linestyle="none", zorder=6)
@@ -622,11 +690,12 @@ def fig_season_panels(M: MapAnalysis, quantity: str = "hours", n_cols: int = 6,
                       fraction=0.035, pad=0.04, aspect=45)
     cb.set_label(cbar_label, fontsize=11.5)
     cb.ax.tick_params(labelsize=tick_fontsize)
-    _site_legend(fig, fontsize=legend_fontsize)
+    _site_legend(fig, fontsize=legend_fontsize, M=M)
     fig.suptitle(f"{precip_banner(M.args)}\n{title} — {M.args.region} region, "
                  f"{M.args.season_start[0]:02d}-{M.args.season_start[1]:02d} to "
                  f"{M.args.season_end[0]:02d}-{M.args.season_end[1]:02d}"
-                 f"\n{_subtitle(M)}\nred star: the Utqiagvik ARM cell   |   "
+                 f"\n{_subtitle(M)}\n"
+                 f"{'red star: the Utqiagvik ARM cell   |   ' if _site_on_map(M) else ''}"
                  f"shared colour scale across panels",
                  fontsize=12.5, y=0.995)
     return _save(fig, M, out_dir, f"map_{quantity}_by_season", dpi)
@@ -668,7 +737,7 @@ def fig_season_mean(M: MapAnalysis, quantity: str = "hours", out_dir=None,
                       pad=0.05, aspect=32)
     cb.set_label(f"mean {cbar_label}", fontsize=11.5)
     cb.ax.tick_params(labelsize=tick_fontsize)
-    _site_legend(fig, fontsize=legend_fontsize)
+    _site_legend(fig, fontsize=legend_fontsize, M=M)
 
     site = float(data[np.argwhere(M.site_mask)[0][0],
                       np.argwhere(M.site_mask)[0][1]])
@@ -681,7 +750,7 @@ def fig_season_mean(M: MapAnalysis, quantity: str = "hours", out_dir=None,
         f"\n{_subtitle(M)}"
         f"\ndomain min {np.nanmin(data):,.0f} {unit}   median "
         f"{np.nanmedian(data):,.0f} {unit}   max {np.nanmax(data):,.0f} {unit}"
-        f"   |   ARM cell {site:,.0f} {unit}",
+        + (f"   |   ARM cell {site:,.0f} {unit}" if _site_on_map(M) else ""),
         fontsize=11.0)
     return _save(fig, M, out_dir, f"map_{quantity}_season_mean", dpi)
 
@@ -758,14 +827,14 @@ def fig_fraction_and_lwp(M: MapAnalysis, out_dir=None, dpi=None,
         cb.set_label(cbl, fontsize=10.5)
         cb.ax.tick_params(labelsize=tick_fontsize)
         unit = "%" if cmap is FRACTION_CMAP else "g m$^{-2}$"
-        ax.set_title(f"domain median {np.nanmedian(field):,.1f} {unit}   |   "
-                     f"ARM cell {field[iy, ix]:,.1f} {unit}", fontsize=10)
+        arm_txt = (f"   |   ARM cell {field[iy, ix]:,.1f} {unit}" if _site_on_map(M) else "")
+        ax.set_title(f"domain median {np.nanmedian(field):,.1f} {unit}{arm_txt}", fontsize=10)
     # Site legend in the gap between the two panels, hung just below the 72N
     # gridline (found from the axes transform, not guessed) so it clears the
     # data above while staying clear of the colourbars below.
     fig.canvas.draw()
     import cartopy.crs as ccrs
-    central_lon = float(np.mean(M.lon))
+    central_lon = _central_lon(M.lon)
     x_proj, y_proj = axes[0].projection.transform_point(
         central_lon, 72.0, ccrs.PlateCarree())
     _, y_disp = axes[0].transData.transform((x_proj, y_proj))
@@ -773,7 +842,7 @@ def fig_fraction_and_lwp(M: MapAnalysis, out_dir=None, dpi=None,
     pos0, pos1 = axes[0].get_position(), axes[1].get_position()
     x_fig = 0.5 * (pos0.x1 + pos1.x0)
     _site_legend(fig, loc=(x_fig, y_fig - 0.01), fontsize=legend_fontsize,
-                 anchor_corner="upper center")
+                 anchor_corner="upper center", M=M)
     fig.suptitle(f"{precip_banner(M.args)}\n"
                  f"Liquid-containing cloud: how often, and how much liquid — "
                  f"{M.args.region}, mean over {len(M.used)} seasons "
@@ -833,7 +902,7 @@ def fig_season_monthly_maps(M: MapAnalysis, season: int, out_dir=None,
     panel_w = max(panel_h * projected_aspect(M) * 1.25, 1.6)
     fig, axes = plt.subplots(2, n_m, figsize=(panel_w * n_m + 0.8,
                                               2 * panel_h + 1.6),
-                             subplot_kw={"projection": proj})
+                             subplot_kw={"projection": proj}, squeeze=False)
     rows = (
         (frac, "fraction of the month with liquid-containing cloud [%]",
          FRACTION_CMAP),
@@ -853,10 +922,11 @@ def fig_season_monthly_maps(M: MapAnalysis, season: int, out_dir=None,
                              tick_fontsize=tick_fontsize)
             ice = sic[j]
             if np.isfinite(ice).any():
-                cs = ax.contour(M.lon, M.lat, ice, levels=list(ice_levels),
+                frame, x_deg = _lon_frame(M.lon)
+                cs = ax.contour(x_deg, M.lat, ice, levels=list(ice_levels),
                                 colors=ICE_EDGE_COLOR, linewidths=1.2,
                                 linestyles=list(ICE_EDGE_STYLES),
-                                transform=pc, zorder=5)
+                                transform=frame, zorder=5)
                 cs.set_path_effects(_halo(2.8))
             if r == 0:
                 # Days of the month with data, so a short month is visible.
@@ -872,7 +942,7 @@ def fig_season_monthly_maps(M: MapAnalysis, season: int, out_dir=None,
         cb.set_label(cbl, fontsize=9.5)
         cb.ax.tick_params(labelsize=tick_fontsize)
 
-    _site_legend(fig, loc=(0.985, 0.005), fontsize=legend_fontsize)
+    _site_legend(fig, loc=(0.985, 0.005), fontsize=legend_fontsize, M=M)
     from matplotlib.lines import Line2D
     fig.legend([Line2D([0], [0], color=ICE_EDGE_COLOR, lw=1.2,
                        ls=ICE_EDGE_STYLES[0], path_effects=_halo(2.8)),

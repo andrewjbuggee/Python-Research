@@ -60,6 +60,15 @@ Usage
     python make_era5_class_per_cell_csvs.py                 # per_hour, ~2.5 min
     python make_era5_class_per_cell_csvs.py --method pooled
     python make_era5_class_per_cell_csvs.py --compare       # also print both
+    python make_era5_class_per_cell_csvs.py --cell-weighting uniform
+
+CELL WEIGHTING (choose with --cell-weighting)
+=============================================
+``area`` (default) counts each cell-hour in N(t) and n(t) as cos(latitude), the
+convention of plot_surface_class_timeseries.py, so an average is per unit area
+of the class. ``uniform`` counts each as 1, so an average is per grid cell. The
+definitions above then hold with N(t) and n(t) as those sums. Area-weighted
+output has "areaWeighted" in its folder and file names.
 """
 
 from __future__ import annotations
@@ -68,6 +77,10 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
+# First, before numpy: on Casper it sets thread limits and the cache location,
+# and it puts the analysis modules on sys.path.
+import ov_config as ov
+
 import numpy as np
 import pandas as pd
 
@@ -75,7 +88,7 @@ import pandas as pd
 # from the cell-hour script, so these files share its population exactly.
 from make_era5_hour_count_csvs import (
     CATS,
-    DEFAULT_OUT_DIR,
+    OUT_PRODUCT,
     FILE_TAG,
     MONTH_ABBR,
     PHASE_CATS,
@@ -108,9 +121,11 @@ def daily_sums(C: dict) -> dict:
     daily ones, and both methods can be finished from them at any resolution.
     """
     H = C["hourly"]                                   # (hour, slot, cat) int32
-    N = H[:, :, I_ALL].astype(float)                  # (hour, slot) class size
-    n = H[:, :, [CATS.index(c) for c in PHASE_CATS]].astype(float)
-    present = N > 0                                   # (hour, slot)
+    # Cell-hours counted as 1 or as cos(latitude); see count_cell_hours.
+    W = H if C["hourly_w"] is None else C["hourly_w"]
+    N = W[:, :, I_ALL].astype(float)                  # (hour, slot) class size or area
+    n = W[:, :, [CATS.index(c) for c in PHASE_CATS]].astype(float)
+    present = H[:, :, I_ALL] > 0                      # (hour, slot) from the plain count
     with np.errstate(divide="ignore", invalid="ignore"):
         # f(t) = n(t)/N(t); 0 where the class did not exist (it then adds
         # nothing to either sum, and T does not count that hour).
@@ -221,11 +236,11 @@ def presence_tables(C, D):
 # ----------------------------------------------------------------------------
 def write_all(C: dict, D: dict, method: str, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    span = f"{C['seasons'][0]}_{C['seasons'][-1] + 1}"
+    span = ov.span_tag(C["seasons"])
     written: list[Path] = []
 
     def save(df: pd.DataFrame, name: str, fmt: str) -> None:
-        path = out_dir / name
+        path = out_dir / ov.weighted_names(name, C["cell_weighting"])
         df.to_csv(path, index=False, float_format=fmt)
         written.append(path)
 
@@ -255,10 +270,12 @@ def write_all(C: dict, D: dict, method: str, out_dir: Path) -> list[Path]:
 # ----------------------------------------------------------------------------
 def check(C: dict, D: dict) -> None:
     """Hard checks that must hold for any data."""
-    H = C["hourly"]
+    H = C["hourly"] if C["hourly_w"] is None else C["hourly_w"]
     for s in CLASS_SLOTS:
         N = H[:, s, I_ALL]
-        if N.max() == N[N > 0].min():
+        if not N.any():
+            continue                          # class absent from this domain
+        if np.isclose(N.max(), N[N > 0].min(), rtol=1e-12, atol=0.0):
             # Fixed-size class: per_hour avg must equal total / N exactly.
             tot = H[:, s, [CATS.index(c) for c in PHASE_CATS]].sum(axis=0)
             got = D["sum_f"][:, s].sum(axis=0)
@@ -281,6 +298,9 @@ def print_class_sizes(C: dict) -> None:
     for s in CLASS_SLOTS:
         N = H[:, s, I_ALL]
         pos = N[N > 0]
+        if pos.size == 0:
+            print(f"  {SLOT_NAMES[s]:<24s} absent from this domain")
+            continue
         print(f"  {SLOT_NAMES[s]:<24s} {pos.min():6d} {int(np.median(pos)):7d} "
               f"{pos.max():6d} {int((N == 0).sum()):13,d} {int(((N > 0) & (N < 10)).sum()):17,d}")
 
@@ -304,12 +324,15 @@ def print_comparison(C: dict, D: dict) -> None:
 # readME
 # ----------------------------------------------------------------------------
 def write_readme(C: dict, method: str, out_dir: Path) -> Path:
-    span = f"{C['seasons'][0]}_{C['seasons'][-1] + 1}"
+    span = ov.span_tag(C["seasons"])
     H = C["hourly"]
     size_lines = []
     for s in CLASS_SLOTS:
         N = H[:, s, I_ALL]
         pos = N[N > 0]
+        if pos.size == 0:
+            size_lines.append(f"  {SLOT_NAMES[s]:<16s} absent from this domain")
+            continue
         size_lines.append(f"  {SLOT_NAMES[s]:<16s} {pos.min():5d} - {pos.max():5d} cells "
                           f"(median {int(np.median(pos))}); absent in "
                           f"{int((N == 0).sum()):,} of {N.size:,} hours")
@@ -329,11 +352,23 @@ def write_readme(C: dict, method: str, out_dir: Path) -> Path:
 
       Every cell-hour counts equally. This equals the cell-hour table
       divided by the matching table in ../normalization/.""")
+    area = C["cell_weighting"] == "area"
+    weight_title = ", area-weighted by cos(latitude)" if area else ""
+    weight_block = ("""
+
+  AREA WEIGHTING: in these files every cell-hour in N(t) and n(t) counts
+  as cos(latitude), not as 1, so an average is per unit area of the class
+  rather than per grid cell. T still counts hours. "avg hours per cell"
+  below therefore means hours at an average point of the class by area.
+  The cell counts listed above are plain counts.""" if area else "")
+    weight_sentence = ("Cells are area-weighted by cos(latitude), as those figures are."
+                       if area else
+                       "Cells are not area-weighted (those figures weight by\ncos(latitude)).")
     text = f"""PER-GRID-CELL NORMALISATION OF THE SURFACE-CLASS TABLES
 =======================================================
 
 Generated {datetime.now(timezone.utc):%Y-%m-%d} by make_era5_class_per_cell_csvs.py
-(repo {git_describe()}), method = {method}.
+(repo {git_describe()}), method = {method}{weight_title}.
 
 Companion to ../readME.txt, which describes the data, the filters and the
 surface classes. Every file here is a normalised version of one of the
@@ -363,15 +398,14 @@ For one class and hour t:
 For a period (day, month or season), T = the number of hours in it during
 which the class existed (N(t) > 0); hours without the class add nothing.
 
-{defn}
+{defn}{weight_block}
 
 "avg hours per cell" is the number of hours an average grid cell of the
 class spent under that cloud type, counting only the T hours the class
 existed. "fraction of time" is the same as a share of T (0 to 1); multiply
 by the full length of the period to express it as hours of a cell that
 stayed in the class throughout, which is how the Ocean Visions class figures
-present it. Cells are not area-weighted (those figures weight by
-cos(latitude)).
+present it. {weight_sentence}
 
 A fraction is blank (NaN) where the class did not exist at all in that
 period; the matching average is 0.
@@ -409,7 +443,7 @@ Same layouts as the cell-hour tables:
   ERA5_hoursClassPresent_perDay_{span}.csv      T per day (column per class)
 """
     path = out_dir / "readME.txt"
-    path.write_text(text)
+    path.write_text(ov.weighted_names(text, C["cell_weighting"]))
     return path
 
 
@@ -421,17 +455,24 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--method", choices=METHODS, default=DEFAULT_METHOD,
                    help=f"averaging method (default {DEFAULT_METHOD}); see the docstring")
     p.add_argument("--out-dir", type=Path, default=None,
-                   help="output directory (default era5_hour_count_csv/class_normalized, "
+                   help="output directory (default <hour-count folder>/class_normalized, "
                         "or class_normalized_pooled for --method pooled)")
     p.add_argument("--compare", action="store_true",
                    help="print both methods' seasonal fractions side by side")
+    ov.add_weighting_arg(p)
+    ov.add_run_args(p)
     opts = p.parse_args(argv)
-    out_dir = opts.out_dir or (DEFAULT_OUT_DIR / ("class_normalized" if opts.method == "per_hour"
-                                                  else "class_normalized_pooled"))
+    run = ov.run_from_args(opts)
+    out_dir = opts.out_dir or (run.out_dir(OUT_PRODUCT)
+                               / (("class_normalized" if opts.method == "per_hour"
+                                   else "class_normalized_pooled")
+                                  + ov.weight_suffix(opts.cell_weighting)))
 
-    args = build_args(SETTINGS)
+    args = build_args({**SETTINGS, **run.settings(), "cell_weighting": opts.cell_weighting})
     print("=" * 72)
-    print(f"ERA5 per-grid-cell hours and time fractions by class ({opts.method})")
+    print(f"ERA5 per-grid-cell hours and time fractions by class ({opts.method}, "
+          f"{opts.cell_weighting} weighting)")
+    print(run.report())
     print("=" * 72)
     C = count_cell_hours(args)
     D = daily_sums(C)

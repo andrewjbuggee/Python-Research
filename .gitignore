@@ -226,3 +226,6 @@ daac_data_download_python
 
 # aws_pipeline batch outputs (figures + pickles of reduced results)
 ERA5/surface_energy_budget/aws_pipeline/results/
+
+# Custom-domain Ocean Visions output on the laptop (see ov_config.py)
+Presentations_and_papers/Ocean_Visions/domain_runs/

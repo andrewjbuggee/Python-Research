@@ -47,7 +47,9 @@ export OV_MAP_SEASON="${MAP_SEASON:-2024}"
 # Keep the streaming footprint at the Barrow scale the module defaults were
 # sized for: 720 h x 136,800 cells x 8 B is 788 MB per float64 temporary, and
 # the sweep pass holds dozens of them.
-export OV_BLOCK_HOURS="${BLOCK_HOURS:-}"
+# Left unset, ov_config scales the block from the domain's cell count. An empty
+# export would have meant the module default of 720 h on any domain.
+[ -n "${BLOCK_HOURS:-}" ] && export OV_BLOCK_HOURS="${BLOCK_HOURS}"
 
 NB="$REPO_ROOT/Presentations_and_papers/Ocean_Visions/ocean_visions_figures.ipynb"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"

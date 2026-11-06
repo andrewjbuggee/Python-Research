@@ -235,6 +235,14 @@ def main(argv=None) -> int:
 
     t_all = time.time()
     A_precip = None
+    # Figures that compare the ARM cell with the ARM record are skipped outside
+    # its domain. site_cell_mask would otherwise return the nearest edge cell.
+    from plot_surface_class_timeseries import site_in_lat_lon  # noqa: E402
+
+    site_in_box = site_in_lat_lon(win.lat_deg, win.lon_deg)
+    if not site_in_box:
+        print(f"  note: {args.region!r} does not contain the ARM site; ARM-cell figures "
+              "are skipped", flush=True)
     for stage in stages:
         t0 = time.time()
         print(f"\n##### stage {stage} #####")
@@ -242,13 +250,15 @@ def main(argv=None) -> int:
             A_precip = lwph.prepare(**common, **precip, block_hours=block_hours,
                                     ice_fraction_min=args.ice_fraction_min_site)
             lwph.print_report(A_precip)
-            figure(lwph.fig_era5_vs_obs_simple_forOV, A_precip, out_dir=fig_dir, halo_alpha=0.7)
-            figure(lwph.print_era5_vs_obs_mean_pct_diff, A_precip)
+            if site_in_box:
+                figure(lwph.fig_era5_vs_obs_simple_forOV, A_precip, out_dir=fig_dir, halo_alpha=0.7)
+                figure(lwph.print_era5_vs_obs_mean_pct_diff, A_precip)
             save("A_precip", A_precip)
             A_allsky = lwph.prepare(**common, block_hours=block_hours,
                                     ice_fraction_min=args.ice_fraction_min_site)
-            figure(lwph.fig_monthly_box_era5_vs_obs_build_forOV, A_allsky, out_dir=fig_dir,
-                   category="liquid_containing")
+            if site_in_box:
+                figure(lwph.fig_monthly_box_era5_vs_obs_build_forOV, A_allsky, out_dir=fig_dir,
+                       category="liquid_containing")
             save("A_allsky", A_allsky)
             # Same threshold the notebook's cell 9 uses for A_sweep
             # (ICE_FRACTION_MIN_COMPARISON), so the two routes agree.
@@ -256,21 +266,24 @@ def main(argv=None) -> int:
                                    ice_fraction_min=args.ice_fraction_min_site,
                                    sweep_lwp_min=0.1, sweep_lwp_max=20.0, sweep_points=21,
                                    sweep_spacing="linear", show_ice_only=False)
-            figure(lwph.fig_liquid_retention_by_knob, A_sweep, out_dir=fig_dir)
+            if site_in_box:
+                figure(lwph.fig_liquid_retention_by_knob, A_sweep, out_dir=fig_dir)
             save("A_sweep", A_sweep)
         elif stage == "dlr":
-            S = dlr.extract_site_table(A_precip)
-            dlr.verify_against_fit(S, A_precip)
             D = dlr.prepare_domain(A_precip)
-            dlr.fig_monthly_dlr_box(A_precip, S, out_dir=fig_dir)
-            dlr.print_monthly_dlr_table(A_precip, S)
+            if site_in_box:
+                S = dlr.extract_site_table(A_precip)
+                dlr.verify_against_fit(S, A_precip)
+                dlr.fig_monthly_dlr_box(A_precip, S, out_dir=fig_dir)
+                dlr.print_monthly_dlr_table(A_precip, S)
             dlr.fig_monthly_dlr_box_domain_forOV(A_precip, D, out_dir=fig_dir)
             dlr.fig_monthly_dlr_box_by_class_forOV(A_precip, D, out_dir=fig_dir)
             dlr.print_state_fraction_table(A_precip, D)
             dlr.print_monthly_dlr_table_domain(A_precip, D)
-            dlr.fig_dlr_pdf(A_precip, D, out_dir=fig_dir)
-            dlr.fig_dlr_pdf(A_precip, D, out_dir=fig_dir, show_states=True)
-            save("S_precip", S, drop=())
+            if site_in_box:
+                dlr.fig_dlr_pdf(A_precip, D, out_dir=fig_dir)
+                dlr.fig_dlr_pdf(A_precip, D, out_dir=fig_dir, show_states=True)
+                save("S_precip", S, drop=())
             save("D_precip", D, drop=())
         elif stage == "extent":
             E = cse.prepare_extent(**common, **precip, block_hours=block_hours,
@@ -279,7 +292,7 @@ def main(argv=None) -> int:
             cse.print_taylor_report(E, ev)
             cse.fig_taylor_hist(E, ev, out_dir=fig_dir)
             E_pl = CL = None
-            if args.cloud_level_wind:
+            if args.cloud_level_wind and site_in_box:
                 # Same threshold the notebook uses for E_pl (its
                 # ICE_FRACTION_MIN_COMPARISON), so the two routes agree.
                 E_pl = cse.prepare_extent(**{**common, "years": pl_years}, **precip,
@@ -287,8 +300,9 @@ def main(argv=None) -> int:
                                           ice_fraction_min=args.ice_fraction_min_site)
                 CL = clw.cloud_level_wind(E_pl)
                 clw.fig_cloudDuration_andWind_forOV(E, ev, E_pl=E_pl, CL=CL, out_dir=fig_dir)
-            clw.fig_cloudDuration_andWind_forOV(E, ev, wind_source="10m", out_dir=fig_dir)
-            cse.print_site_liquid_hours_per_day(E, E_pl=E_pl, CL=CL, wind_source="10m")
+            if site_in_box:
+                clw.fig_cloudDuration_andWind_forOV(E, ev, wind_source="10m", out_dir=fig_dir)
+                cse.print_site_liquid_hours_per_day(E, E_pl=E_pl, CL=CL, wind_source="10m")
             save("E", E)
             save("ev", ev, drop=())
             if CL is not None:

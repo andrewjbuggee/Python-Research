@@ -39,9 +39,10 @@ built from the netCDF script's SETTINGS (imported, not copied):
 ONE VALUE PER HOUR PER CLASS
 ============================
 UTQ is one grid cell: its value is that cell's, or blank when the cell is not
-in the state. For a surface class the value is the plain (unweighted) MEAN
-over every cell of the class that is in the state in that hour, blank when
-none is. The cell counts are written alongside so a cell-hour-weighted
+in the state. For a surface class the value is the MEAN over every cell of the
+class that is in the state in that hour, blank when none is, weighted by
+cos(latitude) by default or equally with --cell-weighting uniform (area-weighted
+files carry "areaWeighted" in their names). The cell counts are written alongside so a cell-hour-weighted
 statistic can be rebuilt from the hourly means if wanted.
 
 THE QUANTITIES
@@ -76,6 +77,7 @@ Usage
 -----
     python make_era5_hourly_values_csvs.py                    # local data, ~2 min
     python make_era5_hourly_values_csvs.py --storage glade    # all seasons, on Casper
+    python make_era5_hourly_values_csvs.py --box 82 -175 65 -110 --years 2014-2024
 """
 
 from __future__ import annotations
@@ -84,6 +86,10 @@ import argparse
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
+
+# First, before numpy: on Casper it sets thread limits and the cache location,
+# and it puts the analysis modules on sys.path.
+import ov_config as ov
 
 import numpy as np
 import pandas as pd
@@ -99,6 +105,7 @@ from plot_surface_class_timeseries import (  # noqa: E402
     season_layout,
     select_seasons,
     site_cell_mask,
+    site_in_grid,
 )
 from seb_analysis_common import (  # noqa: E402
     available_regions,
@@ -108,6 +115,7 @@ from seb_analysis_common import (  # noqa: E402
 from surface_classification import (  # noqa: E402
     CLASS_CODES,
     align_lsm_to_grid,
+    area_weights_2d,
     classify_cells,
     iter_time_blocks,
     load_land_sea_mask,
@@ -116,7 +124,8 @@ from turbulent_flux_response import CLOUD_T_MIN_LWP_G  # noqa: E402
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-DEFAULT_OUT_DIR = HERE / "era5_hourly_values_csv"
+# Folder name of this product; ov_config decides which directory holds it.
+OUT_PRODUCT = "era5_hourly_values_csv"
 
 # Output slots: UTQ (one cell) and the three classes Genie asked for.
 SLOTS: tuple[str, ...] = ("UTQ", "Land", "OpenOcean", "PackIce")
@@ -218,11 +227,21 @@ def accumulate(args: argparse.Namespace) -> dict:
     n_hour, n_slot = int(use_step.sum()), len(SLOTS)
 
     site_mask, site_lat, site_lon = site_cell_mask(ds)
+    has_site = site_in_grid(ds)
+    if not has_site:
+        print(f"  note: {args.region!r} does not contain the ARM site; no UTQ files will "
+              f"be written", flush=True)
     pds = open_pressure_archive(args, ds)
     t_pl = pds["valid_time"].values if pds is not None else np.array([], "M8[ns]")
 
     # sums[(q, s)] and counts[(q, s)]: (hour, slot). n_state[s]: cells in state.
     sums = {k: np.zeros((n_hour, n_slot)) for k in QUANTS}
+    # wsums[(q, s)]: the denominator of the mean, the summed cell weights (h, slot).
+    wsums = {k: np.zeros((n_hour, n_slot)) for k in QUANTS}
+    if args.cell_weighting == "area":
+        cell_weight = area_weights_2d(ds["latitude"].values, ds.sizes["longitude"])  # (lat, lon)
+    else:
+        cell_weight = None
     counts = {k: np.zeros((n_hour, n_slot), dtype=np.int32) for k in QUANTS}
     n_state = {s: np.zeros((n_hour, n_slot), dtype=np.int32) for s in STATES}
     n_pl_hours = 0
@@ -297,38 +316,54 @@ def accumulate(args: argparse.Namespace) -> dict:
             for q, s in QUANTS:
                 v = (t_ice if s == "ice_only" else t_liq) if q == "tcld" else value[q]
                 sel = state[s] & sm & np.isfinite(v)
-                sums[(q, s)][rows, si] = np.where(sel, v, 0.0).sum(axis=(1, 2))
+                if cell_weight is None:
+                    # Left as is, in the field's own float32, so uniform output is
+                    # byte-identical to the files already delivered.
+                    sums[(q, s)][rows, si] = np.where(sel, v, 0.0).sum(axis=(1, 2))
+                    wsums[(q, s)][rows, si] = sel.sum(axis=(1, 2))
+                else:
+                    sums[(q, s)][rows, si] = np.where(sel, v * cell_weight, 0.0).sum(axis=(1, 2))
+                    wsums[(q, s)][rows, si] = (sel * cell_weight).sum(axis=(1, 2))
                 counts[(q, s)][rows, si] = sel.sum(axis=(1, 2))
 
     print(f"  pressure-level data matched {n_pl_hours:,} of {n_hour:,} hours")
-    return {"sums": sums, "counts": counts, "n_state": n_state,
+    return {"sums": sums, "wsums": wsums, "cell_weighting": args.cell_weighting,
+            "counts": counts, "n_state": n_state,
             "time": times[use_step], "seasons": list(used),
             "season_of_hour": np.asarray(layout["seasons"])[s_idx[use_step]],
-            "n_pl_hours": n_pl_hours, "pl_matched": pl_matched, "site_lat": site_lat, "site_lon": site_lon}
+            "n_pl_hours": n_pl_hours, "pl_matched": pl_matched, "site_lat": site_lat, "site_lon": site_lon,
+            "has_site": has_site}
 
 
 # ----------------------------------------------------------------------------
 # Tables
 # ----------------------------------------------------------------------------
 def hourly_mean(R: dict, q: str, s: str, slot: int) -> np.ndarray:
-    """Mean over the slot's cells in the state; NaN where there are none."""
+    """Weighted mean over the slot's cells in the state; NaN where there are none."""
     n = R["counts"][(q, s)][:, slot]
+    w = R["wsums"][(q, s)][:, slot]
     with np.errstate(invalid="ignore", divide="ignore"):
-        return np.where(n > 0, R["sums"][(q, s)][:, slot] / np.where(n > 0, n, 1), np.nan)
+        return np.where(n > 0, R["sums"][(q, s)][:, slot] / np.where(n > 0, w, 1.0), np.nan)
+
+
+def active_slots(R: dict) -> list[tuple[int, str]]:
+    """(index, name) of the slots this run writes: UTQ only if it is in the domain."""
+    return [(si, name) for si, name in enumerate(SLOTS) if si != 0 or R["has_site"]]
 
 
 def write_all(R: dict, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "cell_counts").mkdir(exist_ok=True)
-    span = f"{R['seasons'][0]}_{R['seasons'][-1] + 1}"
+    span = ov.span_tag(R["seasons"])
     dates = pd.to_datetime(R["time"]).strftime("%Y-%m-%d %H:%M:%S")
     written = []
-    for si, name in enumerate(SLOTS):
+    for si, name in active_slots(R):
         for fname, cols in FILES.items():
             df = pd.DataFrame({"date": dates})
             for q, s, col in cols:
                 df[col] = hourly_mean(R, q, s, si)
-            path = out_dir / f"ERA5_{fname}_perHour_{span}_{name}.csv"
+            path = out_dir / ov.weighted_names(f"ERA5_{fname}_perHour_{span}_{name}.csv",
+                                               R["cell_weighting"])
             df.to_csv(path, index=False, float_format="%.2f")   # template: 2 dp
             written.append(path)
         cnt = pd.DataFrame({"date": dates})
@@ -345,12 +380,17 @@ def write_all(R: dict, out_dir: Path) -> list[Path]:
 # ----------------------------------------------------------------------------
 # Checks
 # ----------------------------------------------------------------------------
-def check_against_earlier_files(R: dict) -> None:
-    """UTQ against the netCDF file, class state counts against the hour CSVs."""
+def check_against_earlier_files(R: dict, run: ov.RunConfig) -> None:
+    """UTQ against the netCDF file, class state counts against the hour CSVs.
+
+    Compares only with files from this same domain, seasons and storage, so a
+    Barrow CSV is never used to judge a run over a different box.
+    """
     import xarray as xr
 
-    nc = HERE / "era5_utqiagvik_OV_figs1-2-4_filtered_2014-2025.nc"
-    if nc.exists():
+    span = ov.span_tag(R["seasons"])
+    nc = HERE / f"era5_utqiagvik_OV_figs1-2-4_filtered_{span.replace('_', '-')}.nc"
+    if run.is_baseline and nc.exists():
         d = xr.open_dataset(nc)
         t_nc = d["valid_time"].values
         row = np.searchsorted(R["time"], t_nc)
@@ -368,11 +408,13 @@ def check_against_earlier_files(R: dict) -> None:
             assert np.allclose(got, ref, rtol=1e-6, atol=1e-6), f"UTQ {q} differs"
         print("  UTQ states and values match the netCDF file exactly")
 
-    hc = HERE / "era5_hour_count_csv"
+    hc = run.out_dir("era5_hour_count_csv")
+    n_compared = 0
     for name in SLOTS[1:]:
-        f = hc / f"ERA5_totalHours_perSeason_2014_2025_{name}.csv"
+        f = hc / f"ERA5_totalHours_perSeason_{span}_{name}.csv"
         if not f.exists():
             continue
+        n_compared += 1
         ref = pd.read_csv(f)
         si = SLOTS.index(name)
         for k, y in enumerate(R["seasons"]):
@@ -380,14 +422,19 @@ def check_against_earlier_files(R: dict) -> None:
             for s in CLOUD_STATES:
                 got = int(R["n_state"][s][sel, si].sum())
                 assert got == int(ref[s].iloc[k]), f"{name} {y} {s}: {got} vs {ref[s].iloc[k]}"
-    print("  class cell-hours match era5_hour_count_csv exactly")
+    if n_compared:
+        print("  class cell-hours match era5_hour_count_csv exactly")
+    else:
+        print("  no era5_hour_count_csv tables for this run to compare against")
 
 
 # ----------------------------------------------------------------------------
 # readME
 # ----------------------------------------------------------------------------
 def write_readme(R: dict, args: argparse.Namespace, out_dir: Path) -> Path:
-    span = f"{R['seasons'][0]}_{R['seasons'][-1] + 1}"
+    span = ov.span_tag(R["seasons"])
+    has_site = R["has_site"]
+    class_names = " | ".join(name for _si, name in active_slots(R))
     # Share of each season's hours with pressure-level data.
     cov = []
     for y in R["seasons"]:
@@ -396,6 +443,12 @@ def write_readme(R: dict, args: argparse.Namespace, out_dir: Path) -> Path:
         if frac > 0:
             cov.append(f"{y}/{(y + 1) % 100:02d} ({100 * frac:.0f}% of its hours)")
     n_clear = R["n_state"]["clear_sky"][:, 0].sum()
+    mean_word = ("cos(latitude)-weighted mean" if R["cell_weighting"] == "area"
+                 else "unweighted mean")
+    clear_text = (f"Clear sky is rare in ERA5 at UTQ: {int(n_clear):,} of {len(R['time']):,} hours."
+                  if has_site else "The ARM site is outside this domain, so there are no UTQ files.")
+    site_text = (f"""UTQ is the single ERA5 grid cell containing the ARM site ({R['site_lat']:.2f} N, {abs(R['site_lon']):.2f} W):
+its value is that cell's. For Land""" if has_site else "For Land")
     text = f"""HOURLY ERA5 LWP, CLOUD TEMPERATURE AND DLR BY SKY STATE AND SURFACE CLASS
 =========================================================================
 
@@ -423,7 +476,7 @@ was in that sky state in that hour.
       clear_sky_calc_liquid_containing, clear_sky_calc_liquid_only,
       clear_sky_calc_ice_only
 
-  <CLASS> = UTQ | Land | OpenOcean | PackIce
+  <CLASS> = {class_names}
 
   cell_counts/ERA5_nCells_perHour_{span}_<CLASS>.csv
       number of grid cells in each sky state in each hour (the cells behind
@@ -440,7 +493,7 @@ was in that sky state in that hour.
                      tp < {args.precip_rate_max:g} mm hr-1
 
 CWP = LWP + IWP after setting each path at or below its floor to zero.
-Clear sky is rare in ERA5 at UTQ: {int(n_clear):,} of {len(R['time']):,} hours.
+{clear_text}
 
 
 3. QUANTITIES
@@ -474,16 +527,15 @@ Clear sky is rare in ERA5 at UTQ: {int(n_clear):,} of {len(R['time']):,} hours.
 
 4. ONE VALUE PER HOUR
 ---------------------
-UTQ is the single ERA5 grid cell containing the ARM site ({R['site_lat']:.2f} N, {abs(R['site_lon']):.2f} W):
-its value is that cell's. For Land, OpenOcean and PackIce the value is the
-unweighted mean over every grid cell of the class in that sky state in that
+{site_text}, OpenOcean and PackIce the value is the
+{mean_word} over every grid cell of the class in that sky state in that
 hour. A box plot of these hourly values gives each HOUR equal weight; to give
 each grid-cell-hour equal weight instead, weight each value by its count in
 cell_counts/. OpenOcean has no cells at all in most mid-winter hours, so its
 Dec-Mar columns are mostly blank.
 """
     path = out_dir / "readME.txt"
-    path.write_text(text)
+    path.write_text(ov.weighted_names(text, R["cell_weighting"]))
     return path
 
 
@@ -492,21 +544,24 @@ Dec-Mar columns are mostly blank.
 # ----------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
-    p.add_argument("--storage", default=SETTINGS["storage"],
-                   help="local (default), or glade / s3 / aws to read NCAR's ERA5 "
-                        "copy (fills CloudTemp for every season)")
+    p.add_argument("--out-dir", type=Path, default=None,
+                   help=f"output directory (default {OUT_PRODUCT}/, placed by ov_config)")
+    ov.add_weighting_arg(p)
+    ov.add_run_args(p)
     opts = p.parse_args(argv)
+    run = ov.run_from_args(opts)
+    out_dir = opts.out_dir or run.out_dir(OUT_PRODUCT + ov.weight_suffix(opts.cell_weighting))
 
-    args = build_args({**SETTINGS, "storage": opts.storage})
+    args = build_args({**SETTINGS, **run.settings(), "cell_weighting": opts.cell_weighting})
     print("=" * 72)
     print("Hourly ERA5 LWP / cloud temperature / DLR by sky state and class")
+    print(run.report())
     print("=" * 72)
     R = accumulate(args)
-    check_against_earlier_files(R)
-    written = write_all(R, opts.out_dir)
-    readme = write_readme(R, args, opts.out_dir)
-    print(f"\n  -> {len(written)} CSV files + {readme.name} in {opts.out_dir}")
+    check_against_earlier_files(R, run)
+    written = write_all(R, out_dir)
+    readme = write_readme(R, args, out_dir)
+    print(f"\n  -> {len(written)} CSV files + {readme.name} in {out_dir}")
 
 
 if __name__ == "__main__":

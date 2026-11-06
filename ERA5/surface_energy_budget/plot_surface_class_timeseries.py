@@ -345,6 +345,26 @@ def site_cell_mask(ds, lat_deg=SITE_LAT, lon_deg=SITE_LON):
     return mask, float(lats[i]), float(lons_signed[j])
 
 
+def site_in_grid(ds, lat_deg=SITE_LAT, lon_deg=SITE_LON) -> bool:
+    """Is the site inside this grid, to within half a grid cell?
+
+    ``site_cell_mask`` always returns a cell, so on a domain that excludes the
+    site it would return the nearest EDGE cell. Callers use this to leave the
+    site's quantities out rather than label that edge cell as the site.
+    """
+    return site_in_lat_lon(ds["latitude"].values, ds["longitude"].values, lat_deg, lon_deg)
+
+
+def site_in_lat_lon(lats, lons, lat_deg=SITE_LAT, lon_deg=SITE_LON) -> bool:
+    """``site_in_grid`` for bare coordinate arrays (degrees)."""
+    lats = np.asarray(lats, dtype=float)
+    lons = np.asarray(lons, dtype=float)
+    half_cell_deg = 0.5 * float(np.median(np.abs(np.diff(lats)))) if lats.size > 1 else 0.125
+    d_lat_deg = np.min(np.abs(lats - lat_deg))
+    d_lon_deg = np.min(np.abs(((lons - lon_deg) + 180.0) % 360.0 - 180.0))
+    return bool(d_lat_deg <= half_cell_deg + 1e-6 and d_lon_deg <= half_cell_deg + 1e-6)
+
+
 def nanmean_quiet(a, axis=None):
     """np.nanmean without the "Mean of empty slice" RuntimeWarning.
 

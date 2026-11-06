@@ -62,6 +62,16 @@ Usage
     python make_era5_hour_count_csvs.py
     python make_era5_hour_count_csvs.py --verify
     python make_era5_hour_count_csvs.py --out-dir /path/to/dir
+    python make_era5_hour_count_csvs.py --box 82 -175 65 -110 --years 2014-2024
+
+DOMAIN, YEARS AND DATA SOURCE
+=============================
+Set by ``ov_config.py``: its settings block, the OV_* environment variables, or
+``--region`` / ``--box N W S E`` / ``--years`` / ``--storage`` here. On Casper
+ERA5 is read in place from GDEX (d633000). Runs other than the local Barrow
+2014-2024 record write to their own folder (see ``ov_config.py``).
+
+A domain that does not contain the ARM site writes no UTQ tables.
 """
 
 from __future__ import annotations
@@ -71,13 +81,17 @@ import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
+# First, before numpy: on Casper it sets thread limits and the cache location,
+# and it puts the analysis modules on sys.path.
+import ov_config as ov
+
 import numpy as np
 import pandas as pd
 from matplotlib.colors import to_hex, to_rgb
 
 # The netCDF script holds the figure settings and puts the analysis modules on
 # sys.path; importing it is what keeps the two products on one definition.
-from make_era5_utqiagvik_filtered_netcdf import HERE, SETTINGS, build_args, git_describe
+from make_era5_utqiagvik_filtered_netcdf import SETTINGS, build_args, git_describe
 
 import plot_lwp_histogram_by_surface_class as lwph  # noqa: E402
 from cloud_classification import fraction_phase_masks  # noqa: E402
@@ -85,6 +99,7 @@ from plot_surface_class_timeseries import (  # noqa: E402
     season_layout,
     select_seasons,
     site_cell_mask,
+    site_in_grid,
 )
 from seb_analysis_common import load_seb_data, resolve_region_dir  # noqa: E402
 from surface_classification import (  # noqa: E402
@@ -92,6 +107,7 @@ from surface_classification import (  # noqa: E402
     CLASS_ORDER,
     UNCLASSIFIED,
     align_lsm_to_grid,
+    area_weights_2d,
     classify_cells,
     iter_time_blocks,
     load_land_sea_mask,
@@ -99,7 +115,8 @@ from surface_classification import (  # noqa: E402
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-DEFAULT_OUT_DIR = HERE / "era5_hour_count_csv"
+# Folder name of this product; ov_config decides which directory holds it.
+OUT_PRODUCT = "era5_hour_count_csv"
 
 # ----------------------------------------------------------------------------
 # Axes of the count array
@@ -128,6 +145,11 @@ PHASE_CATS = CATS[:3]
 # '1 Oct. 2014'. All six season months abbreviate to three letters + '.'.
 MONTH_ABBR = {1: "Jan.", 2: "Feb.", 3: "Mar.", 4: "Apr.", 5: "May", 6: "Jun.",
               7: "Jul.", 8: "Aug.", 9: "Sep.", 10: "Oct.", 11: "Nov.", 12: "Dec."}
+
+
+def active_slots(C: dict) -> list[tuple[int, str]]:
+    """(index, name) of the slots this run writes: UTQ only if it is in the domain."""
+    return [(s, name) for s, name in enumerate(SLOT_NAMES) if s != I_UTQ or C["has_site"]]
 
 
 def season_label(y: int) -> str:
@@ -176,14 +198,26 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
     day_season[day_of_kept] = season_years[s_idx[use_step]]
 
     site_mask, site_lat, site_lon = site_cell_mask(ds)
+    has_site = site_in_grid(ds)
+    if not has_site:
+        print(f"  note: {args.region!r} does not contain the ARM site; no UTQ tables will "
+              f"be written (the nearest edge cell is NOT used in its place)", flush=True)
     n_day, n_slot, n_cat = dates.size, len(SLOT_NAMES), len(CATS)
     counts = np.zeros((n_day, n_slot, n_cat), dtype=np.int64)
     # The same counts PER HOUR, for per-time-step normalisations (the number
     # of cells in an ocean class changes every hour). int32 is ample: one hour
-    # holds at most 41 x 61 = 2,501 cells. ~6 MB for eleven seasons.
+    # holds at most 1440 x 721 cells, the whole globe. ~6 MB for eleven seasons.
     n_kept = int(use_step.sum())
     hourly = np.zeros((n_kept, n_slot, n_cat), dtype=np.int32)
     kept_idx_of_step = np.cumsum(use_step) - 1        # step -> row of `hourly`
+    # The same table with each cell-hour counted as cos(latitude), the area of a
+    # cell on a regular lat/lon grid up to a constant. Only built when asked for.
+    # hourly stays a plain count in both modes, so N(t) > 0 still says whether the
+    # class existed, and the count tables are unchanged.
+    area_weighted = args.cell_weighting == "area"
+    cell_weight = area_weights_2d(ds["latitude"].values, ds.sizes["longitude"])  # (lat, lon)
+    hourly_w = np.zeros(hourly.shape) if area_weighted else None
+    site_weight = float(cell_weight[site_mask][0])
     hour_time = times[use_step]
     n_unclassified = 0
 
@@ -245,14 +279,23 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
             c = np.bincount(flat[m.ravel()], minlength=n_day * (n_slot + 1))
             counts[:, :, ci] += c.reshape(n_day, n_slot + 1)[:, :n_slot]
             # UTQ: the one site cell, added on top of its class slot.
-            counts[:, I_UTQ, ci] += np.bincount(
-                day[m[:, site_mask][:, 0]], minlength=n_day)
+            if has_site:
+                counts[:, I_UTQ, ci] += np.bincount(
+                    day[m[:, site_mask][:, 0]], minlength=n_day)
             # Per hour: the same bincount with the hour, not the day, as the
             # leading index.
             flat_h = (np.arange(n_t)[:, None, None] * (n_slot + 1) + slot).ravel()
             ch = np.bincount(flat_h[m.ravel()], minlength=n_t * (n_slot + 1))
             hourly[rows, :, ci] = ch.reshape(n_t, n_slot + 1)[:, :n_slot]
-            hourly[rows, I_UTQ, ci] = m[:, site_mask][:, 0]
+            if area_weighted:
+                w_flat = np.broadcast_to(cell_weight, m.shape).ravel()   # (t * lat * lon,)
+                chw = np.bincount(flat_h[m.ravel()], weights=w_flat[m.ravel()],
+                                  minlength=n_t * (n_slot + 1))
+                hourly_w[rows, :, ci] = chw.reshape(n_t, n_slot + 1)[:, :n_slot]
+            if has_site:
+                hourly[rows, I_UTQ, ci] = m[:, site_mask][:, 0]
+                if area_weighted:
+                    hourly_w[rows, I_UTQ, ci] = m[:, site_mask][:, 0] * site_weight
 
     if n_unclassified:
         print(f"  !! {n_unclassified:,} unclassified cell-hours (not in any class)")
@@ -263,12 +306,13 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
     np.add.at(daily_from_hourly, hour_day, hourly.astype(np.int64))
     if not np.array_equal(daily_from_hourly, counts):
         raise AssertionError("hourly counts do not sum to the daily counts")
-    return {"counts": counts, "hourly": hourly, "hour_day": hour_day,
+    return {"counts": counts, "hourly": hourly, "hourly_w": hourly_w,
+            "cell_weighting": args.cell_weighting, "hour_day": hour_day,
             "hour_time": hour_time,
             "dates": dates, "day_season": day_season,
             "day_month": months, "seasons": list(used),
             "keep_idx": list(keep_idx), "n_unclassified": n_unclassified,
-            "site_lat": site_lat, "site_lon": site_lon,
+            "site_lat": site_lat, "site_lon": site_lon, "has_site": has_site,
             "grid": (ds.sizes["latitude"], ds.sizes["longitude"])}
 
 
@@ -315,15 +359,14 @@ def write_all(C: dict, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     norm_dir = out_dir / "normalization"
     norm_dir.mkdir(exist_ok=True)
-    y0, y1 = C["seasons"][0], C["seasons"][-1] + 1          # 2014, 2025
-    span = f"{y0}_{y1}"
+    span = ov.span_tag(C["seasons"])                        # 2014_2025
     written = []
 
     def save(df: pd.DataFrame, path: Path) -> None:
         df.to_csv(path, index=False)
         written.append(path)
 
-    for s, name in enumerate(SLOT_NAMES):
+    for s, name in active_slots(C):
         save(per_season(C, s), out_dir / f"ERA5_totalHours_perSeason_{span}_{name}.csv")
         for cat in PHASE_CATS:
             save(per_month(C, s, cat),
@@ -333,15 +376,15 @@ def write_all(C: dict, out_dir: Path) -> list[Path]:
     # Denominators: all valid cell-hours of each slot, one column per slot.
     ai = CATS.index("all_valid")
     season_tbl = pd.DataFrame({"season": [season_label(y) for y in C["seasons"]]})
-    for s, name in enumerate(SLOT_NAMES):
+    for s, name in active_slots(C):
         season_tbl[name] = [int(C["counts"][C["day_season"] == y, s, ai].sum())
                             for y in C["seasons"]]
     save(season_tbl, norm_dir / f"ERA5_allValidCellHours_perSeason_{span}.csv")
-    for s, name in enumerate(SLOT_NAMES):
+    for s, name in active_slots(C):
         save(per_month(C, s, "all_valid"),
              norm_dir / f"ERA5_allValidCellHours_perMonth_{span}_{name}.csv")
     day_tbl = per_day(C, I_UTQ, cats=())
-    for s, name in enumerate(SLOT_NAMES):
+    for s, name in active_slots(C):
         day_tbl[name] = C["counts"][:, s, ai]
     save(day_tbl, norm_dir / f"ERA5_allValidCellHours_perDay_{span}.csv")
     return written
@@ -360,7 +403,9 @@ def self_checks(C: dict) -> None:
     assert (av[:, I_UTQ] <= 24).all(), "more than 24 h in a UTQ day"
     # The five classes cannot hold more cell-hours than the grid has.
     n_lat, n_lon = C["grid"]
-    n_hours = int(av[:, I_UTQ].sum())
+    # Hours from the UTQ cell when there is one, which also excludes any hour
+    # it has missing data; otherwise from the time axis.
+    n_hours = int(av[:, I_UTQ].sum()) if C["has_site"] else C["hour_time"].size
     cap = n_lat * n_lon * n_hours
     assert int(av[:, 1:].sum()) + C["n_unclassified"] <= cap
     print(f"  checks OK: {int(av[:, 1:].sum()):,} valid classified cell-hours of "
@@ -378,7 +423,7 @@ def verify_against_module(C: dict, args: argparse.Namespace) -> None:
     part of ice only here and are not compared.
     """
     print("\n  --verify: lwph.prepare with cell_weighting='uniform' ...")
-    args_u = build_args({**SETTINGS, "cell_weighting": "uniform"})
+    args_u = argparse.Namespace(**{**vars(args), "cell_weighting": "uniform"})
     A = lwph.prepare(args=args_u)
     sec = A.sec
     months_mod = list(sec["months"])                    # calendar months, Oct..Mar
@@ -387,7 +432,7 @@ def verify_against_module(C: dict, args: argparse.Namespace) -> None:
     slot_code.update({n: CLASS_CODES[c] for n, c in SLOT_CLASS.items()})
 
     worst = 0
-    for s, name in enumerate(SLOT_NAMES):
+    for s, name in active_slots(C):
         code = slot_code[name]
         for si_k, (y, si_mod) in enumerate(zip(C["seasons"], C["keep_idx"])):
             for m in SEASON_MONTHS:
@@ -482,9 +527,34 @@ def plot_colors_text() -> str:
 # ----------------------------------------------------------------------------
 # readME
 # ----------------------------------------------------------------------------
-def write_readme(C: dict, args: argparse.Namespace, out_dir: Path) -> Path:
+def write_readme(C: dict, args: argparse.Namespace, out_dir: Path, run: ov.RunConfig) -> Path:
     s0, s1 = C["seasons"][0], C["seasons"][-1]
-    span = f"{s0}_{s1 + 1}"
+    span = ov.span_tag(C["seasons"])
+    has_site = C["has_site"]
+    n_slots = len(active_slots(C))
+    class_names = " | ".join(name for _s, name in active_slots(C))
+    # The words that depend on the domain. Each first branch is the wording of
+    # the original Barrow readME, so that record's file does not change.
+    is_barrow = run.domain.name == "barrow"
+    title_domain = "THE BARROW DOMAIN" if is_barrow else f"THE {run.domain.name} DOMAIN"
+    title = (f"ERA5 CLOUD CELL-HOUR COUNTS, UTQIAGVIK AND {title_domain}" if has_site
+             else f"ERA5 CLOUD CELL-HOUR COUNTS, {title_domain}")
+    site_text = (f"""UTQ is the single ERA5 cell nearest the DOE ARM North Slope of Alaska central
+facility (71.323 N, 156.609 W); its centre is {C['site_lat']:.2f} N,
+{abs(C['site_lon']):.2f} W.""" if has_site else
+                 """This domain does not contain the DOE ARM North Slope of Alaska central
+facility (71.323 N, 156.609 W), so there are no UTQ tables here.""")
+    utq_class_text = ("""The UTQ
+cell is also counted within its own class (Land or Coastal) in the class
+tables; it is not a separate area.""" if has_site else "")
+    utq_units_text = ("For UTQ (one cell) this is simply hours. " if has_site else "")
+    weight_text = ("""notebook's domain figures use cos(latitude)-weighted fractions, which differ
+slightly from these unweighted ones because pack ice lies further north."""
+                   if is_barrow else
+                   """notebook's domain figures use cos(latitude)-weighted fractions. A grid cell
+near the pole covers far less area than one further south, so over a domain
+with a wide latitude range these unweighted values can differ from area-weighted
+ones by more than they do over the 70-80 N Barrow strip.""")
     k = C["counts"]
     utq_tot = {c: int(k[:, I_UTQ, CATS.index(c)].sum()) for c in CATS}
     # The ARM season-months figure 2 drops: Genie's flagged list plus the
@@ -492,7 +562,32 @@ def write_readme(C: dict, args: argparse.Namespace, out_dir: Path) -> Path:
     # i.e. the union used with MONTHLY_OBS_SOURCE = "noprecip".
     dropped = sorted(set(lwph.GENIE_EXCLUDED_MONTHS) | {(2018, 12)})
     dropped_txt = ", ".join(f"{MONTH_ABBR[m]} {y}" for y, m in dropped)
-    text = f"""ERA5 CLOUD CELL-HOUR COUNTS, UTQIAGVIK AND THE BARROW DOMAIN
+    source_wrapped = ("the Copernicus Climate Data\nStore" if run.storage in ("local", "external")
+                      else run.source_text())
+    if has_site:
+        figures_text = f"""UTQ totals over all {len(C['seasons'])} seasons: {utq_tot['liquid_containing']:,} h liquid containing,
+{utq_tot['liquid_only']:,} h liquid only, {utq_tot['ice_only']:,} h ice only.
+
+Figure 1 (hours per season, UTQ): the red bars are the liquid_containing
+column of the UTQ per-season file. The blue ice-only bars additionally
+include the few cloudy, non-precipitating hours with NO cloud water above
+the floors ({utq_tot['overcast_no_condensate']} hours over all seasons), which these tables leave out.
+
+Figure 2 (monthly box plots, UTQ): ERA5 boxes are built from the UTQ
+liquidContaining monthly table (one value per season per month). The figure
+omits the {len(dropped)} season-months for which the ARM record is incomplete
+({dropped_txt}) from both ERA5 and the observations; these tables include
+every month.
+
+Figure 4 (cloud duration / hours per day, UTQ): the daily-mode histogram is
+the distribution of the liquid_containing column of the UTQ per-day file.
+
+The thresholds are the same for the class tables; the class tables are not
+shown in figures 1, 2 or 4."""
+    else:
+        figures_text = """Figures 1, 2 and 4 of the research update use the ARM cell, which is outside
+this domain. The thresholds here are the same as theirs."""
+    text = f"""{title}
 =============================================================
 
 Andrew Buggee, Scripps Institution of Oceanography, UC San Diego
@@ -506,15 +601,12 @@ of the surrounding domain.
 1. DATA
 -------
 ERA5 hourly data on single levels (Hersbach et al. 2020, Q. J. R. Meteorol.
-Soc., doi:10.1002/qj.3803), 0.25 deg grid, from the Copernicus Climate Data
-Store. Domain: {C['grid'][0]} x {C['grid'][1]} cells, 70-80 N, 165-150 W.
+Soc., doi:10.1002/qj.3803), 0.25 deg grid, from {source_wrapped}. Domain: {C['grid'][0]} x {C['grid'][1]} cells, {run.domain.describe()}.
 Fields used: total cloud cover (tcc), total column cloud liquid water (tclw),
 total column cloud ice water (tciw), total precipitation (tp), sea ice area
 fraction (siconc), and the ERA5 land-sea mask (lsm).
 
-UTQ is the single ERA5 cell nearest the DOE ARM North Slope of Alaska central
-facility (71.323 N, 156.609 W); its centre is {C['site_lat']:.2f} N,
-{abs(C['site_lon']):.2f} W.
+{site_text}
 
 Time: hourly, UTC. A "day" is a UTC calendar day.
 
@@ -556,15 +648,13 @@ hour's sea ice concentration:
   PackIce         lsm <= {args.lsm_tol:g} and siconc > {args.sea_ice_min_siconc:g}
 
 So a cell can move between the three ocean classes as the ice edge moves, and
-the number of cells in each ocean class changes from hour to hour. The UTQ
-cell is also counted within its own class (Land or Coastal) in the class
-tables; it is not a separate area.
+the number of cells in each ocean class changes from hour to hour. {utq_class_text}
 
 
 4. UNITS: CELL-HOURS (PLAIN COUNTS)
 -----------------------------------
 Every entry is the number of (grid cell, hour) pairs meeting the criteria.
-For UTQ (one cell) this is simply hours. For a surface class it is summed
+{utq_units_text}For a surface class it is summed
 over every cell that belonged to the class in that hour: no area weighting,
 no averaging over cells, no rescaling for missing data (there are no gaps in
 the archive over these seasons).
@@ -574,27 +664,26 @@ divide by the class's total valid cell-hours in the same period, given in
 normalization/ (same rows and layout; "all valid" = every cell-hour of the
 class with finite tcc, tclw and tciw, before filters b-d). That gives the
 unweighted fraction of the class's area-time in each state. Note that the
-notebook's domain figures use cos(latitude)-weighted fractions, which differ
-slightly from these unweighted ones because pack ice lies further north.
+{weight_text}
 
 
 5. FILES
 --------
-Per season ({len(SLOT_NAMES)} files), rows = seasons, columns = liquid_containing,
+Per season ({n_slots} files), rows = seasons, columns = liquid_containing,
 liquid_only, ice_only:
     ERA5_totalHours_perSeason_{span}_<CLASS>.csv
 
-Per month ({len(SLOT_NAMES) * 3} files), rows = Oct ... Mar, columns = seasons
+Per month ({n_slots * 3} files), rows = Oct ... Mar, columns = seasons
 {season_label(s0)} ... {season_label(s1)}; one file per cloud type:
     ERA5_totalHours_perMonth_{span}_<TYPE>_<CLASS>.csv
     <TYPE> = liquidContaining | liquidOnly | iceOnly
 
-Per day ({len(SLOT_NAMES)} files), one row per day of the record
+Per day ({n_slots} files), one row per day of the record
 ({C['dates'].size} days, days with no cloud included as 0), columns = date
 ('1 Oct. 2014'), liquid_containing, liquid_only, ice_only:
     ERA5_totalHours_perDay_{span}_<CLASS>.csv
 
-<CLASS> = UTQ | Land | Coastal | OpenOcean | MarginalSeaIce | PackIce
+<CLASS> = {class_names}
 
 normalization/ : all valid cell-hours per class, per season (one file,
 one column per class), per month (one file per class, same layout as the
@@ -605,25 +694,7 @@ The monthly and seasonal tables are sums of the daily ones.
 
 6. RELATION TO THE FIGURES
 --------------------------
-UTQ totals over all {len(C['seasons'])} seasons: {utq_tot['liquid_containing']:,} h liquid containing,
-{utq_tot['liquid_only']:,} h liquid only, {utq_tot['ice_only']:,} h ice only.
-
-Figure 1 (hours per season, UTQ): the red bars are the liquid_containing
-column of the UTQ per-season file. The blue ice-only bars additionally
-include the few cloudy, non-precipitating hours with NO cloud water above
-the floors ({utq_tot['overcast_no_condensate']} hours over all seasons), which these tables leave out.
-
-Figure 2 (monthly box plots, UTQ): ERA5 boxes are built from the UTQ
-liquidContaining monthly table (one value per season per month). The figure
-omits the {len(dropped)} season-months for which the ARM record is incomplete
-({dropped_txt}) from both ERA5 and the observations; these tables include
-every month.
-
-Figure 4 (cloud duration / hours per day, UTQ): the daily-mode histogram is
-the distribution of the liquid_containing column of the UTQ per-day file.
-
-The thresholds are the same for the class tables; the class tables are not
-shown in figures 1, 2 or 4.
+{figures_text}
 
 
 7. PLOT COLORS
@@ -644,25 +715,31 @@ and 0-1 scales; "matplotlib" is the colour as written in the plotting code
 # ----------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR,
-                   help=f"output directory (default {DEFAULT_OUT_DIR.name}/ beside this script)")
+    p.add_argument("--out-dir", type=Path, default=None,
+                   help=f"output directory (default {OUT_PRODUCT}/, placed by ov_config)")
     p.add_argument("--verify", action="store_true",
                    help="also require exact agreement with lwph.prepare (~4 min more)")
+    ov.add_run_args(p)
     opts = p.parse_args(argv)
+    run = ov.run_from_args(opts)
+    out_dir = opts.out_dir or run.out_dir(OUT_PRODUCT)
 
-    args = build_args(SETTINGS)
+    # These tables are plain counts, so the weighted accumulation is not needed.
+    args = build_args({**SETTINGS, **run.settings(), "cell_weighting": "uniform"})
     print("=" * 72)
     print("ERA5 cloud cell-hour counts: UTQ + five surface classes")
+    print(run.report())
     print("=" * 72)
     C = count_cell_hours(args)
     self_checks(C)
     if opts.verify:
         verify_against_module(C, args)
 
-    written = write_all(C, opts.out_dir)
-    readme = write_readme(C, args, opts.out_dir)
-    print(f"\n  -> {len(written)} CSV files + {readme.name} in {opts.out_dir}")
-    print(per_season(C, I_UTQ).to_string(index=False))
+    written = write_all(C, out_dir)
+    readme = write_readme(C, args, out_dir, run)
+    print(f"\n  -> {len(written)} CSV files + {readme.name} in {out_dir}")
+    if C["has_site"]:
+        print(per_season(C, I_UTQ).to_string(index=False))
 
 
 if __name__ == "__main__":

@@ -25,9 +25,18 @@ python preflight.py
 ./submit.sh --project <PROJECT_CODE> --region barrow --years 2023 --stages lwph
 ./submit.sh --project <PROJECT_CODE> --region arctic_circle --years 2014-2024 --all
 
+# Casper — the CSV/netCDF products, over any box (W > E crosses the dateline)
+./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --years 2014-2024 --csvs all
+
 # laptop — bring the figures home
 ERA5/surface_energy_budget/aws_pipeline/casper/fetch_from_casper.sh <user>@casper.hpc.ucar.edu
 ```
+
+`Presentations_and_papers/Ocean_Visions/ov_config.py` holds the domain, years and
+storage for the notebook and the `make_era5_*.py` scripts; the day-to-day steps are in
+`Ocean_Visions/casper_quick_start_guide.txt`. Do not run the analysis on a login node:
+NCAR terminates processes there that use excessive CPU, excessive I/O or more than a few GB
+of memory ([policy](https://ncar-hpc-docs.readthedocs.io/en/latest/compute-systems/casper/casper-use-policies/)).
 
 ## Files
 
@@ -37,6 +46,7 @@ ERA5/surface_energy_budget/aws_pipeline/casper/fetch_from_casper.sh <user>@caspe
 | `setup_casper.sh` | One-time: locates ERA5 on GLADE, picks the python environment, makes the cache/results/cartopy directories, writes `~/.era5_casper_env`, runs preflight. |
 | `submit.sh` | Submits the work, right-sized per stage. `--dry-run` prints the `qsub` lines without submitting. |
 | `run_stage.pbs` | PBS job for one or more `run_analysis.py` stages. |
+| `run_csvs.pbs` | PBS job for one `Ocean_Visions/make_era5_*.py` product (`submit.sh --csvs`). |
 | `run_notebook.pbs` | PBS job that executes `ocean_visions_figures.ipynb` end to end via papermill (or nbconvert). |
 | `sync_to_casper.sh` / `fetch_from_casper.sh` | Laptop-side rsync both ways. |
 | `prefetch_cartopy.py` | Stages Natural Earth shapefiles on a login node, because compute nodes may have no internet. |
@@ -138,18 +148,18 @@ unchanged — verified value by value.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `OV_REGION` | `barrow` | any name in `era5_seb_variables.REGIONS`, or `box:N,W,S,E` |
-| `OV_YEARS` | `2014-2024` | season START years |
+| `OV_REGION` | `DOMAIN` in `ov_config.py` | any name in `era5_seb_variables.REGIONS`, or `box:N,W,S,E` |
+| `OV_YEARS` | `YEARS` in `ov_config.py` | season START years |
 | `OV_SEASON_START` / `OV_SEASON_END` | `10-01` / `03-31` | |
-| `OV_STORAGE` | `local` | `aws` = the remote archive (GLADE here) |
-| `OV_PL_REGION` | same as `OV_REGION` | **set to `barrow` on a big run** — see below |
-| `OV_PL_YEARS` | `2024,2025` | the cloud-level wind seasons |
-| `OV_FLUX_YEARS` | `2014-2025` | figure 8 runs one season longer |
+| `OV_STORAGE` | `glade` on Casper, `local` on the laptop | set in `ov_config.py` |
+| `OV_PL_REGION` | `barrow` | see below |
+| `OV_PL_YEARS` | `2024,2025`; with other `OV_YEARS`, the last season | the cloud-level wind seasons |
+| `OV_FLUX_YEARS` | `2014-2025`; with other `OV_YEARS`, the same years | figure 8 runs one season longer on the talk's record |
 | `OV_FLUX_MIN_LWP` | `2.0` | g m⁻² |
-| `OV_MAP_SEASON` | `2024` | which season figure 6 draws month by month |
-| `OV_SAVE_DIR`, `OV_DPI`, `OV_REPO_ROOT` | beside the notebook, 350, walk up to `.git` | `OV_REPO_ROOT` matters after an rsync, which carries no `.git` |
+| `OV_MAP_SEASON` | `2024`; with other `OV_YEARS`, the last season | which season figure 6 draws month by month |
+| `OV_SAVE_DIR`, `OV_DPI`, `OV_REPO_ROOT` | set by `ov_config.py`, 350, walk up to `.git` | `OV_REPO_ROOT` matters after an rsync, which carries no `.git` |
 
-**Keep `OV_PL_REGION=barrow` on a pan-Arctic run.** Figure 4's cloud-level wind
+**`OV_PL_REGION` stays `barrow` on a pan-Arctic run.** Figure 4's cloud-level wind
 is a single-grid-cell diagnostic at the ARM site, but `cloud_level_wind`
 allocates six full-domain float32 arrays and reads 23-level `clwc`, `u`, `v`.
 Pan-Arctic that is ~30 GB of arrays and a terabyte of pressure-level decode to
@@ -173,14 +183,13 @@ run with `OV_ICE_FRACTION_MIN_COMPARISON` / `OV_ICE_FRACTION_MIN_DOMAIN`.
 
 ## Known gaps
 
-- **The ARM-site figures only mean something where the ARM site is.**
-  `site_cell_mask` picks the *nearest* cell with no containment check. On a
-  pan-Arctic box that is still Utqiaġvik, so figures 1–3 and 7a stay valid —
-  but on a box that excludes it they would silently describe an edge cell. The
-  adapter prints a warning.
-- **Map gridline labels are hardcoded to the Barrow strip** in
-  `map_liquid_hours._draw_one` (170–145 W, 70–80 N). Figures 5, 6 and the
-  thumbnail will draw pan-Arctic but without a labelled graticule.
+- **ARM-site output exists only where the ARM site is.** `site_cell_mask` always
+  returns a cell, so the notebook, `run_analysis.py` and the `make_era5_*.py` scripts
+  now check `site_in_grid` and skip ARM-cell figures and UTQ tables on a box that
+  excludes Utqiaġvik. Other direct callers of `site_cell_mask` are not guarded.
+- **Map figures use a polar stereographic projection**, north or south by the
+  domain's mean latitude. That suits high-latitude boxes and will look distorted at
+  low latitudes.
 - **NPL ships numpy 1.26, the laptop runs 2.x.** No numpy-2-only call is used by
   these modules, but the smoke test above is what settles it — run it before a
   long job.

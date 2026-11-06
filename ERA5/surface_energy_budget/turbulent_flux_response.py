@@ -3878,7 +3878,10 @@ def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
             _l, col, mk = style[k]
             if not np.isfinite(y).any():
                 continue
-            if ax is axes[0]:
+            # A term enters the legend the first time any panel draws it. The
+            # first panel can be empty: an all-ocean domain has no land cells.
+            first_use = k not in legend_keys
+            if first_use:
                 legend_keys.append(k)
             ax.plot(x, y, color=col, lw=2.2, zorder=3)
             # With r2_marker, the marker AREA carries the r^2 of the
@@ -3890,7 +3893,7 @@ def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
                   if r2_marker else 72)
             ax.scatter(x, y, s=sz, color=col, marker=mk, edgecolor="#222222",
                        linewidth=0.6, zorder=4,
-                       label=lab if (ax is axes[0] and not r2_marker) else None)
+                       label=lab if (first_use and not r2_marker) else None)
             lo, hi = min(lo, np.nanmin(y)), max(hi, np.nanmax(y))
         ax.axhline(0.0, color="#333333", lw=0.9)
         # Reference lines where a single term would carry the whole forcing
@@ -3978,12 +3981,16 @@ def _monthly_simple_core(A: "Analysis", forcer: str, out_dir, dpi,
                     for v in r2_legend_values]
         labels = [h.get_label() for h in handles]
     else:
-        handles, labels = axes[0].get_legend_handles_labels()
+        handles, labels = [], []
+        for ax in axes:
+            ax_handles, ax_labels = ax.get_legend_handles_labels()
+            handles += ax_handles
+            labels += ax_labels
     if row:
         # Side by side, the shared y-label has a short figure to sit against,
         # so it takes two lines; the legend has the whole width, so one row.
         fig.supylabel(f"{y_head}\n{y_tail}", fontsize=label_fs, x=0.012)
-        fig.legend(handles, labels, loc="lower center", ncol=len(labels),
+        fig.legend(handles, labels, loc="lower center", ncol=max(len(labels), 1),
                    frameon=False, fontsize=label_fs - 0.5,
                    bbox_to_anchor=(0.53, 0.0), handletextpad=0.3,
                    columnspacing=1.8)

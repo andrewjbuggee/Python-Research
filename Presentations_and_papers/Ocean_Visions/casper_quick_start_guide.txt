@@ -1,0 +1,109 @@
+CASPER QUICK START -- Ocean Visions analysis over any domain and any years
+User: abuggee | Project code: UCSD0090
+Repo on Casper: ~/Python-Research
+
+WHERE THE ERA5 DATA COMES FROM
+   On Casper, ERA5 is read in place from GDEX: /gdex/data/d633000 (formerly RDA ds633.0).
+   Nothing is downloaded, to Casper or to the laptop. Decoded chunks are cached in
+   /glade/derecho/scratch/abuggee/era5_cache, so repeat passes are cheap. That cache is
+   disposable and scratch is purged after 180 days of no access.
+
+LOGIN NODES
+   You can look at GDEX files from a login node, but do NOT run these scripts there. NCAR
+   automatically terminates login-node processes using excessive CPU, excessive I/O or more
+   than a few GB of memory:
+   https://ncar-hpc-docs.readthedocs.io/en/latest/compute-systems/casper/casper-use-policies/
+   Use a PBS job (step 3) or an OnDemand Jupyter session (step 4). The scripts print a warning
+   if they find no PBS job.
+
+1. SEND CODE CHANGES (laptop)
+   Commit and push your edits. Data is NOT in git.
+
+2. GET THE CODE AND SET UP (Casper login node)
+       cd ~/Python-Research && git pull
+       cd ERA5/surface_energy_budget/aws_pipeline/casper
+       ./setup_casper.sh          # first time only; writes ~/.era5_casper_env
+       python preflight.py        # checks GDEX access, packages and write space
+   Put this in ~/.bashrc so submit.sh knows the project:
+       export PBS_ACCOUNT=UCSD0090
+
+3. SUBMIT JOBS (recommended for anything bigger than a small box)
+   From ~/Python-Research/ERA5/surface_energy_budget/aws_pipeline/casper
+
+   Preview, submits nothing:
+       ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --csvs all --dry-run
+
+   CSV and netCDF products:
+       ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --years 2014-2024 --csvs all
+       ./submit.sh --region arctic_circle --csvs hour_count,per_cell
+       Products: hour_count  per_cell  precip  cumulative  hourly  netcdf
+
+   Figures:
+       ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --years 2014-2024 --all
+
+   Start small. A one-season run is a cheap test of a new domain:
+       ./submit.sh --box 82 -175 65 -110 --years 2023 --csvs hour_count
+
+   Watch:   qstat -u $USER
+   Cost:    qhist -u $USER -d 1
+
+4. OR RUN IN AN ONDEMAND JUPYTER SESSION
+   Start a Casper session with project UCSD0090, using few cores (charged as cores x time used).
+   Terminal:
+       module load conda
+       conda activate npl-2025b
+       cd ~/Python-Research/Presentations_and_papers/Ocean_Visions
+       python ov_config.py --box 82 -175 65 -110       # prints what would run; reads no data
+       python make_era5_hour_count_csvs.py --box 82 -175 65 -110 --years 2014-2024
+   Notebook: set the domain in ov_config.py (DOMAIN, YEARS), or in a cell before the setup cell:
+       import os; os.environ.update(OV_REGION="box:82,-175,65,-110", OV_YEARS="2014-2024")
+   Delete the session from "My Interactive Sessions" when done. Closing the tab does NOT stop it.
+
+WAYS TO NAME A DOMAIN
+   --box N W S E                   any box, degrees, longitudes -180..180
+   --box 75 170 65 -170            W > E crosses the dateline (170 E to 170 W)
+   --region arctic_circle          a name in ERA5/surface_energy_budget/era5_seb_variables.py
+   OV_REGION=box:82,-175,65,-110   same thing from the environment or in the notebook
+   To keep a domain under a name, add one line to REGIONS in era5_seb_variables.py.
+
+   Priority: command line, then OV_* environment variables, then the settings at the top of
+   ov_config.py.
+
+YEARS
+   Season START years: 2014 means 1 Oct 2014 - 31 Mar 2015.
+   --years 2023    --years 2014-2024    --years 2014,2016-2018
+   Each season stays 1 Oct - 31 Mar in these scripts.
+
+CELL WEIGHTING
+   Averages over a surface class (per_cell, precip, hourly) are area-weighted by cos(latitude)
+   by default. --cell-weighting uniform gives per-grid-cell averages instead, and works on the
+   scripts and on submit.sh. Area-weighted folders and files have "areaWeighted" in their names,
+   so they never replace uniform ones. hour_count tables are plain counts either way.
+
+WHERE THE RESULTS GO
+   Jobs from submit.sh    /glade/work/abuggee/era5_results/<domain>_<years>_<timestamp>/
+   Direct on Casper       /glade/work/abuggee/era5_results/<domain>_<span>/<product>/
+   Laptop, custom domain  Ocean_Visions/domain_runs/<domain>_<span>/<product>/ (not in git)
+   Laptop, Barrow 2014-2024 from local files: beside the scripts, as before
+
+   Bring results home (laptop):
+       ERA5/surface_energy_budget/aws_pipeline/casper/fetch_from_casper.sh abuggee@casper.hpc.ucar.edu
+
+DOMAINS WITHOUT UTQIAGVIK (71.323 N, 156.609 W)
+   UTQ tables and ARM-cell figures (1, 2, 3, 4, 7a, 7c) are skipped, because the code would
+   otherwise label the nearest edge cell as the ARM cell. Domain-wide output is still written.
+   make_era5_utqiagvik_filtered_netcdf.py stops with a message, as it is only that cell.
+
+ON THE LAPTOP
+   Barrow still runs from the local files. Any other domain stops with an error rather than
+   downloading anything. --storage s3 streams the AWS mirror of the same archive, but its chunk
+   cache grows on the laptop's disk (ERA5_CACHE moves it).
+
+IF SOMETHING GOES WRONG
+   "Domain ... is not on this disk"   You are on the laptop with a new domain. Use Casper.
+   "no project code"                  export PBS_ACCOUNT=UCSD0090, or pass --project UCSD0090.
+   "no ~/.era5_casper_env"            Run ./setup_casper.sh (step 2).
+   Session emailed as terminated      It ran on a login node. Use step 3 or 4.
+   Job killed at walltime             The walltimes in submit.sh are estimates. Raise them
+                                      (24 h maximum) or run fewer seasons per job. The chunk
+                                      cache makes a rerun faster.

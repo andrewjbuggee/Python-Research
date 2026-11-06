@@ -1,0 +1,59 @@
+#!/bin/bash -l
+#PBS -N ov_csvs
+#PBS -q casper
+#PBS -j oe
+#
+# One Ocean Visions CSV/netCDF product, over any domain and years, reading ERA5
+# in place from GDEX d633000. Not submitted by hand: submit.sh fills in -A,
+# select, walltime and the -v variables below.
+#
+# Variables passed with qsub -v:
+#   PRODUCT      hour_count | per_cell | precip | cumulative | hourly | netcdf
+#   REGION       a name in era5_seb_variables.REGIONS, or box:N,W,S,E
+#   REGION_NAME  optional name for a box, used in the output folder
+#   YEARS        season START years, e.g. 2014-2024
+#   CELL_WEIGHTING  area | uniform; empty = the default in ov_config.py
+#   OUTDIR       run folder; each script writes below it, via OV_RESULTS_ROOT
+set -euo pipefail
+
+source "$HOME/.era5_casper_env"
+module load conda
+conda activate "${ERA5_CONDA_ENV}"
+
+# ov_config.py caps the reader and BLAS threads at NCPUS and sets the chunk
+# cache location, for jobs and OnDemand sessions alike.
+mkdir -p "$TMPDIR" "$MPLCONFIGDIR" "$OUTDIR"
+YEARS="${YEARS//+/,}"          # submit.sh escapes commas: PBS -v is comma separated
+REGION="${REGION//+/,}"        # e.g. box:82,-175,65,-110
+
+case "$PRODUCT" in
+  hour_count) SCRIPT=make_era5_hour_count_csvs.py ;;
+  per_cell)   SCRIPT=make_era5_class_per_cell_csvs.py ;;
+  precip)     SCRIPT=make_era5_precip_filter_sensitivity.py ;;
+  cumulative) SCRIPT=make_era5_cumulative_hours_by_class.py ;;
+  hourly)     SCRIPT=make_era5_hourly_values_csvs.py ;;
+  netcdf)     SCRIPT=make_era5_utqiagvik_filtered_netcdf.py ;;
+  *) echo "unknown PRODUCT=$PRODUCT"; exit 1 ;;
+esac
+
+# OV_REPO_ROOT: the tree has no .git after an rsync.
+export OV_REPO_ROOT="$REPO_ROOT"
+export OV_RESULTS_ROOT="$OUTDIR"
+[ -n "${CELL_WEIGHTING:-}" ] && export OV_CELL_WEIGHTING="$CELL_WEIGHTING"
+
+echo "==== $(date -u +%Y-%m-%dT%H:%M:%SZ)  job ${PBS_JOBID:-interactive} ===="
+echo "host      : $(hostname)"
+echo "product   : ${PRODUCT} (${SCRIPT})"
+echo "cores     : ${NCPUS:-?}"
+echo "archive   : ${ERA5_GLADE_ROOT:-<auto>}  (ERA5_SOURCE=${ERA5_SOURCE})"
+echo "cache     : ${ERA5_CACHE}"
+echo "results   : ${OUTDIR}"
+
+cd "$REPO_ROOT/Presentations_and_papers/Ocean_Visions"
+time python "$SCRIPT" \
+    --storage glade \
+    --region "${REGION}" \
+    ${REGION_NAME:+--region-name "${REGION_NAME}"} \
+    --years "${YEARS}"
+
+echo "==== done $(date -u +%Y-%m-%dT%H:%M:%SZ) ===="

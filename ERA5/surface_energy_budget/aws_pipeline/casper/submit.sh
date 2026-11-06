@@ -6,6 +6,15 @@
 #   ./submit.sh --project UCSD0001 --region barrow --years 2014-2024 --notebook
 #   ./submit.sh ... --dry-run                 # print the qsub commands, submit nothing
 #
+# Any domain (W > E crosses the dateline), and the CSV/netCDF products:
+#   ./submit.sh --box 82 -175 65 -110 --years 2014-2024 --all
+#   ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --csvs all
+#   ./submit.sh --region arctic_circle --csvs hour_count,per_cell
+#   ./submit.sh --region arctic_circle --csvs per_cell --cell-weighting uniform
+#
+# --project defaults to $PBS_ACCOUNT_CASPER, then $PBS_ACCOUNT, as in PRISM.
+# ERA5 is read in place from GDEX (d633000); nothing is downloaded.
+#
 # Why staged jobs rather than one: Casper's wall-clock ceiling is 24 h, and a
 # pan-Arctic 11-season pass of everything is ~34 CPU-hours. Split by stage, each
 # piece fits comfortably and the expensive one (figure 8) gets its own cores.
@@ -18,12 +27,18 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-PROJECT=""; REGION="barrow"; YEARS="2014-2024"; SEASON="10-01:03-31"
-STAGES=""; ALL=0; NOTEBOOK=0; DRY=0; OUTDIR=""; EXTRA=""; CHAIN=1
+# qsub itself is not documented to read PBS_ACCOUNT, so the code is passed with -A.
+PROJECT="${PBS_ACCOUNT_CASPER:-${PBS_ACCOUNT:-}}"; REGION="barrow"; YEARS="2014-2024"; SEASON="10-01:03-31"
+STAGES=""; ALL=0; NOTEBOOK=0; DRY=0; OUTDIR=""; EXTRA=""; CHAIN=1; CSVS=""; REGION_NAME=""
+CELL_WEIGHTING=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --project|-A) PROJECT="$2"; shift 2 ;;
     --region)     REGION="$2"; shift 2 ;;
+    --box)        REGION="box:$2,$3,$4,$5"; shift 5 ;;   # N W S E
+    --region-name) REGION_NAME="$2"; shift 2 ;;
+    --csvs)       CSVS="$2"; shift 2 ;;
+    --cell-weighting) CELL_WEIGHTING="$2"; shift 2 ;;     # area (default) | uniform
     --years)      YEARS="$2"; shift 2 ;;
     --season)     SEASON="$2"; shift 2 ;;
     --stages)     shift; while [ $# -gt 0 ] && [[ "$1" != --* ]]; do STAGES="$STAGES $1"; shift; done ;;
@@ -33,11 +48,11 @@ while [ $# -gt 0 ]; do
     --extra)      EXTRA="$2"; shift 2 ;;
     --no-chain)   CHAIN=0; shift ;;
     --dry-run)    DRY=1; shift ;;
-    -h|--help)    sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "unknown option $1"; exit 1 ;;
   esac
 done
-[ -n "$PROJECT" ] || { echo "--project <CODE> is required (your allocation's project code)"; exit 1; }
+[ -n "$PROJECT" ] || { echo "no project code: pass --project <CODE> or export PBS_ACCOUNT=<code>"; exit 1; }
 
 if [ -f "$HOME/.era5_casper_env" ]; then
   set +u; source "$HOME/.era5_casper_env"; set -u
@@ -49,7 +64,7 @@ fi
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 # No commas in the directory name either: it is passed through PBS -v.
 YEARS_TAG="${YEARS//,/+}"
-REGION_TAG="$(echo "$REGION" | tr ',:' '__')"
+REGION_TAG="${REGION_NAME:-$(echo "$REGION" | tr ',:' '__')}"
 OUTDIR="${OUTDIR:-$RESULTS_ROOT/${REGION_TAG}_${YEARS_TAG}_${STAMP}}"
 # The job scripts create this too; doing it here means qsub's -o log path
 # exists before the job starts. Skipped on a dry run so the command can be
@@ -149,8 +164,41 @@ if [ "$NOTEBOOK" = 1 ]; then
   exit 0
 fi
 
+# stage -> ncpus, mem, walltime for the CSV/netCDF products. Sized like the
+# figure stages above, from one lwph.prepare pass at 0.68 us per cell-hour:
+# pan-Arctic x 11 seasons (6.6e9 cell-hours) is about 1.2 CPU-hours per counting
+# pass, plus chunk decode. precip makes two passes. hourly also reads 23-level
+# pressure data for CloudTemp, so it gets more cores. These are ESTIMATES, not
+# measurements on Casper; lower them after a real run.
+csv_size_for() {
+  case "$1" in
+    hour_count|per_cell|cumulative) echo "4 120GB 12:00:00" ;;
+    precip)              echo "4 120GB 23:00:00" ;;
+    hourly)              echo "8 200GB 23:00:00" ;;
+    netcdf)              echo "4 60GB 12:00:00" ;;
+    *) echo "unknown product $1 (hour_count per_cell precip cumulative hourly netcdf)" >&2; exit 1 ;;
+  esac
+}
+
+if [ -n "$CSVS" ]; then
+  [ "$CSVS" = all ] && CSVS="hour_count,per_cell,precip,cumulative,hourly,netcdf"
+  # A domain without the ARM site has no UTQ netCDF to write; the script stops
+  # with that message, and afterany lets the rest of the chain continue.
+  FIRST_ID=""
+  for product in ${CSVS//,/ }; do
+    read -r ncpus mem wall <<< "$(csv_size_for "$product")"
+    dep=""
+    [ "$CHAIN" = 1 ] && dep="$FIRST_ID"
+    out="$(submit "ov_${product}" "$HERE/run_csvs.pbs" "$ncpus" "$mem" "$wall" \
+      "PRODUCT=$product,REGION=$(pbs_safe "$REGION"),REGION_NAME=$REGION_NAME,YEARS=$(pbs_safe "$YEARS"),CELL_WEIGHTING=$CELL_WEIGHTING,OUTDIR=$OUTDIR" "$dep")"
+    echo "$out"
+    if [ "$DRY" != 1 ]; then FIRST_ID="$(echo "$out" | tail -1 | tr -d '[:space:]')"; fi
+  done
+  exit 0
+fi
+
 [ "$ALL" = 1 ] && STAGES="lwph maps extent flux"
-[ -n "${STAGES// /}" ] || { echo "nothing to do: pass --stages ... , --all or --notebook"; exit 1; }
+[ -n "${STAGES// /}" ] || { echo "nothing to do: pass --stages ... , --all, --csvs or --notebook"; exit 1; }
 
 # The stages read heavily overlapping variables, and the decoded-chunk cache is
 # what stops each one re-inflating them (~15 CPU-hours per run). Four jobs

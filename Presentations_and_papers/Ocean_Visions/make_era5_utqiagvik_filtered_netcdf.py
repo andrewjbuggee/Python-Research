@@ -55,40 +55,38 @@ Usage
     python make_era5_utqiagvik_filtered_netcdf.py
     python make_era5_utqiagvik_filtered_netcdf.py --verify      # + exact check, ~10 min
     python make_era5_utqiagvik_filtered_netcdf.py --out /path/to/file.nc
+    python make_era5_utqiagvik_filtered_netcdf.py --years 2020-2024
+
+DOMAIN, YEARS AND DATA SOURCE
+=============================
+Set by ``ov_config.py``: its settings block, the OV_* environment variables, or
+``--region`` / ``--box N W S E`` / ``--years`` / ``--storage`` here. On Casper
+ERA5 is read in place from GDEX (d633000). Runs other than the local Barrow
+2014-2024 record write to their own folder (see ``ov_config.py``).
+
+This file is one grid cell, so the domain only has to contain it; the script
+stops if it does not.
 """
 
 from __future__ import annotations
 
 import argparse
 import subprocess
-import sys
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
+
+# First, before numpy: on Casper it sets the thread limits and the cache
+# location, and it puts the analysis modules on sys.path.
+import ov_config as ov
 
 import numpy as np
 import xarray as xr
 
 
-# ----------------------------------------------------------------------------
-# Make the analysis modules importable
-# ----------------------------------------------------------------------------
-# Same anchoring as the notebook's setup cell: walk up to the repository root
-# (the directory holding .git) rather than trusting the working directory, so
-# the script runs from anywhere.
-def repo_root(start: Path) -> Path:
-    """Walk up from ``start`` to the directory holding ``.git``."""
-    for p in (start, *start.parents):
-        if (p / ".git").exists():
-            return p
-    raise FileNotFoundError(f"no .git directory above {start}")
-
-
-HERE = Path(__file__).resolve().parent
-REPO_ROOT = repo_root(HERE)
-SEB_DIR = REPO_ROOT / "ERA5" / "surface_energy_budget"
-if str(SEB_DIR) not in sys.path:
-    sys.path.insert(0, str(SEB_DIR))
+# Paths come from ov_config, which also works on a tree copied without .git.
+HERE = ov.HERE
+REPO_ROOT = ov.REPO_ROOT
 
 import plot_lwp_histogram_by_surface_class as lwph  # noqa: E402  args, loader
 from cloud_classification import fraction_phase_masks  # noqa: E402  phase rule
@@ -98,6 +96,7 @@ from plot_surface_class_timeseries import (  # noqa: E402
     season_layout,     # time step -> (season, day-of-season slot)
     select_seasons,    # which seasons the run keeps
     site_cell_mask,    # nearest ERA5 cell to the facility
+    site_in_grid,      # is the facility inside this domain at all?
 )
 from seb_analysis_common import load_seb_data, resolve_region_dir  # noqa: E402
 
@@ -114,9 +113,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # extent run E uses exactly these too (cse.prepare_extent(**COMMON, **PRECIP,
 # ice_fraction_min=ICE_FRACTION_MIN_COMPARISON)). If the notebook changes,
 # change these to match -- --verify will fail loudly if they drift apart.
+# The domain, years and storage are not here: they come from ov_config.
 SETTINGS = dict(
-    region="barrow",
-    years=tuple(range(2014, 2025)),   # season START years: 2014/15 .. 2024/25
     season_start=(10, 1),             # (month, day), inclusive
     season_end=(3, 31),               # (month, day), inclusive; wraps the year
     phase_mode="fraction",
@@ -126,13 +124,19 @@ SETTINGS = dict(
     min_iwp=0.01,                     # g m-2; ice at or below counts as absent
     min_cloud_fraction=0.95,          # overcast gate: tcc >= this
     lsm_tol=0.01,                     # unused at one cell; kept for --verify parity
-    storage="local",                  # data/ beside the modules
     no_precip=True,                   # precipitation filter on
     precip_var="rate",                # filter on tp (hourly accumulation)
     precip_rate_max=0.05,             # mm hr-1; an hour AT or above is dropped
 )
 
-DEFAULT_OUT = HERE / "era5_utqiagvik_OV_figs1-2-4_filtered_2014-2025.nc"
+
+
+def default_out(run: ov.RunConfig) -> Path:
+    """Beside this script for the baseline record, else in the run's folder."""
+    span = ov.span_tag(run.years).replace("_", "-")
+    name = f"era5_utqiagvik_OV_figs1-2-4_filtered_{span}.nc"
+    return HERE / name if run.is_baseline else run.out_dir("era5_utqiagvik_netcdf") / name
+
 
 # Integer phase label written per hour. Values are CF flag_values; the
 # meanings string below is the matching flag_meanings attribute.
@@ -169,6 +173,9 @@ def read_site_cell(args: argparse.Namespace) -> tuple[xr.Dataset, dict]:
     region_dir = resolve_region_dir(args)
     # Opens lazily; nothing is read until .load() below.
     ds = load_seb_data(args.region, None, None, region_dir.parent)
+    if not site_in_grid(ds):
+        raise SystemExit(f"Domain {args.region!r} does not contain the ARM site at "
+                         f"{SITE_LAT:.3f} N, {SITE_LON:.3f} E, so there is no UTQ cell to write.")
 
     # Season bookkeeping from the time axis alone -- the same objects the
     # figures used, so this file and the figures agree on which hours exist.
@@ -392,7 +399,7 @@ def build_output(cell: xr.Dataset, book: dict, m: dict,
                  "Utqiagvik, Alaska (DOE ARM NSA), filtered for overcast, "
                  "non-precipitating, cloud-water-bearing cold-season hours",
         "source": "ERA5 hourly data on single levels (Hersbach et al. 2020, "
-                  "doi:10.1002/qj.3803), via the Copernicus Climate Data Store",
+                  f"doi:10.1002/qj.3803), via {book['source_text']}",
         "site": (f"ARM NSA central facility {SITE_LAT:.3f} N, {SITE_LON:.3f} E; "
                  f"nearest ERA5 0.25-deg cell centre {book['cell_lat_deg']:.2f} N, "
                  f"{book['cell_lon_deg']:.2f} E"),
@@ -493,18 +500,23 @@ def verify_against_figures(out: xr.Dataset, args: argparse.Namespace) -> None:
 # ----------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--out", type=Path, default=DEFAULT_OUT,
-                   help=f"output netCDF path (default {DEFAULT_OUT.name} beside this script)")
+    p.add_argument("--out", type=Path, default=None,
+                   help="output netCDF path (default set by ov_config.RunConfig)")
     p.add_argument("--verify", action="store_true",
                    help="also run the figures' pipeline and require identical hours (~10 min)")
+    ov.add_run_args(p)
     opts = p.parse_args(argv)
+    run = ov.run_from_args(opts)
+    out_path = opts.out or default_out(run)
 
-    args = build_args(SETTINGS)
+    args = build_args({**SETTINGS, **run.settings()})
     print("=" * 72)
     print("ERA5 at the Utqiagvik cell, filtered as Ocean Visions figures 1, 2, 4")
+    print(run.report())
     print("=" * 72)
 
     cell, book = read_site_cell(args)
+    book["source_text"] = run.source_text()
     m = classify(cell, args)
     out = build_output(cell, book, m, args)
     print_summary(out, m)
@@ -517,10 +529,10 @@ def main(argv: list[str] | None = None) -> None:
     enc = {v: {"zlib": True, "complevel": 4} for v in out.data_vars}
     enc["valid_time"] = {"units": "hours since 1970-01-01 00:00:00",
                          "calendar": "proleptic_gregorian", "dtype": "int64"}
-    opts.out.parent.mkdir(parents=True, exist_ok=True)
-    out.to_netcdf(opts.out, encoding=enc, format="NETCDF4")
-    size_mb = opts.out.stat().st_size / 1e6
-    print(f"\n  -> {opts.out}  ({size_mb:.1f} MB, {out.sizes['valid_time']:,} hours, "
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_netcdf(out_path, encoding=enc, format="NETCDF4")
+    size_mb = out_path.stat().st_size / 1e6
+    print(f"\n  -> {out_path}  ({size_mb:.1f} MB, {out.sizes['valid_time']:,} hours, "
           f"{len(out.data_vars)} variables)")
 
 

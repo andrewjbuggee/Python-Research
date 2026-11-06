@@ -144,6 +144,7 @@ from plot_lwp_histogram_by_surface_class import (
     site_cell_mask,
     threshold_box_lines,
 )
+from plot_surface_class_timeseries import site_in_grid
 from map_liquid_hours import (
     _draw_one,
     _fonts,
@@ -458,6 +459,7 @@ def prepare_extent(argv=None, args=None, **overrides) -> ExtentAnalysis:
         site_mask=site_mask,
         site_lat=site_lat,
         site_lon=site_lon,
+        site_in_domain=site_in_grid(ds),
         site_iy=iy,
         site_ix=ix,
     )
@@ -883,10 +885,15 @@ def print_taylor_report(E: ExtentAnalysis, ev: dict) -> None:
             else ""
         )
     )
-    for label, sel in (
-        ("all cells", np.ones(ev["L_km"].size, bool)),
-        ("ARM cell", ev["is_site"]),
-    ):
+    # Without the ARM site in the domain, is_site marks only the nearest edge
+    # cell. A row can also be empty when a short window holds no events there.
+    rows = [("all cells", np.ones(ev["L_km"].size, bool))]
+    if getattr(E, "site_in_domain", True):
+        rows.append(("ARM cell", ev["is_site"]))
+    for label, sel in rows:
+        if not sel.any():
+            print(f"\n  {label}: 0 events")
+            continue
         d, U, L = ev["length_h"][sel], ev["U_mean_m_s"][sel], ev["L_km"][sel]
         print(f"\n  {label}: {L.size:,} events")
         print(f"    {'':<8}{'median':>9}{'q25':>9}{'q75':>9}{'mean':>9}{'max':>9}")
