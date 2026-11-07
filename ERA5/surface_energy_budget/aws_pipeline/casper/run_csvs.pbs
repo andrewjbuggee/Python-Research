@@ -8,7 +8,7 @@
 # select, walltime and the -v variables below.
 #
 # Variables passed with qsub -v:
-#   PRODUCT      hour_count | per_cell | precip | cumulative | ice_vs_water | hourly | netcdf
+#   PRODUCT      hour_count | per_cell | precip | cumulative | ice_vs_water | hourly | netcdf | supercooled
 #   REGION       a name in era5_seb_variables.REGIONS, or box:N,W,S,E
 #   REGION_NAME  optional name for a box, used in the output folder
 #   YEARS        season START years, e.g. 2014-2024
@@ -34,6 +34,9 @@ case "$PRODUCT" in
   ice_vs_water) SCRIPT=make_era5_ice_vs_water_clouds.py ;;
   hourly)     SCRIPT=make_era5_hourly_values_csvs.py ;;
   netcdf)     SCRIPT=make_era5_utqiagvik_filtered_netcdf.py ;;
+  # --fields-out writes the netCDF needed for the tcslw step on the laptop:
+  # GDEX has no tcslw. Not part of --csvs all, so it is only run when asked for.
+  supercooled) SCRIPT=make_era5_supercooled_check.py; PRODUCT_ARGS="--fields-out" ;;
   *) echo "unknown PRODUCT=$PRODUCT"; exit 1 ;;
 esac
 
@@ -55,6 +58,7 @@ time python "$SCRIPT" \
     --storage glade \
     --region "${REGION}" \
     ${REGION_NAME:+--region-name "${REGION_NAME}"} \
-    --years "${YEARS}"
+    --years "${YEARS}" \
+    ${PRODUCT_ARGS:-}
 
 echo "==== done $(date -u +%Y-%m-%dT%H:%M:%SZ) ===="

@@ -38,6 +38,7 @@ LOGIN NODES
        ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --years 2014-2024 --csvs all
        ./submit.sh --region arctic_circle --csvs hour_count,per_cell
        Products: hour_count  per_cell  precip  cumulative  ice_vs_water  hourly  netcdf
+       Also, only when named: supercooled (see make_era5_supercooled_check.py)
 
    Figures:
        ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --years 2014-2024 --all

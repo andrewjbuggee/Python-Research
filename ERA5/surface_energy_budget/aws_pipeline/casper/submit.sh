@@ -184,10 +184,10 @@ fi
 csv_size_for() {
   case "$1" in
     hour_count|per_cell|cumulative|ice_vs_water) echo "4 16GB 12:00:00" ;;
-    precip)              echo "4 16GB 23:00:00" ;;
+    precip|supercooled)  echo "4 16GB 23:00:00" ;;
     hourly)              echo "8 16GB 23:00:00" ;;
     netcdf)              echo "4 16GB 12:00:00" ;;
-    *) echo "unknown product $1 (hour_count per_cell precip cumulative ice_vs_water hourly netcdf)" >&2; exit 1 ;;
+    *) echo "unknown product $1 (hour_count per_cell precip cumulative ice_vs_water hourly netcdf supercooled)" >&2; exit 1 ;;
   esac
 }
 

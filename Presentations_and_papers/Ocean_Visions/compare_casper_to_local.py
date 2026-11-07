@@ -14,10 +14,14 @@ WHAT TO EXPECT (see aws_pipeline/README.md)
 The two records are not bit-identical, so small differences are expected:
 
 * tp. GDEX has no hourly tp, so the reader rebuilds it as tp [m] = mtpr * 3.6.
-  It agrees with the CDS tp to GRIB packing precision, which flips the
-  precipitation test on about 1% of the hours flagged as precipitating. Hour
-  counts should differ by a few hours at most (the first Casper test: 1357 vs 1356
-  liquid-containing hours at UTQ in 2023/24).
+  The two fields are stored on different grids of values, so the 0.05 mm/hr test
+  falls in a slightly different place: CDS tp has levels 0.000477 mm/hr apart with
+  one at 0.05007, so it flags from about 0.0498, while mtpr has levels 0.000429
+  apart around 0.0500. Casper therefore counts slightly MORE hours, nearly always in
+  the same direction. Measured for Barrow, 11 seasons: 0.03-0.25% in seasonal
+  totals. The precipAllowed tables have no tp test and should be identical.
+  Per-day tables hold small numbers, so the same few cell-hours look large there,
+  and most of the "values differ" count comes from them. Read the perSeason row.
 * skt, t2m, d2m, sp, tcwv, istl1, istl2 can differ by one float32 unit.
 * CloudTemp. The laptop holds pressure levels for only part of the record, so
   those columns are compared only on rows where both files have a value, and the
@@ -158,6 +162,15 @@ def main(argv: list[str] | None = None) -> None:
               f"{int(t['filled_casper_only'].sum()):,}, only on laptop "
               f"{int(t['filled_local_only'].sum()):,}")
         cols = ["file", "column", "worst_abs", "worst_pct", "n_diff"]
+        # Per-day values are small, so split by resolution before reading percentages.
+        by = t.assign(resolution=t["file"].str.extract(r"_(perSeason|perMonth|perDay|perHour)_",
+                                                       expand=False).fillna("other"))
+        print(by.groupby("resolution").agg(files=("file", "size"), values_differ=("n_diff", "sum"),
+                                           values=("n_values", "sum"),
+                                           worst_pct=("worst_pct", "max")).round(3).to_string())
+        no_tp = t[t["file"].str.contains("precipAllowed")]
+        if len(no_tp):
+            print(f"  precipAllowed tables (no tp test): {int(no_tp['n_diff'].sum())} values differ")
         print(t.sort_values("worst_pct", ascending=False).head(opts.worst)[cols]
               .round(4).to_string(index=False))
         print()
