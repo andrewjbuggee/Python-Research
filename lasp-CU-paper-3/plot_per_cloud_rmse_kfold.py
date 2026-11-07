@@ -58,6 +58,13 @@ EPSILON = R_D / R_V  # ≈ 0.622
 C_P     = 1005.0     # J/(kg K)  specific heat of dry air at const. P
 L_V     = 2.50e6     # J/kg      latent heat of vaporization (T ~ 285 K)
 
+# ─── Cloud-base rule for Wood (2005) adiabaticity ────────────────────────
+# Same rule and defaults as compute_adiabaticity_Wood2005.m (MATLAB in-situ
+# pipeline); see extrapolated_cloud_base. Keep the two in sync.
+LWC_THRESHOLD_G_M3          = 0.05         # g/m³  in-situ finder LWC threshold, used by the fallback
+BASE_FIT_FRACTION           = 1.0 / 3.0    # bottom fraction of the sampled depth fit by the line
+SLOPE_LIMITS_OVER_GAMMA_AD  = (0.25, 3.0)  # physical range of the fitted slope, in units of Γ_ad
+
 
 def saturation_vapor_pressure_Pa(T_K):
     """Bolton (1980): e_s [Pa] as a function of T [K]."""
@@ -119,39 +126,148 @@ def era5_T_P_at_heights(era5_T_surface_to_toa: np.ndarray,
     return np.interp(z_m, z, T), np.interp(z_m, z, P_Pa)
 
 
+def extrapolated_cloud_base(lwc_g_m3: np.ndarray,
+                            z_m: np.ndarray,
+                            gamma_ad_g_m3_per_m: float,
+                            lwc_threshold_g_m3: float = LWC_THRESHOLD_G_M3,
+                            fit_fraction: float = BASE_FIT_FRACTION,
+                            slope_limits_over_gamma_ad: tuple[float, float]
+                            = SLOPE_LIMITS_OVER_GAMMA_AD,
+                            ) -> tuple[float, float, bool]:
+    """Cloud base [m] from a straight-line fit to the bottom of the LWC profile.
+
+    The profiles keep only levels that passed the in-situ LWC and Nc thresholds,
+    so the lowest level sits above the true cloud base, and right at the base
+    the measurements are ambiguous (small droplet number density, probe noise).
+    The adiabatic model is linear in height above cloud base,
+    w_l = Γ_l (z − z_B) (Albrecht et al. 1990, GRL 17, 89–92,
+    doi:10.1029/GL017i001p00089), and so is a sub-adiabatic cloud with a
+    height-independent f_ad. A line is therefore fit to LWC(z) over the bottom
+    `fit_fraction` of the sampled depth and its z-intercept (LWC = 0) is the
+    cloud base. Below the lowest level the line is extrapolated, not fit.
+
+    The base is never above the lowest level: z_cb = min(intercept, z_lowest).
+    If the line reaches zero inside the profile, the lowest level is the base.
+
+    Fallback, when the slope is not physical: one adiabatic distance below the
+    lowest level, taking that level to sit at the finder's LWC threshold,
+        z_cb = z_lowest − lwc_threshold / Γ_ad.
+    The slope is not physical when it is ≤ lower·Γ_ad (no usable upward trend;
+    a tiny positive slope sends the intercept kilometres down) or > upper·Γ_ad
+    (steeper than any adiabatic parcel), or when fewer than 3 levels can be fit.
+
+    Identical to the 'extrapolate' base method of compute_adiabaticity_Wood2005.m
+    in the MATLAB in-situ pipeline; keep the two in sync.
+
+    Parameters
+    ----------
+    lwc_g_m3 : LWC at each level [g/m³], any order
+    z_m : altitude of each level [m], same order
+    gamma_ad_g_m3_per_m : adiabatic LWC lapse rate [g/m³ per m]
+    lwc_threshold_g_m3 : the in-situ finder's LWC threshold [g/m³]
+    fit_fraction : bottom fraction of the sampled depth used in the fit
+    slope_limits_over_gamma_ad : (lower, upper) physical slope range, in Γ_ad
+
+    Returns
+    -------
+    z_cb_m : cloud base [m], never above the lowest level
+    lwc_at_lowest_g_m3 : LWC the line (or the fallback adiabat) has at the
+        lowest level [g/m³], for the unsampled wedge below it; 0 when the
+        lowest level is the base
+    used_fallback : True if the fallback set the base
+    """
+    lwc = np.asarray(lwc_g_m3, dtype=np.float64)
+    z = np.asarray(z_m, dtype=np.float64)
+    z_lowest_m = float(np.min(z))
+    h_sampled_m = float(np.max(z)) - z_lowest_m
+
+    # Bottom fraction of the sampled depth. The 7-level grid puts a level
+    # exactly at z* = 1/3, but its heights are stored as float32, so the
+    # computed z* lands up to ~1e-6 above 1/3. The 1e-4 tolerance (3 cm in a
+    # 300-m cloud) keeps that level; without it 41% of synthetic profiles had
+    # only 2 levels to fit and fell back.
+    z_star = (z - z_lowest_m) / h_sampled_m
+    in_fit = np.isfinite(lwc) & (z_star <= fit_fraction + 1e-4)
+
+    slope_g_m3_per_m = float('nan')
+    lwc_line_at_lowest_g_m3 = float('nan')
+    if in_fit.sum() >= 3 and np.std(z[in_fit]) > 0:
+        # Heights measured from the lowest level, so the intercept term of the
+        # fit is the line's LWC at the lowest level
+        slope_g_m3_per_m, lwc_line_at_lowest_g_m3 = np.polyfit(
+            z[in_fit] - z_lowest_m, lwc[in_fit], 1)
+
+    slope_over_gamma_ad = slope_g_m3_per_m / gamma_ad_g_m3_per_m
+    lower, upper = slope_limits_over_gamma_ad
+    # NaN fails both comparisons, so a profile that could not be fit falls back
+    is_physical = bool(lower < slope_over_gamma_ad <= upper)
+
+    if is_physical:
+        # distance from the lowest level down to LWC = 0; negative if above it
+        dz_base_m = lwc_line_at_lowest_g_m3 / slope_g_m3_per_m
+        if dz_base_m >= 0:
+            return z_lowest_m - dz_base_m, lwc_line_at_lowest_g_m3, False
+        # the line reaches zero inside the profile: never put the base above
+        # a measured level, so the lowest level is the base
+        return z_lowest_m, 0.0, False
+
+    dz_base_m = lwc_threshold_g_m3 / gamma_ad_g_m3_per_m
+    return z_lowest_m - dz_base_m, lwc_threshold_g_m3, True
+
+
 def wood_adiabaticity(lwc_top_to_base_g_m3: np.ndarray,
                        z_top_to_base_km: np.ndarray,
-                       era5_T: np.ndarray, era5_P_hPa: np.ndarray) -> float:
+                       era5_T: np.ndarray, era5_P_hPa: np.ndarray,
+                       lwc_threshold_g_m3: float = LWC_THRESHOLD_G_M3,
+                       ) -> float:
     """LWP_observed / LWP_adiabatic  per Wood (2005, JAS 62, 3011; sec. 3b).
 
-    LWP_obs = 1000 · ∫ LWC dz   (LWC g/m³, z km, → g/m²)
-    LWP_ad  = ½ · Γ_ad · h²     (h = z_top − z_base in m, Γ_ad in kg/m⁴ → g/m²)
+    LWP_ad  = ½ · Γ_ad · h²     (h = z_top − z_cb in m, Γ_ad in g/m³ per m → g/m²)
+    LWP_obs = ∫ LWC dz from z_cb to z_top (LWC g/m³, z m → g/m²)
+
+    Cloud base z_cb is the z-intercept of a line fit to the bottom third of
+    LWC(z), with a fallback of one adiabatic distance below the lowest level
+    when the fitted slope is not physical (see extrapolated_cloud_base). This
+    is the same rule as the MATLAB in-situ pipeline (VOCALS-REx and ORACLES).
+
+    LWP_obs covers the same layer as LWP_ad. z_cb is never above the lowest
+    level, so every level counts; when z_cb is below it, the unsampled wedge
+    between them is added with the same line, ½ · LWC_line(z_lowest) · (z_lowest − z_cb).
 
     Following Wood, a single Γ_ad is used per cloud, evaluated at the mean
     in-cloud temperature and pressure: T and P are taken from the ERA5
     column (hypsometric integration) at every level of the cloud profile
-    and averaged over the cloud depth. Returns NaN when the cloud has
+    and averaged over the sampled cloud depth. Returns NaN when the cloud has
     degenerate thickness or yields Γ_ad ≤ 0.
     """
-    z_top_km  = float(z_top_to_base_km[0])
-    z_base_km = float(z_top_to_base_km[-1])
-    h_m = (z_top_km - z_base_km) * 1000.0
-    if h_m <= 0:
+    z_m = np.asarray(z_top_to_base_km, dtype=np.float64) * 1000.0   # m, top → base
+    lwc = np.asarray(lwc_top_to_base_g_m3, dtype=np.float64)         # g/m³
+    z_top_m = float(np.max(z_m))
+    h_sampled_m = z_top_m - float(np.min(z_m))
+    if h_sampled_m <= 0:
         return float('nan')
-
-    lwp_obs_g = 1000.0 * abs(np.trapezoid(lwc_top_to_base_g_m3,
-                                          z_top_to_base_km))   # g/m²
 
     # Mean in-cloud T and P: sample the ERA5 column at every profile level
-    # (top → base) and take the trapezoid-weighted mean over cloud depth.
+    # (top → base) and take the trapezoid-weighted mean over the sampled depth.
     T_lev, P_lev = era5_T_P_at_heights(era5_T, era5_P_hPa, z_top_to_base_km)
-    T_mean = abs(np.trapezoid(T_lev, z_top_to_base_km)) / (h_m / 1000.0)
-    P_mean = abs(np.trapezoid(P_lev, z_top_to_base_km)) / (h_m / 1000.0)
-    gamma_ad = gamma_ad_kg_per_m4(T_mean, P_mean)               # kg/m⁴
+    T_mean = abs(np.trapezoid(T_lev, z_m)) / h_sampled_m
+    P_mean = abs(np.trapezoid(P_lev, z_m)) / h_sampled_m
+    gamma_ad = gamma_ad_kg_per_m4(T_mean, P_mean)                    # kg/m⁴
     if gamma_ad <= 0:
         return float('nan')
-    lwp_ad_g = 0.5 * gamma_ad * (h_m ** 2) * 1000.0             # g/m²
-    return lwp_obs_g / lwp_ad_g
+    gamma_ad_g_m3_per_m = gamma_ad * 1000.0                          # g/m³ per m
+
+    z_cb_m, lwc_at_lowest_g_m3, _ = extrapolated_cloud_base(
+        lwc, z_m, gamma_ad_g_m3_per_m, lwc_threshold_g_m3)
+    dz_base_m = float(np.min(z_m)) - z_cb_m                          # m, ≥ 0
+    h_m = z_top_m - z_cb_m
+
+    # Observed LWP over every level, plus the unsampled wedge below the lowest
+    finite = np.isfinite(lwc)
+    lwp_measured_g = abs(np.trapezoid(lwc[finite], z_m[finite]))     # g/m²
+    lwp_wedge_g = 0.5 * lwc_at_lowest_g_m3 * dz_base_m               # g/m²
+    lwp_ad_g = 0.5 * gamma_ad_g_m3_per_m * h_m ** 2                  # g/m²
+    return (lwp_measured_g + lwp_wedge_g) / lwp_ad_g
 
 
 def re_linear_slope(re_top_to_base: np.ndarray,
