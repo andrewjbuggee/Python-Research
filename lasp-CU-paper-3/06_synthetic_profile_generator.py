@@ -8,7 +8,7 @@ then samples N new synthetic profiles. Each synthetic sample carries:
     re        : (N_FIXED_LEVELS,) effective radius profile  (μm, top → base)
     lwc       : (N_FIXED_LEVELS,) liquid water content        (g/m³,  top → base)
     z         : (N_FIXED_LEVELS,) altitude grid              (km,   top → base)
-    alpha     : scalar mean libRadtran shape parameter
+    alpha     : scalar mean libRadtran distribution shape parameter
     z_top     : scalar cloud-top altitude     (km)
     z_base    : scalar cloud-base altitude    (km)
     thickness : scalar cloud geometric depth  (km)
@@ -23,8 +23,8 @@ Method
          campaigns with alpha for every profile (preferred), or
      (b) the legacy directory of one .mat file per profile, where only the
          ORACLES files store 'alpha_param'.
-   Keep only profiles that have tau_c ≥ TAU_C_MIN (default 3, per request)
-   and are not duplicate profile fingerprints.
+   Keep only profiles with TAU_C_MIN ≤ tau_c ≤ TAU_C_MAX (defaults 3 and 40)
+   that are not duplicate profile fingerprints.
 2. Project raw re and lwc onto a common normalized-altitude grid of length
    L_COMMON (≥ 60), then take logs:
        Y_re  = log(re_common)              (always positive, no offset)
@@ -69,15 +69,21 @@ from pathlib import Path
 #   - the legacy directory of one .mat file per profile.
 # The layout is detected from what the path actually points at.
 MAT_DIR          = Path('/Users/andrewbuggee/Documents/MATLAB/Matlab-Research/'
-                        'Hyperspectral_Cloud_Retrievals/Neural_Network/'
-                        'Training_data_set/synthetic_profile_inputs/')
+               'Hyperspectral_Cloud_Retrievals/Neural_Network/'
+               'Training_data_set/synthetic_profile_inputs/'
+               'insitu_era5_synthetic_inputs_combined_08-Nov-2026.mat')
 
 # Legacy per-profile data set (VOCALS-REx profiles there carry no alpha):
 # MAT_DIR = Path('/Volumes/My Passport/CU_Boulder/neural_network_training_data/saz0_allProfiles/')
 
 TAU_C_MIN        = 3.0          # only use clouds with cloud optical depth ≥ this
+TAU_C_MAX        = 40.0         # ... and ≤ this. Both limits apply twice: to the
+                                # in-situ profiles before the MVN is fit (so the
+                                # thickest clouds don't shape the PCA modes and
+                                # covariance) and to every synthetic draw (the
+                                # log-space MVN tail would otherwise exceed the cap)
 
-# Which optical thickness the TAU_C_MIN filter uses (consolidated input only):
+# Which optical thickness the TAU_C_MIN / TAU_C_MAX filter uses (consolidated input only):
 #   'stored'   - max of the in-situ tau profile, as recorded by the campaign code
 #   'computed' - recomputed from the measured r_e and LWC with QEXT_EFF
 # A handful of stored ORACLES tau profiles are corrupt (τ ~ 1e-4 for clouds with
@@ -86,7 +92,7 @@ TAU_C_MIN        = 3.0          # only use clouds with cloud optical depth ≥ t
 TAU_C_SOURCE     = 'stored'
 L_COMMON         = 80           # length of the common normalized-altitude grid (≥ 60)
 N_FIXED_LEVELS   = 7            # every synthetic profile is on this fixed grid
-N_SAMPLES        = 400000
+N_SAMPLES        = 1000
 
 VAR_TARGET       = 0.99         # cumulative variance target for picking K_RE, K_LWC, K_T, K_VAPOR
 K_RE_MAX         = 12           # hard cap on number of re modes kept
@@ -122,8 +128,8 @@ def _versioned_path(path):
         ver += 1
 
 # Rejection-sampling loop: keeps drawing batches until N samples have
-# tau_c >= TAU_C_MIN (matching the in-situ filter). Without this, the
-# tail of the joint MVN produces thinner-than-trained clouds.
+# TAU_C_MIN <= tau_c <= TAU_C_MAX (matching the in-situ filter). Without this,
+# the tails of the joint MVN produce thinner- and thicker-than-trained clouds.
 REJECTION_BATCH_OVERSAMPLE = 1.6      # draw 1.6× the remaining need each batch
 REJECTION_MAX_BATCHES      = 30
 
@@ -286,7 +292,7 @@ def load_profiles_consolidated(path: Path) -> dict:
     out = {k: [] for k in ('re', 'lwc', 'z', 'mean_alpha', 'campaign',
                            'z_top', 'z_base', 'tau_c', 'lwp', 'n_levels',
                            'T', 'vapor')}
-    skips = dict(low_tau=0, dup=0, missing=0, no_era5=0)
+    skips = dict(low_tau=0, high_tau=0, dup=0, missing=0, no_era5=0)
     seen_fingerprints = set()
 
     for i in range(n_file):
@@ -298,6 +304,9 @@ def load_profiles_consolidated(path: Path) -> dict:
 
         if tau_c_all[i] < TAU_C_MIN:
             skips['low_tau'] += 1
+            continue
+        if tau_c_all[i] > TAU_C_MAX:
+            skips['high_tau'] += 1
             continue
 
         fp = tuple(np.round(re[:5], 4))
@@ -326,7 +335,8 @@ def load_profiles_consolidated(path: Path) -> dict:
     # Say how much the other tau_c choice would change the filter, since the two
     # are not interchangeable.
     other = tau_c_computed if TAU_C_SOURCE == 'stored' else tau_c_stored
-    n_other = int((other >= TAU_C_MIN).sum() - (tau_c_all >= TAU_C_MIN).sum())
+    in_range = lambda t: (t >= TAU_C_MIN) & (t <= TAU_C_MAX)
+    n_other = int(in_range(other).sum() - in_range(tau_c_all).sum())
     print(f"  tau_c source: '{TAU_C_SOURCE}' "
           f"(the other choice would keep {n_other:+d} profiles)")
 
@@ -349,7 +359,7 @@ def load_profiles_per_profile(mat_dir: Path) -> dict:
     out = {k: [] for k in ('re', 'lwc', 'z', 'mean_alpha', 'campaign',
                            'z_top', 'z_base', 'tau_c', 'lwp', 'n_levels',
                            'T', 'vapor')}
-    skips = dict(low_tau=0, dup=0, missing=0, no_era5=0)
+    skips = dict(low_tau=0, high_tau=0, dup=0, missing=0, no_era5=0)
     seen_fingerprints = set()
     era5_pressure = None
 
@@ -379,6 +389,9 @@ def load_profiles_per_profile(mat_dir: Path) -> dict:
 
         if tau_c < TAU_C_MIN:
             skips['low_tau'] += 1
+            continue
+        if tau_c > TAU_C_MAX:
+            skips['high_tau'] += 1
             continue
 
         fp = tuple(np.round(re[:5], 4))
@@ -438,7 +451,7 @@ def load_era5_fields(d):
     return T, vap, P
 
 
-# ── Load the in-situ + ERA5 profiles with tau_c ≥ TAU_C_MIN ────────────────────
+# ── Load the in-situ + ERA5 profiles with TAU_C_MIN ≤ tau_c ≤ TAU_C_MAX ────────
 input_layout, input_path = resolve_input_path(MAT_DIR)
 print(f'Input layout: {input_layout}  →  {input_path}')
 
@@ -462,6 +475,7 @@ vapor_each    = data['vapor']       # (37,) ERA5 vapor_concentration, surface �
 era5_pressure = data['era5_pressure']
 
 n_skip_low_tau  = data['skips']['low_tau']
+n_skip_high_tau = data['skips']['high_tau']
 n_skip_dup      = data['skips']['dup']
 n_skip_missing  = data['skips']['missing']
 n_skip_no_era5  = data['skips']['no_era5']
@@ -485,7 +499,7 @@ campaign_each = np.asarray(campaign_each)
 n_oracles = int((campaign_each == 'oracles').sum())
 n_vocals  = int((campaign_each == 'vocals-rex').sum())
 
-print(f'  skipped: {n_skip_low_tau} tau_c<{TAU_C_MIN}, '
+print(f'  skipped: {n_skip_low_tau} tau_c<{TAU_C_MIN}, {n_skip_high_tau} tau_c>{TAU_C_MAX}, '
       f'{n_skip_dup} duplicates, {n_skip_missing} missing keys, '
       f'{n_skip_no_era5} no era5')
 print(f'  kept   : {n_train} unique profiles  '
@@ -710,7 +724,8 @@ def reconstruct_batch(samples_batch):
 
 
 rng = np.random.default_rng(RANDOM_SEED)
-print(f'\nSampling {N_SAMPLES} synthetic profiles with rejection on tau_c >= {TAU_C_MIN}...')
+print(f'\nSampling {N_SAMPLES} synthetic profiles with rejection on '
+      f'{TAU_C_MIN} <= tau_c <= {TAU_C_MAX}...')
 
 accepted = {k: [] for k in
             ('re', 'lwc', 'z', 'alpha', 'T', 'vapor',
@@ -718,6 +733,9 @@ accepted = {k: [] for k in
              'tau_c', 'lwp')}
 n_accepted   = 0
 n_drawn_total = 0
+n_passed_total = 0             # draws inside the tau_c limits, used or not
+n_rejected_low_total  = 0      # draws with tau_c < TAU_C_MIN
+n_rejected_high_total = 0      # draws with tau_c > TAU_C_MAX
 
 for batch_idx in range(REJECTION_MAX_BATCHES):
     n_need = N_SAMPLES - n_accepted
@@ -728,7 +746,12 @@ for batch_idx in range(REJECTION_MAX_BATCHES):
     n_drawn_total += n_draw
 
     out = reconstruct_batch(samples_batch)
-    keep = out['tau_c'] >= TAU_C_MIN
+    too_thin  = out['tau_c'] < TAU_C_MIN
+    too_thick = out['tau_c'] > TAU_C_MAX
+    n_rejected_low_total  += int(too_thin.sum())
+    n_rejected_high_total += int(too_thick.sum())
+    keep = ~too_thin & ~too_thick
+    n_passed_total += int(keep.sum())
     take = min(int(keep.sum()), n_need)
     if take == 0:
         continue
@@ -737,14 +760,14 @@ for batch_idx in range(REJECTION_MAX_BATCHES):
         accepted[k].append(out[k][keep_idx])
     n_accepted += take
     print(f'  batch {batch_idx + 1:2d}: drew {n_draw}, '
-          f'{int(keep.sum())} passed (tau≥{TAU_C_MIN}), '
+          f'{int(keep.sum())} passed ({TAU_C_MIN}≤tau≤{TAU_C_MAX}), '
           f'cumulative {n_accepted}/{N_SAMPLES}')
 
 if n_accepted < N_SAMPLES:
     raise RuntimeError(
         f'Only accumulated {n_accepted}/{N_SAMPLES} samples with '
-        f'tau_c >= {TAU_C_MIN} after {REJECTION_MAX_BATCHES} batches. '
-        f'Increase REJECTION_MAX_BATCHES or relax TAU_C_MIN.')
+        f'{TAU_C_MIN} <= tau_c <= {TAU_C_MAX} after {REJECTION_MAX_BATCHES} batches. '
+        f'Increase REJECTION_MAX_BATCHES or relax TAU_C_MIN / TAU_C_MAX.')
 
 re_out      = np.concatenate(accepted['re'])
 lwc_out     = np.concatenate(accepted['lwc'])
@@ -759,9 +782,18 @@ new_alpha   = np.concatenate(accepted['mean_alpha'])
 new_tau_c   = np.concatenate(accepted['tau_c'])
 new_lwp     = np.concatenate(accepted['lwp'])
 
-acceptance_rate = n_accepted / n_drawn_total
+# Acceptance rate = fraction of ALL draws that pass the tau_c limits. Each batch
+# draws at least 2000, so more can pass than are needed; dividing kept by drawn
+# would mix that oversampling into the rate and understate it.
+acceptance_rate = n_passed_total / n_drawn_total
 print(f'  done. acceptance rate = {acceptance_rate:.3f} '
-      f'(drew {n_drawn_total} to keep {n_accepted})')
+      f'({n_passed_total} of {n_drawn_total} draws passed; kept the first {n_accepted})')
+# If a large share of draws exceeds the cap, the MVN tail is heavy and the cut
+# distorts the joint LWC-thickness distribution near TAU_C_MAX
+print(f'  rejected: {n_rejected_low_total} below TAU_C_MIN '
+      f'({n_rejected_low_total / n_drawn_total:.1%} of draws), '
+      f'{n_rejected_high_total} above TAU_C_MAX '
+      f'({n_rejected_high_total / n_drawn_total:.1%} of draws)')
 
 # For the diagnostic envelope plot we want the FULL common-grid recon of the
 # kept samples. We rebuild it from the saved scores indirectly: just regenerate
@@ -827,6 +859,7 @@ np.savez_compressed(
     N_FIXED_LEVELS   = np.int32(N_FIXED_LEVELS),
     N_ERA5           = np.int32(N_ERA5),
     TAU_C_MIN        = np.float32(TAU_C_MIN),
+    TAU_C_MAX        = np.float32(TAU_C_MAX),
     n_train_profiles = np.int32(n_train),
 )
 print(f'\nSaved → {OUT_PATH}  ({OUT_PATH.stat().st_size / 1e6:.1f} MB)')
@@ -980,7 +1013,7 @@ ax.grid(alpha=0.3)
 
 fig.suptitle(
     f'Joint MVN generator: ORACLES, '
-    f'$\\tau_c \\geq {TAU_C_MIN:g}$,  N$_\\text{{train}}$={n_train},  '
+    f'${TAU_C_MIN:g} \\leq \\tau_c \\leq {TAU_C_MAX:g}$,  N$_\\text{{train}}$={n_train},  '
     f'L={L_COMMON},  K$_{{re}}$={K_re},  K$_{{lwc}}$={K_lwc},  '
     f'N$_\\text{{sample}}$={N_SAMPLES}',
     y=1.005,
