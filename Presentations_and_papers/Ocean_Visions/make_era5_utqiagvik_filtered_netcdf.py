@@ -193,12 +193,29 @@ def read_site_cell(args: argparse.Namespace) -> tuple[xr.Dataset, dict]:
     site_mask, cell_lat_deg, cell_lon_deg = site_cell_mask(ds)
     i_lat, j_lon = (int(v) for v in np.argwhere(site_mask)[0])
 
-    # Point selection first, then load: only the one cell's column of each
-    # chunk is kept in memory.
+    # Read in blocks of hours, then join. The GDEX/S3 reader decodes the WHOLE
+    # domain window for every requested hour before it applies the lat/lon
+    # point selection, so one .load() of all 48,120 hours materialises
+    # (hours x n_lat x n_lon) per variable. On the 9,821-cell Rui-region box
+    # that ran a 16 GB job out of memory (job 6556571, qhist Mem 16.00 GB).
+    # args.block_hours is the block size ov_config sizes to the domain for the
+    # other scripts, so each read here holds at most one such block per
+    # variable. The values are identical either way: only the batching changes.
     t_sel = np.flatnonzero(use_step)
+    block_h = max(1, int(args.block_hours))
     print(f"  Reading {t_sel.size:,} hours x {len(ds.data_vars)} variables at "
-          f"cell ({cell_lat_deg:.2f} N, {cell_lon_deg:.2f} E) ...", flush=True)
-    cell = ds.isel(latitude=i_lat, longitude=j_lon, valid_time=t_sel).load()
+          f"cell ({cell_lat_deg:.2f} N, {cell_lon_deg:.2f} E), "
+          f"{block_h} h per read ...", flush=True)
+    pieces = [
+        ds.isel(latitude=i_lat, longitude=j_lon,
+                valid_time=t_sel[start:start + block_h]).load()
+        for start in range(0, t_sel.size, block_h)
+    ]
+    # "minimal"/"override": only variables that have valid_time are joined
+    # along it; scalar coordinates (the cell's latitude and longitude) are the
+    # same in every piece and are taken from the first.
+    cell = xr.concat(pieces, dim="valid_time", data_vars="minimal",
+                     coords="minimal", compat="override", join="override")
 
     # Season START year of each kept hour (2014 = the 2014/15 season).
     season_year = np.asarray(layout["seasons"])[s_idx[t_sel]]

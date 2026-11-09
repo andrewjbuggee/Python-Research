@@ -324,13 +324,17 @@ def build_table(R: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def check_against_cumulative(R: dict, n_seasons: int, cum_dir: Path, span: str) -> None:
+def check_against_cumulative(R: dict, n_seasons: int, cum_dir: Path, span: str,
+                             weighting: str) -> None:
     """The filtered class means must reproduce the cumulative table at month ends.
 
     Summed over hours and divided by the number of seasons, lc_kept is the average
     cumulative hours per cell, which that table states on 31 Oct and 30 Nov.
     """
-    path = cum_dir / f"ERA5_cumulativeHoursPerCell_perDay_{span}_liquidContaining.csv"
+    # The cumulative script tags area-weighted file names ("..._areaWeighted_perDay_..."),
+    # so the name must carry the same tag or the check silently finds nothing.
+    path = cum_dir / ov.weighted_names(
+        f"ERA5_cumulativeHoursPerCell_perDay_{span}_liquidContaining.csv", weighting)
     if not path.exists():
         print(f"  !! no table to check against: {path.name}")
         return
@@ -554,7 +558,8 @@ def main(argv: list[str] | None = None) -> None:
         span = ov.span_tag(seasons)
         R = accumulate(args, seasons)
         check_against_cumulative(
-            R, len(seasons), hour_count_dir / f"cumulative_by_class{suffix}", span
+            R, len(seasons), hour_count_dir / f"cumulative_by_class{suffix}", span,
+            opts.cell_weighting,
         )
         table = build_table(R)
         out_dir.mkdir(parents=True, exist_ok=True)
