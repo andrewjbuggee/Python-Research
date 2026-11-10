@@ -78,6 +78,18 @@ YEARS = "2014-2024"     # season START years: 2014/15 .. 2024/25
 #   "uniform" : every grid cell equal, so an average is per GRID CELL
 # Plain cell-hour COUNTS (make_era5_hour_count_csvs.py) are never weighted.
 CELL_WEIGHTING = os.environ.get("OV_CELL_WEIGHTING") or "area"
+# Keep only SUPERCOOLED liquid-containing clouds: drop liquid-containing (and
+# liquid-only) cell-hours whose liquid-weighted cloud temperature is not below
+# 0 deg C. Cloud temperature comes from the 23-level pressure archive (t, clwc);
+# see cloud_temp_filter.py. Choices:
+#   "auto" : on when ERA5 comes from GDEX or S3 (every season has pressure
+#            levels), off for the local archive (pressure levels for 2024/25 only)
+#   "on"   : always (stops if any wanted hour has no pressure-level data)
+#   "off"  : never
+SUPERCOOLED_ONLY = os.environ.get("OV_SUPERCOOLED_ONLY") or "auto"
+_SUPERCOOLED_CHOICES = ("auto", "on", "off")
+# Storage choices that hold only part of the pressure-level record.
+_PARTIAL_PRESSURE_STORAGE = ("local", "external")
 
 # ----------------------------------------------------------------------------
 # The record the existing Ocean Visions files describe. Only this combination
@@ -283,6 +295,8 @@ class RunConfig:
     domain: Domain
     years: tuple[int, ...]
     storage: str
+    # True: liquid-containing statistics keep only cloud temperature < 0 deg C.
+    supercooled_only: bool = False
 
     @property
     def is_baseline(self) -> bool:
@@ -290,14 +304,18 @@ class RunConfig:
 
         Remote storage does not count. tp there is rebuilt from mtpr and differs
         from the CDS field at GRIB packing precision, so a re-run could change
-        those files slightly while appearing to reproduce them.
+        those files slightly while appearing to reproduce them. A supercooled-only
+        run is a different population, so it never writes over those files either.
         """
-        return (not ON_CASPER and self.storage == "local"
+        return (not ON_CASPER and self.storage == "local" and not self.supercooled_only
                 and self.domain.name == BASELINE_DOMAIN and self.years == BASELINE_YEARS)
 
     @property
     def tag(self) -> str:
-        return f"{self.domain.name}_{span_tag(self.years)}"
+        # "_supercooled" keeps filtered output in its own folder, so it can never
+        # be mistaken for (or replace) the unfiltered tables.
+        suffix = "_supercooled" if self.supercooled_only else ""
+        return f"{self.domain.name}_{span_tag(self.years)}{suffix}"
 
     @property
     def block_hours(self) -> int:
@@ -316,7 +334,7 @@ class RunConfig:
     def settings(self) -> dict:
         """The run-specific options to merge into a script's science settings."""
         return dict(region=self.domain.name, years=self.years, storage=self.storage,
-                    block_hours=self.block_hours)
+                    block_hours=self.block_hours, supercooled_only=self.supercooled_only)
 
     def out_dir(self, product: str) -> Path:
         """Folder for one product, e.g. out_dir("era5_hour_count_csv")."""
@@ -335,7 +353,9 @@ class RunConfig:
         return (f"  domain  {d.name}: {d.describe()}, {d.n_lat} x {d.n_lon} = {d.n_cells:,} cells\n"
                 f"  seasons {self.years[0]}/{(self.years[0] + 1) % 100:02d} .. "
                 f"{self.years[-1]}/{(self.years[-1] + 1) % 100:02d} ({len(self.years)})\n"
-                f"  data    storage={self.storage} on {SYSTEM}; block_hours {self.block_hours}")
+                f"  data    storage={self.storage} on {SYSTEM}; block_hours {self.block_hours}\n"
+                f"  filter  supercooled only (cloud temperature < 0 C): "
+                f"{'ON' if self.supercooled_only else 'off'}")
 
 
 def warn_if_login_node() -> None:
@@ -364,8 +384,27 @@ def _check_local_data(domain: Domain, storage: str) -> None:
             "--storage s3 to stream the AWS mirror (its chunk cache grows on this disk).")
 
 
+def supercooled_only_for(storage: str, setting: str | None = None) -> bool:
+    """Whether the supercooled-only filter applies, from auto | on | off.
+
+    ``setting`` falls back to OV_SUPERCOOLED_ONLY, then SUPERCOOLED_ONLY. "auto"
+    turns the filter on wherever the whole pressure-level record is reachable
+    (GDEX on Casper, or the S3 mirror) and off for the local archive.
+    """
+    choice = (setting or os.environ.get("OV_SUPERCOOLED_ONLY") or SUPERCOOLED_ONLY).lower()
+    if choice not in _SUPERCOOLED_CHOICES:
+        # Checked here, not only by argparse: a value from the environment
+        # bypasses argparse's choices and would otherwise be read silently.
+        raise SystemExit(f"supercooled-only must be one of {_SUPERCOOLED_CHOICES}, "
+                         f"got {choice!r}")
+    if choice == "auto":
+        return storage not in _PARTIAL_PRESSURE_STORAGE
+    return choice == "on"
+
+
 def resolve_run(region: str | None = None, box=None, region_name: str | None = None,
-                years=None, storage: str | None = None) -> RunConfig:
+                years=None, storage: str | None = None,
+                supercooled_only: str | None = None) -> RunConfig:
     """Apply the precedence: arguments, then OV_* environment, then settings block."""
     from plot_surface_class_timeseries import parse_years  # the --years grammar
 
@@ -377,7 +416,8 @@ def resolve_run(region: str | None = None, box=None, region_name: str | None = N
     chosen_storage = storage or os.environ.get("OV_STORAGE") or DEFAULT_STORAGE
     _check_local_data(domain, chosen_storage)
     warn_if_login_node()
-    return RunConfig(domain, year_tuple, chosen_storage)
+    return RunConfig(domain, year_tuple, chosen_storage,
+                     supercooled_only_for(chosen_storage, supercooled_only))
 
 
 def add_weighting_arg(parser: argparse.ArgumentParser) -> None:
@@ -421,11 +461,16 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     g.add_argument("--storage", default=None,
                    choices=["local", "external", "glade", "ncar", "s3", "aws"],
                    help=f"where ERA5 is read from (default here: {DEFAULT_STORAGE})")
+    g.add_argument("--supercooled-only", default=None, choices=_SUPERCOOLED_CHOICES,
+                   help="keep only liquid-containing cell-hours with cloud temperature "
+                        "< 0 C; auto = on for GDEX/S3, off for local files "
+                        f"(default {SUPERCOOLED_ONLY})")
 
 
 def run_from_args(opts: argparse.Namespace) -> RunConfig:
     """The RunConfig for options parsed with add_run_args."""
-    return resolve_run(opts.region, opts.box, opts.region_name, opts.years, opts.storage)
+    return resolve_run(opts.region, opts.box, opts.region_name, opts.years, opts.storage,
+                       getattr(opts, "supercooled_only", None))
 
 
 if __name__ == "__main__":

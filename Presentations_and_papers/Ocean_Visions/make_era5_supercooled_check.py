@@ -532,6 +532,10 @@ def main(argv: list[str] | None = None) -> None:
     ov.add_weighting_arg(p)
     ov.add_run_args(p)
     opts = p.parse_args(argv)
+    # This script MEASURES how much liquid is supercooled, over all liquid, so
+    # the supercooled-only filter must never apply to it (and its output stays
+    # in the unfiltered run folder).
+    opts.supercooled_only = "off"
     run = ov.run_from_args(opts)
     out_dir = opts.out_dir or (run.out_dir(OUT_PRODUCT)
                                / f"supercooled_check{ov.weight_suffix(opts.cell_weighting)}")

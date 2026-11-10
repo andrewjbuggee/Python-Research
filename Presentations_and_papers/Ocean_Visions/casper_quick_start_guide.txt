@@ -85,6 +85,21 @@ CELL WEIGHTING
    scripts and on submit.sh. Area-weighted folders and files have "areaWeighted" in their names,
    so they never replace uniform ones. hour_count tables are plain counts either way.
 
+SUPERCOOLED-ONLY FILTER (on by default on Casper)
+   With GDEX (or S3), liquid-containing and liquid-only statistics keep only cell-hours
+   whose cloud temperature is below 0 C. Cloud temperature = liquid-water-path-weighted
+   mean temperature of the column from the 23 pressure levels (cloud_temp_filter.py).
+   Cell-hours with no pressure-level liquid are dropped too; ice-only and clear-sky are
+   untouched. Applies to hour_count, per_cell, precip, cumulative, ice_vs_water (lc_* rows),
+   hourly and netcdf. NOT to supercooled (the diagnostic itself) or the figure notebook.
+   Laptop runs from local files leave it off (pressure levels for 2024/25 only).
+       --supercooled-only auto|on|off    on the scripts and on submit.sh
+       OV_SUPERCOOLED_ONLY=off           same thing from the environment
+   Filtered output goes to its own folder, <domain>_<span>_supercooled, so it never
+   replaces unfiltered tables. Each log prints how many cell-hours the filter dropped,
+   and the readME files record it. It re-reads pressure levels, so jobs take longer;
+   the chunk cache makes every job after the first much cheaper.
+
 WHERE THE RESULTS GO
    Jobs from submit.sh    /glade/work/abuggee/era5_results/<domain>_<years>_<timestamp>/
    Direct on Casper       /glade/work/abuggee/era5_results/<domain>_<span>/<product>/

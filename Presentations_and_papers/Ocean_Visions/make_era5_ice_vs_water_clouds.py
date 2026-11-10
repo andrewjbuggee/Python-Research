@@ -78,6 +78,7 @@ from make_era5_hour_count_csvs import (
 
 import plot_lwp_histogram_by_surface_class as lwph  # noqa: E402
 from cloud_classification import fraction_phase_masks  # noqa: E402
+from cloud_temp_filter import SupercooledFilter, readme_note  # noqa: E402
 from seb_analysis_common import load_seb_data, resolve_region_dir  # noqa: E402
 from surface_classification import (  # noqa: E402
     CLASS_COLORS,
@@ -197,6 +198,11 @@ def accumulate(args: argparse.Namespace, seasons: list[int]) -> dict:
     print(f"  Reading {int(keep.sum()):,} hours; cell tally {acc.nbytes / 1e6:,.0f} MB", flush=True)
 
     read = ["tcc", "lcc", args.liquid_var, "tciw", "tp", "siconc"]
+    # Supercooled-only: every lc_* metric counts only liquid-containing
+    # cell-hours with cloud temperature < 0 C (sp: surface clip of the integral).
+    flt = SupercooledFilter(args, ds) if getattr(args, "supercooled_only", False) else None
+    if flt is not None:
+        read.append("sp")
     for i0, block in iter_time_blocks(ds, read, args.block_hours, keep_mask=keep):
         span = slice(i0, i0 + block.sizes["valid_time"])
         sel = keep[span]
@@ -221,6 +227,11 @@ def accumulate(args: argparse.Namespace, seasons: list[int]) -> dict:
             args.min_lwp, args.min_iwp,
         )
         liquid_containing = phase["liquid"] | phase["mixed"]
+        if flt is not None:
+            m = {"liquid_containing": liquid_containing}
+            flt.apply(np.asarray(times[span][sel]), block["sp"].values[sel], m,
+                      keys=("liquid_containing",))
+            liquid_containing = m["liquid_containing"]
         overcast = tcc >= args.min_cloud_fraction
         raining = np.isfinite(tp_mm_hr) & (tp_mm_hr >= args.precip_rate_max)
 
@@ -263,7 +274,10 @@ def accumulate(args: argparse.Namespace, seasons: list[int]) -> dict:
                     in_ym = (year_idx == ym[0]) & (period == ym[1])
                     acc[ym[0], ym[1], si, :, :, mi] += value[in_ym].sum(axis=0)
 
-    return {"hour_sum": hour_sum, "hour_n": hour_n, "acc": acc, "cnt": cnt, "cell_w": cell_w}
+    if flt is not None:
+        print(flt.report())
+    return {"hour_sum": hour_sum, "hour_n": hour_n, "acc": acc, "cnt": cnt, "cell_w": cell_w,
+            "supercooled": flt.summary() if flt is not None else None}
 
 
 # ----------------------------------------------------------------------------
@@ -489,7 +503,8 @@ def plot_figure(table: pd.DataFrame, thresholds: str, out_path: Path, region: st
 # ----------------------------------------------------------------------------
 # Write
 # ----------------------------------------------------------------------------
-def write_readme(out_dir: Path, span: str, weighting: str) -> None:
+def write_readme(out_dir: Path, span: str, weighting: str,
+                 supercooled: dict | None = None) -> None:
     words = "cos(latitude)" if weighting == "area" else "not weighted (each grid cell counts equally)"
     text = f"""ERA5 CLOUDS OVER OPEN WATER AND OVER SEA ICE, OCTOBER AND NOVEMBER
 ==================================================================
@@ -497,7 +512,7 @@ def write_readme(out_dir: Path, span: str, weighting: str) -> None:
 Generated {datetime.now(timezone.utc):%Y-%m-%d} by make_era5_ice_vs_water_clouds.py
 (repo {git_describe()}). Averages are {words}. Data, filters and phase are as in
 ../readME.txt. The method is in the script's docstring.
-
+{"" if supercooled is None else chr(10) + readme_note(supercooled) + "The lc_* rows (lc_any, lc_overcast, lc_noprecip, lc_kept) use it; the others do not." + chr(10)}
   ERA5_iceVsWater_{span}.csv
       one row per thresholds x period x metric:
         class_mean_water, class_mean_ice      hourly class means, each hour equal;
@@ -564,7 +579,7 @@ def main(argv: list[str] | None = None) -> None:
         table = build_table(R)
         out_dir.mkdir(parents=True, exist_ok=True)
         table.to_csv(out_dir / f"ERA5_iceVsWater_{span}.csv", index=False, float_format="%.4f")
-        write_readme(out_dir, span, opts.cell_weighting)
+        write_readme(out_dir, span, opts.cell_weighting, R.get("supercooled"))
 
         pd.set_option("display.width", 200)
         show = table[(table.thresholds == "project") & (table.period == "October")]

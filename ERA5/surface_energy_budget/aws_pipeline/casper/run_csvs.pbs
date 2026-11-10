@@ -13,6 +13,9 @@
 #   REGION_NAME  optional name for a box, used in the output folder
 #   YEARS        season START years, e.g. 2014-2024
 #   CELL_WEIGHTING  area | uniform; empty = the default in ov_config.py
+#   SUPERCOOLED_ONLY auto | on | off; empty = the default in ov_config.py (auto:
+#                   on with GDEX, so liquid-containing statistics keep only cloud
+#                   temperature < 0 C)
 #   OUTDIR       run folder; each script writes below it, via OV_RESULTS_ROOT
 set -euo pipefail
 
@@ -44,6 +47,7 @@ esac
 export OV_REPO_ROOT="$REPO_ROOT"
 export OV_RESULTS_ROOT="$OUTDIR"
 [ -n "${CELL_WEIGHTING:-}" ] && export OV_CELL_WEIGHTING="$CELL_WEIGHTING"
+[ -n "${SUPERCOOLED_ONLY:-}" ] && export OV_SUPERCOOLED_ONLY="$SUPERCOOLED_ONLY"
 
 echo "==== $(date -u +%Y-%m-%dT%H:%M:%SZ)  job ${PBS_JOBID:-interactive} ===="
 echo "host      : $(hostname)"

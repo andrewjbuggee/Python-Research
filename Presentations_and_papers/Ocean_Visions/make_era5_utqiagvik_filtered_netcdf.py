@@ -153,6 +153,10 @@ def build_args(overrides: dict) -> argparse.Namespace:
     the figures took.
     """
     args = lwph.parse_args([])
+    # supercooled_only is ours, not an lwph option (cloud_temp_filter.py reads
+    # it), so it is set directly rather than through the unknown-option check.
+    overrides = dict(overrides)
+    args.supercooled_only = bool(overrides.pop("supercooled_only", False))
     for k, v in overrides.items():
         if not hasattr(args, k):
             raise TypeError(f"unknown option {k!r}")
@@ -224,6 +228,9 @@ def read_site_cell(args: argparse.Namespace) -> tuple[xr.Dataset, dict]:
         "seasons_used": list(used),
         "cell_lat_deg": cell_lat_deg,
         "cell_lon_deg": cell_lon_deg,
+        # For the supercooled filter: the single-level grid and the cell's index.
+        "ds": ds,
+        "cell_index": (i_lat, j_lon),
     }
 
 
@@ -301,6 +308,33 @@ def git_describe() -> str:
         return "unknown"
 
 
+def apply_supercooled(cell: xr.Dataset, book: dict, m: dict,
+                      args: argparse.Namespace) -> dict:
+    """Drop liquid-containing hours whose cloud temperature is not < 0 C, in place.
+
+    Cloud temperature is the liquid-weighted mean of the column at this cell
+    (cloud_temp_filter.py). A dropped hour leaves the file entirely: it is not
+    a supercooled liquid-containing cloud, and relabelling it ice only would be
+    wrong. Ice-only hours are unchanged. Adds ``m["cloud_temp_C"]`` (every
+    in-window hour; NaN where not computed) and returns the filter's tallies.
+    """
+    from cloud_temp_filter import SupercooledFilter
+
+    flt = SupercooledFilter(args, book["ds"], cell=book["cell_index"])
+    times = cell["valid_time"].values
+    sp_pa = cell["sp"].values.astype(float)[:, None, None]       # (t, 1, 1) Pa
+    keys = ("liquid_containing", "liquid_only", "mixed")
+    masks = {k: m[k][:, None, None] for k in keys}               # the filter's (t, lat, lon)
+    t_C = flt.apply(times, sp_pa, masks, keys=keys)[:, 0, 0]
+    warm = m["liquid_containing"] & ~masks["liquid_containing"][:, 0, 0]
+    for k in keys:
+        m[k] = masks[k][:, 0, 0]
+    m["keep"] = m["keep"] & ~warm
+    m["cloud_temp_C"] = t_C
+    print(flt.report())
+    return flt.summary()
+
+
 def build_output(cell: xr.Dataset, book: dict, m: dict,
                  args: argparse.Namespace) -> xr.Dataset:
     """Kept hours only: every archive variable plus derived fields and labels."""
@@ -355,6 +389,15 @@ def build_output(cell: xr.Dataset, book: dict, m: dict,
             "comment": "1000 * tp; tp is the accumulation over the hour ending at valid_time",
         }),
     }
+    if "cloud_temp_C" in m:
+        derived["cloud_temperature_liquid_C"] = (m["cloud_temp_C"], {
+            "long_name": "liquid-water-path-weighted mean cloud temperature",
+            "units": "degC",
+            "comment": ("sum_l(clwc_l dp_l T_l) / sum_l(clwc_l dp_l) over the ERA5 pressure "
+                        "levels (dp_l clipped at the surface); computed for hours with "
+                        "liquid-containing cloud, NaN otherwise. Liquid-containing hours "
+                        "are kept only where it is < 0 degC"),
+        })
     for name, (arr, attrs) in derived.items():
         out[name] = ("valid_time", np.asarray(arr[k], dtype=np.float32))
         out[name].attrs = attrs
@@ -428,6 +471,11 @@ def build_output(cell: xr.Dataset, book: dict, m: dict,
                                 f"g m-2 (each species floored at its own minimum; "
                                 f"CWP of the floored paths > 0)"),
         "filter_3_no_precipitation": f"tp < {args.precip_rate_max:g} mm hr-1",
+        **({} if book.get("supercooled") is None else {
+            "filter_4_supercooled": (
+                "liquid-containing hours kept only if cloud_temperature_liquid_C < 0 degC "
+                "(hours with no pressure-level liquid are dropped too); "
+                f"{book['supercooled']['n_kept']} of {book['supercooled']['n_checked']} kept")}),
         "phase_liquid_containing": f"IWP/CWP < {args.ice_fraction_min:g}",
         "phase_liquid_only": f"LWP/CWP >= {args.liquid_fraction_min:g}",
         "phase_ice_only": f"IWP/CWP >= {args.ice_fraction_min:g}",
@@ -535,6 +583,11 @@ def main(argv: list[str] | None = None) -> None:
     cell, book = read_site_cell(args)
     book["source_text"] = run.source_text()
     m = classify(cell, args)
+    book["supercooled"] = (apply_supercooled(cell, book, m, args)
+                           if args.supercooled_only else None)
+    if opts.verify and args.supercooled_only:
+        raise SystemExit("--verify compares with the figures' pipeline, which has no "
+                         "supercooled filter; rerun with --supercooled-only off to verify")
     out = build_output(cell, book, m, args)
     print_summary(out, m)
 

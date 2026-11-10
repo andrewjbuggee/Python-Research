@@ -11,6 +11,7 @@
 #   ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --csvs all
 #   ./submit.sh --region arctic_circle --csvs hour_count,per_cell
 #   ./submit.sh --region arctic_circle --csvs per_cell --cell-weighting uniform
+#   ./submit.sh --region barrow --csvs all --supercooled-only off   # no cloud-temperature filter
 #
 # --project defaults to $PBS_ACCOUNT_CASPER, then $PBS_ACCOUNT, as in PRISM.
 # ERA5 is read in place from GDEX (d633000); nothing is downloaded.
@@ -30,7 +31,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # qsub itself is not documented to read PBS_ACCOUNT, so the code is passed with -A.
 PROJECT="${PBS_ACCOUNT_CASPER:-${PBS_ACCOUNT:-}}"; REGION="barrow"; YEARS="2014-2024"; SEASON="10-01:03-31"
 STAGES=""; ALL=0; NOTEBOOK=0; DRY=0; OUTDIR=""; EXTRA=""; CHAIN=1; CSVS=""; REGION_NAME=""
-CELL_WEIGHTING=""; MEM_OVERRIDE=""
+CELL_WEIGHTING=""; MEM_OVERRIDE=""; SUPERCOOLED_ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --project|-A) PROJECT="$2"; shift 2 ;;
@@ -39,6 +40,7 @@ while [ $# -gt 0 ]; do
     --region-name) REGION_NAME="$2"; shift 2 ;;
     --csvs)       CSVS="$2"; shift 2 ;;
     --cell-weighting) CELL_WEIGHTING="$2"; shift 2 ;;     # area (default) | uniform
+    --supercooled-only) SUPERCOOLED_ONLY="$2"; shift 2 ;; # auto (default: on here) | on | off
     --mem)        MEM_OVERRIDE="$2"; shift 2 ;;           # e.g. 32GB; replaces each job's default
     --years)      YEARS="$2"; shift 2 ;;
     --season)     SEASON="$2"; shift 2 ;;
@@ -201,7 +203,7 @@ if [ -n "$CSVS" ]; then
     dep=""
     [ "$CHAIN" = 1 ] && dep="$FIRST_ID"
     out="$(submit "ov_${product}" "$HERE/run_csvs.pbs" "$ncpus" "$mem" "$wall" \
-      "PRODUCT=$product,REGION=$(pbs_safe "$REGION"),REGION_NAME=$REGION_NAME,YEARS=$(pbs_safe "$YEARS"),CELL_WEIGHTING=$CELL_WEIGHTING,OUTDIR=$OUTDIR" "$dep")"
+      "PRODUCT=$product,REGION=$(pbs_safe "$REGION"),REGION_NAME=$REGION_NAME,YEARS=$(pbs_safe "$YEARS"),CELL_WEIGHTING=$CELL_WEIGHTING,SUPERCOOLED_ONLY=$SUPERCOOLED_ONLY,OUTDIR=$OUTDIR" "$dep")"
     echo "$out"
     if [ "$DRY" != 1 ]; then FIRST_ID="$(echo "$out" | tail -1 | tr -d '[:space:]')"; fi
   done

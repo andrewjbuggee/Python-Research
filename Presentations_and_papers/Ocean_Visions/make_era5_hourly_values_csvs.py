@@ -32,6 +32,9 @@ built from the netCDF script's SETTINGS (imported, not copied):
         tp < 0.05 mm hr-1, then the phase from the floored LWP/CWP
         (liquid containing IWP/CWP < 0.90; liquid only LWP/CWP >= 0.90;
         ice only IWP/CWP >= 0.90)
+        With the supercooled-only filter on (ov_config SUPERCOOLED_ONLY; the
+        default with GDEX/S3), liquid containing and liquid only also need a
+        liquid-weighted cloud temperature < 0 C (cloud_temp_filter.py).
     clear sky
         LWP and IWP both <= 0.01 g m-2, tcc < 0.05 (plot_dlr_by_phase's
         DEFAULT_CLEAR_TCC_MAX), tp < 0.05 mm hr-1
@@ -96,10 +99,16 @@ import pandas as pd
 
 # Figure settings and the module path setup live in the netCDF script.
 from make_era5_utqiagvik_filtered_netcdf import HERE, SETTINGS, build_args, git_describe
+from cloud_temp_filter import (  # noqa: E402  shared cloud-temperature code
+    PL_BLOCK_HOURS,
+    SupercooledFilter,
+    open_pressure_archive,
+    readme_note,
+    weighted_cloud_temperature,
+)
 
 import plot_lwp_histogram_by_surface_class as lwph  # noqa: E402
 from cloud_classification import fraction_phase_masks  # noqa: E402
-from convert_specific_to_absolute import G_M_S2, layer_thickness_pa  # noqa: E402
 from plot_dlr_by_phase import DEFAULT_CLEAR_TCC_MAX  # noqa: E402
 from plot_surface_class_timeseries import (  # noqa: E402
     season_layout,
@@ -108,7 +117,6 @@ from plot_surface_class_timeseries import (  # noqa: E402
     site_in_grid,
 )
 from seb_analysis_common import (  # noqa: E402
-    available_regions,
     load_seb_data,
     resolve_region_dir,
 )
@@ -143,65 +151,9 @@ FILES = {
 }
 QUANTS = sorted({(q, s) for cols in FILES.values() for q, s, _ in cols})
 
-# Pressure-level hours loaded at once: 23 levels x 2,501 cells x 3 fields.
-PL_BLOCK_HOURS = 48
-
-
-# ----------------------------------------------------------------------------
-# Cloud temperature from the pressure-level archive
-# ----------------------------------------------------------------------------
-def open_pressure_archive(args: argparse.Namespace, ds):
-    """The pressure-level dataset for the region, or None if there is none.
-
-    Same lookup as ``turbulent_flux_response.cloud_temperature_field``.
-    """
-    data_root = lwph.resolve_data_root(args.storage, args.data_root)
-    region_pl = f"{args.region}_pressure"
-    if region_pl not in available_regions(data_root):
-        print(f"  !! no pressure-level archive {region_pl}: CloudTemp will be blank")
-        return None
-    pds = load_seb_data(region_pl, None, None, data_root)
-    missing = sorted({"t", "clwc", "ciwc"} - set(pds.data_vars))
-    if missing:
-        raise KeyError(f"pressure archive is missing {missing}")
-    # Same 0.25 deg grid in the same order, or the cell-by-cell pairing below
-    # would silently mix columns.
-    for c in ("latitude", "longitude"):
-        if not np.array_equal(pds[c].values, ds[c].values):
-            raise ValueError(f"pressure and single-level {c} axes differ")
-    return pds
-
-
-def weighted_cloud_temperature(pds, pos: np.ndarray, sp_pa: np.ndarray) -> tuple:
-    """Liquid- and ice-weighted column temperature (deg C) for some hours.
-
-    ``pos`` indexes the pressure archive's time axis; ``sp_pa`` is the
-    surface pressure (Pa) of the same hours, ``(n, lat, lon)``. Returns
-    ``(t_liq_C, t_ice_C)``, each ``(n, lat, lon)``, NaN where the weighting
-    path is under CLOUD_T_MIN_LWP_G.
-    """
-    lv = pds["pressure_level"].values.astype(float)
-    order = np.argsort(lv)                                   # ascending pressure
-    p_pa = lv[order] * 100.0                                 # hPa -> Pa
-    blk = pds[["t", "clwc", "ciwc"]].isel(valid_time=pos).load()
-    dims = [d for d in blk["t"].dims if d != "pressure_level"]
-
-    def lev_last(name: str) -> np.ndarray:                   # (n, lat, lon, lev)
-        return blk[name].transpose(*dims, "pressure_level").values.astype(
-            np.float64)[..., order]
-
-    t_k = lev_last("t")
-    dp_pa = layer_thickness_pa(p_pa, sp_pa)                  # (n, lat, lon, lev)
-    out = []
-    for species in ("clwc", "ciwc"):
-        # Water path each level contributes, g m-2: q * dp / g * 1000.
-        wp_l = np.clip(lev_last(species), 0.0, None) * dp_pa / G_M_S2 * 1000.0
-        denom = wp_l.sum(axis=-1)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            t_mean = (wp_l * t_k).sum(axis=-1) / denom
-        t_mean[~(denom >= CLOUD_T_MIN_LWP_G)] = np.nan
-        out.append(t_mean - 273.15)                          # K -> deg C
-    return out[0], out[1]
+# Cloud temperature: open_pressure_archive, weighted_cloud_temperature and
+# PL_BLOCK_HOURS now live in cloud_temp_filter.py, shared with the
+# supercooled-only filter; imported above under the same names.
 
 
 # ----------------------------------------------------------------------------
@@ -233,6 +185,10 @@ def accumulate(args: argparse.Namespace) -> dict:
               f"be written", flush=True)
     pds = open_pressure_archive(args, ds)
     t_pl = pds["valid_time"].values if pds is not None else np.array([], "M8[ns]")
+    # Supercooled-only: liquid states keep only cloud temperature < 0 C. This
+    # script already computes that temperature (t_liq below, same code as the
+    # filter), so the filter is only used for its rule and its tallies.
+    flt = SupercooledFilter(args, ds) if getattr(args, "supercooled_only", False) else None
 
     # sums[(q, s)] and counts[(q, s)]: (hour, slot). n_state[s]: cells in state.
     sums = {k: np.zeros((n_hour, n_slot)) for k in QUANTS}
@@ -303,6 +259,14 @@ def accumulate(args: argparse.Namespace) -> dict:
             for j0 in range(0, hit.size, PL_BLOCK_HOURS):
                 h = hit[j0:j0 + PL_BLOCK_HOURS]
                 t_liq[h], t_ice[h] = weighted_cloud_temperature(pds, pos[h], sp_pa[h])
+        if flt is not None:
+            if not (t_pl.size and match.all()):
+                raise ValueError("the supercooled-only filter needs pressure-level data for "
+                                 "every hour; some hours have none")
+            # Removes warm (and undefined) cell-hours from liquid containing and
+            # liquid only, so every LWP, CloudTemp and DLR mean below uses only
+            # supercooled liquid-containing clouds.
+            flt.apply_temperature(t_liq, state)
         value = {
             "lwp": lwp_g_m2,
             "dlr": block["msdwlwrf"].values[keep],
@@ -327,12 +291,15 @@ def accumulate(args: argparse.Namespace) -> dict:
                 counts[(q, s)][rows, si] = sel.sum(axis=(1, 2))
 
     print(f"  pressure-level data matched {n_pl_hours:,} of {n_hour:,} hours")
+    if flt is not None:
+        print(flt.report())
     return {"sums": sums, "wsums": wsums, "cell_weighting": args.cell_weighting,
             "counts": counts, "n_state": n_state,
             "time": times[use_step], "seasons": list(used),
             "season_of_hour": np.asarray(layout["seasons"])[s_idx[use_step]],
             "n_pl_hours": n_pl_hours, "pl_matched": pl_matched, "site_lat": site_lat, "site_lon": site_lon,
-            "has_site": has_site}
+            "has_site": has_site,
+            "supercooled": flt.summary() if flt is not None else None}
 
 
 # ----------------------------------------------------------------------------
@@ -362,8 +329,10 @@ def write_all(R: dict, out_dir: Path) -> list[Path]:
             df = pd.DataFrame({"date": dates})
             for q, s, col in cols:
                 df[col] = hourly_mean(R, q, s, si)
-            path = out_dir / ov.weighted_names(f"ERA5_{fname}_perHour_{span}_{name}.csv",
-                                               R["cell_weighting"])
+            # No "_areaWeighted_" in the file name: the folder name
+            # (era5_hourly_values_csv_areaWeighted) already says so, and the
+            # names were getting long.
+            path = out_dir / f"ERA5_{fname}_perHour_{span}_{name}.csv"
             df.to_csv(path, index=False, float_format="%.2f")   # template: 2 dp
             written.append(path)
         cnt = pd.DataFrame({"date": dates})
@@ -459,6 +428,7 @@ Companion to ../era5_hour_count_csv/readME.txt, which describes the ERA5
 data, the filters, the surface classes and the plot colours. The hours and
 cloud types here are the same ones counted there.
 
+{readme_note(R.get("supercooled"))}
 
 1. LAYOUT
 ---------
@@ -535,7 +505,8 @@ cell_counts/. OpenOcean has no cells at all in most mid-winter hours, so its
 Dec-Mar columns are mostly blank.
 """
     path = out_dir / "readME.txt"
-    path.write_text(ov.weighted_names(text, R["cell_weighting"]))
+    # Written as is: the file names carry no weighting tag (the folder does).
+    path.write_text(text)
     return path
 
 

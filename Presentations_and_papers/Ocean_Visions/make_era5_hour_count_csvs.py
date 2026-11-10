@@ -25,7 +25,9 @@ THE FILTER
 ==========
 Identical to ``make_era5_utqiagvik_filtered_netcdf.py``, whose ``SETTINGS``
 are imported rather than copied: overcast (tcc >= 0.95), cloud water above
-the 0.01 g m-2 floors, not precipitating (tp < 0.05 mm hr-1), 1 Oct - 31 Mar
+the 0.01 g m-2 floors, not precipitating (tp < 0.05 mm hr-1), [with the
+supercooled-only filter on -- the default with GDEX/S3, see cloud_temp_filter.py
+-- liquid containing and liquid only also need cloud temperature < 0 C], 1 Oct - 31 Mar
 of 2014/15 .. 2024/25. Phase from the floored liquid share LWP/CWP:
 liquid containing IWP/CWP < 0.90, liquid only LWP/CWP >= 0.90, ice only
 IWP/CWP >= 0.90.
@@ -92,6 +94,7 @@ from matplotlib.colors import to_hex, to_rgb
 # The netCDF script holds the figure settings and puts the analysis modules on
 # sys.path; importing it is what keeps the two products on one definition.
 from make_era5_utqiagvik_filtered_netcdf import SETTINGS, build_args, git_describe
+from cloud_temp_filter import SupercooledFilter, readme_note  # noqa: E402
 
 import plot_lwp_histogram_by_surface_class as lwph  # noqa: E402
 from cloud_classification import fraction_phase_masks  # noqa: E402
@@ -229,6 +232,12 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
     SCRATCH = n_slot                                   # unclassified
 
     read_vars = ["tcc", args.liquid_var, "tciw", "tp", "siconc"]
+    # Supercooled-only (ov_config SUPERCOOLED_ONLY): liquid containing and
+    # liquid only keep only cloud temperature < 0 C. sp clips the lowest
+    # pressure level at the ground in the cloud-temperature integral.
+    flt = SupercooledFilter(args, ds) if getattr(args, "supercooled_only", False) else None
+    if flt is not None:
+        read_vars.append("sp")
     print(f"  Streaming {int(use_step.sum()):,} hours x "
           f"{ds.sizes['latitude']} x {ds.sizes['longitude']} cells ...", flush=True)
     for i0, block in iter_time_blocks(ds, read_vars, args.block_hours,
@@ -270,6 +279,11 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
             "overcast_no_condensate": (valid & (tcc >= args.min_cloud_fraction)
                                        & (f["cwp_g"] == 0.0) & ~raining),
         }
+        if flt is not None:
+            # In place on masks["liquid_containing"] and masks["liquid_only"];
+            # every table below (counts, per-cell, precip, cumulative) then
+            # holds supercooled liquid-containing clouds only.
+            flt.apply(times[sl][keep], block["sp"].values[keep], masks)
 
         # --- accumulate: one bincount per category over (day, slot) --------
         # Flat index day * (n_slot + 1) + slot over every cell-hour.
@@ -299,6 +313,8 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
 
     if n_unclassified:
         print(f"  !! {n_unclassified:,} unclassified cell-hours (not in any class)")
+    if flt is not None:
+        print(flt.report())
     months = dates.astype("datetime64[M]").astype(int) % 12 + 1
     # The daily table must be exactly the hourly one summed by day.
     hour_day = day_of_step[use_step]
@@ -313,7 +329,8 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
             "day_month": months, "seasons": list(used),
             "keep_idx": list(keep_idx), "n_unclassified": n_unclassified,
             "site_lat": site_lat, "site_lon": site_lon, "has_site": has_site,
-            "grid": (ds.sizes["latitude"], ds.sizes["longitude"])}
+            "grid": (ds.sizes["latitude"], ds.sizes["longitude"]),
+            "supercooled": flt.summary() if flt is not None else None}
 
 
 # ----------------------------------------------------------------------------
@@ -587,6 +604,12 @@ shown in figures 1, 2 or 4."""
     else:
         figures_text = """Figures 1, 2 and 4 of the research update use the ARM cell, which is outside
 this domain. The thresholds here are the same as theirs."""
+    # Only when the filter is on, so an unfiltered readME (the Barrow
+    # baseline included) is word for word what it was.
+    supercooled_text = ("" if C.get("supercooled") is None else
+                        "\n\nWith the supercooled filter on, the dropped liquid-containing cell-hours are\n"
+                        "in neither category, so that sentence no longer holds.\n\n"
+                        + readme_note(C["supercooled"]).rstrip("\n"))
     text = f"""{title}
 =============================================================
 
@@ -633,7 +656,7 @@ Each counted hour is then labelled by the share of CWP that is liquid or ice
   ice only           IWP/CWP >= {args.ice_fraction_min:.2f}
 
 Liquid containing and ice only together make up every counted hour; mixed
-phase = liquid containing - liquid only.
+phase = liquid containing - liquid only.{supercooled_text}
 
 
 3. SURFACE CLASSES
@@ -732,6 +755,9 @@ def main(argv: list[str] | None = None) -> None:
     print("=" * 72)
     C = count_cell_hours(args)
     self_checks(C)
+    if opts.verify and run.supercooled_only:
+        raise SystemExit("--verify compares with lwph.prepare, which has no supercooled "
+                         "filter; rerun with --supercooled-only off to verify")
     if opts.verify:
         verify_against_module(C, args)
 
