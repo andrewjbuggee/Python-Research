@@ -48,9 +48,12 @@ Method
    altitudes from sampled (z_top, z_base). alpha is broadcast as a scalar.
 6. Derive per-sample LWP and tau_c from the re + lwc profile:
        LWP[g/m²] = 1000 · ∫ LWC dz   (LWC g/m³, dz km)
-       tau_c     = 1500 · ∫ LWC / r_e dz   (LWC g/m³, r_e μm, dz km)
-   These are physically self-consistent with the sampled re + lwc; they
-   are NOT independently sampled.
+       tau_c     = 750 · ∫ Q̄_ext(r_e, α) · LWC / r_e dz   at 550 nm
+                   (LWC g/m³, r_e μm, dz km; Hansen & Travis 1974 eqs. 2.48,
+                   2.53, 2.58), with Q̄_ext from the libRadtran custom Mie
+                   table nearest the draw's α. Both by trapezoid over the levels.
+   These are physically self-consistent with the sampled re + lwc + alpha;
+   they are NOT independently sampled.
 7. Save to .npz; write a 3 x 3 diagnostic figure at DPI 500.
 
 Profile orientation throughout: index 0 = cloud top, index -1 = cloud base.
@@ -85,7 +88,9 @@ TAU_C_MAX        = 40.0         # ... and ≤ this. Both limits apply twice: to 
 
 # Which optical thickness the TAU_C_MIN / TAU_C_MAX filter uses (consolidated input only):
 #   'stored'   - max of the in-situ tau profile, as recorded by the campaign code
-#   'computed' - recomputed from the measured r_e and LWC with QEXT_EFF
+#   'computed' - recomputed in build_synthetic_profile_inputs_from_insitu_and_ERA5.m
+#                from the measured r_e and LWC with the OLD constant Q_ext = 2.32
+#                (not the Mie Q̄_ext now used for the synthetic draws)
 # A handful of stored ORACLES tau profiles are corrupt (τ ~ 1e-4 for clouds with
 # LWP > 50 g/m²); 'computed' rescues those but runs ~20% lower than 'stored' on
 # the profiles where both are sound, so don't mix the two within one run.
@@ -102,8 +107,16 @@ K_VAPOR_MAX      = 20            # hard cap on number of ERA5 vapor-concentratio
 
 LWC_EPS          = 1e-3         # g/m³ floor for log(lwc + eps); below typical in-cloud LWC
 VAPOR_EPS        = 1.0          # molec/cm³ floor for log(vapor + eps)
-QEXT_EFF         = 2.32         # bulk Mie extinction efficiency for τ_c calc
-                                # (calibrated to libRadtran's reported τ; see compute_tau_c)
+# τ_c of every synthetic draw uses the size-distribution-averaged Mie
+# extinction efficiency Q̄_ext(r_e, α) at TAU_WAVELENGTH_UM, read from the same
+# libRadtran custom Mie tables the synthetic RT uses (see compute_tau_c).
+# The 1–50 μm tables match hysics_refl_from_synthetic_NN_inputs.m
+# (use_35_or_50 = 50); where they overlap, the 1–35 μm tables hold identical values.
+MIE_TABLE_DIR         = Path('/Users/andrewbuggee/Documents/libRadtran-2.0.6/'
+                             'data/wc/custom_mieTables')
+MIE_TABLE_REFF_MAX_UM = 50      # which table family: 35 or 50 (μm upper r_e limit)
+TAU_WAVELENGTH_UM     = 0.55    # wavelength τ_c is defined at (μm); 550 nm as in
+                                # find_verticalProfiles_VOCALS_REx_ver2.m
 RANDOM_SEED      = 0
 
 RUN_DATE         = datetime.date.today().strftime('%Y-%m-%d')
@@ -184,26 +197,134 @@ def compute_lwp(lwc_top_to_base, z_top_to_base):
     return 1000.0 * abs(np.trapezoid(lwc_top_to_base, z_top_to_base))
 
 
-def compute_tau_c(re_top_to_base, lwc_top_to_base, z_top_to_base,
-                  qext_eff=QEXT_EFF):
-    """Layer-integrated cloud optical depth from re (μm), LWC (g/m³), z (km).
+def load_mie_ext_tables(table_dir: Path, reff_max_um: int,
+                        wavelength_um: float) -> tuple[np.ndarray, dict]:
+    """Read ext(r_e) at one wavelength from every libRadtran custom Mie table.
 
-    Exact form, with Q_ext the bulk Mie extinction efficiency averaged over the
-    droplet size distribution at the wavelength libRadtran reports cloud
-    optical depth at:
+    The tables were made with libRadtran's Mie tool for its gamma size
+    distribution, n(r) ∝ r^α · exp(−(α+3) r / r_e). That is Hansen & Travis
+    (1974) eq. (2.56) with a = r_eff and b = v_eff = 1/(α+3), since
+    (1 − 3b)/b = α (H&T eq. 2.57). There is one file per α:
+        wc_mieTable_gamma_rEff_1-<reff_max_um>microns_gammaDist_alpha_<α:03d>.cdf
 
-        dτ = (3/2) · Q_ext · LWC[kg/m³] · dz[m] / (ρ_w[kg/m³] · r_e[m])
-           = (750 · Q_ext) · LWC[g/m³] · dz[km] / r_e[μm]   (mixed units)
+    The variable 'ext' (nlam, nreff) is the extinction coefficient per unit
+    liquid water content, β/LWC, in km⁻¹ / (g m⁻³). The files are netCDF-4
+    (HDF5), so h5py reads them; no netCDF4 dependency is needed.
 
-    The geometric-optics limit Q_ext = 2 (Hansen & Travis, 1974) underestimates
-    the Mie-computed τ for typical cloud droplet sizes by ~10–20%. The default
-    QEXT_EFF = 2.32 is calibrated against libRadtran's reported τ on synthetic
-    ORACLES profiles (cloud 1: HT predicts 6.25, libRadtran reports 7.25 →
-    ratio 1.16 ⇒ Q_ext_eff = 2 · 1.16 = 2.32). Override per call if needed.
+    Returns
+    -------
+    alphas : (n_tables,) sorted α values for which a table exists
+    tables : {α: (reff_um (nreff,), ext_per_lwc (nreff,))} with ext already
+             interpolated (linearly) to `wavelength_um`
     """
-    integrand = lwc_top_to_base / np.maximum(re_top_to_base, 1e-6)
-    factor = 750.0 * qext_eff           # qext_eff = 2 → 1500 (Hansen-Travis)
-    return factor * abs(np.trapezoid(integrand, z_top_to_base))
+    import h5py   # in requirements.txt; imported here so a missing install
+                  # fails only when the tables are actually needed
+
+    pattern = f'wc_mieTable_gamma_rEff_1-{reff_max_um}microns_gammaDist_alpha_*.cdf'
+    files = sorted(f for f in table_dir.glob(pattern) if not f.name.startswith('._'))
+    if not files:
+        raise SystemExit(f'No Mie tables matching {pattern} in {table_dir}')
+
+    tables = {}
+    for f in files:
+        alpha = int(f.stem.rsplit('_', 1)[-1])          # '..._alpha_007' -> 7
+        with h5py.File(f, 'r') as ds:
+            wl_um   = ds['wavelen'][:].astype(np.float64)        # (nlam,) μm
+            reff_um = ds['reff'][:].astype(np.float64)           # (nreff,) μm
+            ext     = ds['ext'][:].astype(np.float64)            # (nlam, nreff)
+        if not (wl_um[0] <= wavelength_um <= wl_um[-1]):
+            raise SystemExit(f'{f.name}: {wavelength_um} μm is outside the table '
+                             f'wavelengths [{wl_um[0]}, {wl_um[-1]}] μm')
+        # Linear interpolation in wavelength for every r_e column:
+        # (nlam, nreff) -> (nreff,). 0.55 μm is a grid point of these tables,
+        # so at the default wavelength this is an exact lookup.
+        ext_wl = np.array([np.interp(wavelength_um, wl_um, ext[:, j])
+                           for j in range(reff_um.size)])
+        tables[alpha] = (reff_um, ext_wl)
+
+    alphas = np.array(sorted(tables), dtype=np.float64)
+    return alphas, tables
+
+
+def nearest_mie_alpha(alpha):
+    """α of the Mie table closest to `alpha` (scalar or array).
+
+    Same rule as find_custom_mieTable_closest_to_alpha_profile.m, which picks
+    the table libRadtran uses for each synthetic cloud in
+    hysics_refl_from_synthetic_NN_inputs.m.
+    """
+    alpha = np.asarray(alpha, dtype=np.float64)
+    idx = np.argmin(np.abs(alpha[..., None] - MIE_ALPHAS), axis=-1)
+    return MIE_ALPHAS[idx].astype(int)
+
+
+def compute_tau_c(re_top_to_base, lwc_top_to_base, z_top_to_base, alpha):
+    """Cloud optical depth at TAU_WAVELENGTH_UM from r_e (μm), LWC (g/m³), z (km).
+
+    Physics (Hansen & Travis 1974, Space Sci. Rev. 16, 527–610):
+
+      Extinction coefficient of a polydispersion, eq. (2.48):
+          β = ∫ π r² Q_ext(r) n(r) dr
+      Effective radius, eq. (2.53), and the size-distribution-averaged
+      efficiency, eq. (2.58) (written there for scattering; identical form):
+          r_e = ⟨r³⟩/⟨r²⟩,   Q̄_ext = β / G,   G = ∫ π r² n(r) dr
+      With LWC = ρ_w (4/3) π ⟨r³⟩ N, these give EXACTLY
+          β = (3/4) · Q̄_ext(r_e, α, λ) · LWC / (ρ_w · r_e)
+      i.e. in mixed units  β [km⁻¹] = 750 · Q̄_ext · LWC[g m⁻³] / r_e[μm].
+      This pairs Q̄_ext with LWC/r_e (∝ G), which is where H&T define it. The
+      only assumption is that n(r) is libRadtran's gamma with this α.
+
+      The Mie tables store ext = β/LWC = 750 · Q̄_ext / r_e, so
+          β(z) = ext(r_e(z); α, λ) · LWC(z)
+      with ext linearly interpolated in r_e (libRadtran's 'interpolate' does
+      the same; checked against uvspec's verbose per-layer τ to 1e-4 in
+      Testing/test_wc_geometry_optical_depth.m).
+
+      τ_c = ∫ β dz, by the trapezoid rule over the profile levels, i.e. over
+      z_base … z_top. This is the cloud the profile and the LWP describe.
+
+    This replaces the old constant Q_ext = 2.32. At 550 nm Q̄_ext is 2.06–2.23
+    for these clouds (median ≈ 2.11), so the constant overstated τ by ≈ 10%.
+    The remaining ~2.32/2.11 came from the libRadtran wc_file geometry
+    (write_wc_file_from_in_situ.m places the top level's values in a layer
+    above z_top), which is a property of the RT input, not of the cloud.
+
+    Parameters
+    ----------
+    re_top_to_base, lwc_top_to_base, z_top_to_base : (n_levels,) arrays
+    alpha : scalar gamma shape parameter of this profile; the table with the
+            nearest α is used
+
+    Returns
+    -------
+    τ_c (float), dimensionless, at TAU_WAVELENGTH_UM
+    """
+    re_um = np.asarray(re_top_to_base, dtype=np.float64)
+    reff_tab_um, ext_tab = MIE_TABLES[int(nearest_mie_alpha(alpha))]
+
+    # np.interp clamps silently outside the table; refuse instead, since
+    # libRadtran would also fail on these
+    if re_um.min() < reff_tab_um[0] or re_um.max() > reff_tab_um[-1]:
+        raise ValueError(f'r_e range [{re_um.min():.2f}, {re_um.max():.2f}] μm is '
+                         f'outside the Mie table [{reff_tab_um[0]}, {reff_tab_um[-1]}] μm')
+
+    beta_per_km = np.interp(re_um, reff_tab_um, ext_tab) * lwc_top_to_base   # (n_levels,) km⁻¹
+    return float(abs(np.trapezoid(beta_per_km, z_top_to_base)))
+
+
+def compute_qbar_ext(re_um, alpha):
+    """Q̄_ext(r_e, α) at TAU_WAVELENGTH_UM, from ext = 750 · Q̄_ext / r_e. For diagnostics."""
+    reff_tab_um, ext_tab = MIE_TABLES[int(nearest_mie_alpha(alpha))]
+    re_um = np.asarray(re_um, dtype=np.float64)
+    return np.interp(re_um, reff_tab_um, ext_tab) * re_um / 750.0
+
+
+# Load the Mie tables once; compute_tau_c reads them from these globals
+MIE_ALPHAS, MIE_TABLES = load_mie_ext_tables(MIE_TABLE_DIR, MIE_TABLE_REFF_MAX_UM,
+                                             TAU_WAVELENGTH_UM)
+print(f'Mie tables: {len(MIE_ALPHAS)} α values '
+      f'[{MIE_ALPHAS.min():g} … {MIE_ALPHAS.max():g}] from {MIE_TABLE_DIR}, '
+      f'τ at {TAU_WAVELENGTH_UM} μm')
 
 
 # ── Input loading ──────────────────────────────────────────────────────────────
@@ -705,7 +826,8 @@ def reconstruct_batch(samples_batch):
     tau_c = np.empty(n, dtype=np.float32)
     for i in range(n):
         lwp[i]   = compute_lwp(lwc_out[i],            z_out[i])
-        tau_c[i] = compute_tau_c(re_out[i], lwc_out[i], z_out[i])
+        # Mie τ with the table nearest this draw's α (same α libRadtran gets)
+        tau_c[i] = compute_tau_c(re_out[i], lwc_out[i], z_out[i], new_alpha[i])
 
     return {
         're':         re_out,
@@ -861,6 +983,11 @@ np.savez_compressed(
     TAU_C_MIN        = np.float32(TAU_C_MIN),
     TAU_C_MAX        = np.float32(TAU_C_MAX),
     n_train_profiles = np.int32(n_train),
+    # How tau_c was computed (Mie Q̄_ext(r_e, α), trapezoid over the levels)
+    tau_c_method     = np.array('mie_qbar_trapz'),
+    tau_wavelength_um = np.float32(TAU_WAVELENGTH_UM),
+    mie_alpha_table  = nearest_mie_alpha(new_alpha).astype(np.int32),   # (N,) α of the table used
+    mie_table_dir    = np.array(str(MIE_TABLE_DIR)),
 )
 print(f'\nSaved → {OUT_PATH}  ({OUT_PATH.stat().st_size / 1e6:.1f} MB)')
 
