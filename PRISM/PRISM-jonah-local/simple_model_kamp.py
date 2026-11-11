@@ -42,12 +42,22 @@ T0 = 288.15  # Surface temperature [K]  (~15 C)
 # == Temperature-dependent earth albedo =======================================
 # Budyko-style linear ice-albedo parameterization, alpha_earth(T) = A - B*T, with T the
 # atmospheric temperature in kelvin. Clipped to an ice-free floor and a snowball ceiling.
-ALBEDO_A = 1.82  # intercept [-]
-ALBEDO_B = 0.00526  # slope [1/K]
+# ALBEDO_A = 1.82  # intercept [-]
+# ALBEDO_B = 0.00526  # slope [1/K]
+
+# Trying to match AR6 surface-albedo feedback parameter of 0.35 W/m2/K
+# ALBEDO_A = 0.603  # intercept [-]  # new value to match AR6 surface-albedo feedback parameter of 0.35 W/m2/K
+# ALBEDO_A = 0.599  # intercept [-]  # tuning for an initial surface albedo of 0.295
+# ALBEDO_B = 0.00105 # slope [1/K]  # new value to match AR6 surface-albedo feedback parameter of 0.35 W/m2/K
+ALBEDO_A = 1.0167  # intercept [-]  # tuning for an initial surface albedo of 0.295
+ALBEDO_B = 0.0025 # slope [1/K]  # new value to match AR6 surface-albedo feedback parameter of 0.35 W/m2/K
 ALBEDO_MIN = 0.15  # ice-free lower bound
 ALBEDO_MAX = 0.65  # snowball upper bound
 
 
+# Where is this temperature dependent Earth albedo from? Is it from a paper or a model?
+# Ok, it comes trom Budyko's 1969 paper. But does it represent a globally averaged albedo? Or is it a local albedo for the Arctic and Antarctic region?
+# Seems like the ice-albedo feedback is too strong under Budyko's parameterization. 
 def alpha_earth(T):
     """Temperature-dependent earth albedo [-] (surface + non-SAI atmosphere)."""
     return np.clip(ALBEDO_A - ALBEDO_B * np.asarray(T, dtype=float), ALBEDO_MIN, ALBEDO_MAX)[()]
@@ -449,6 +459,9 @@ def simple_model_annual_fields(
                      include F_OCEAN), the same basis as J04's CESM2 OHC
         ts_K         model atmospheric temperature T_a, the model's only near-surface temperature
         alpha_sai    SAI-layer albedo [-], zero without SAI
+        alpha_earth  temperature-dependent earth albedo alpha_earth(T_a) [-] (surface + non-SAI
+                     atmosphere; Budyko-style linear fit, see alpha_earth()). Excludes the SAI layer;
+                     the total system albedo with SAI is alpha_net(T_a, alpha_sai).
     """
     # Monthly output, matching J04's monthly CESM2 cumulative sum
     n_months = 12 * (end_year - start_year)
@@ -489,4 +502,6 @@ def simple_model_annual_fields(
         "ohc_J_m2": annual_mean(ohc_J_m2),
         "ts_K": annual_mean(ta_K),
         "alpha_sai": annual_mean(alpha_sai),
+        # Evaluated on the monthly T_a, then annually averaged like every other field
+        "alpha_earth": annual_mean(alpha_earth(ta_K)),
     }
