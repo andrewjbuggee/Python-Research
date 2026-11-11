@@ -879,7 +879,7 @@ if __name__ == "__main__":
     fig.legend(
         handles=[
             Line2D([], [], color="black", linestyle="-", linewidth=2.5, label="CESM2"),
-            Line2D([], [], color="black", linestyle=":", linewidth=2.5, label=f"Simple model ({SIMPLE_MODEL_SCENARIO}; ARISE-SAI column: {SAI_CONTROLLER} controller)"),
+            Line2D([], [], color="black", linestyle=":", linewidth=2.5, label=f"Three Layer model ({SIMPLE_MODEL_SCENARIO}; ARISE-SAI column: {SAI_CONTROLLER} controller)"),
         ],
         loc="upper center", bbox_to_anchor=(0.5, 0.97), ncol=2, frameon=False, fontsize=14,
     )
