@@ -148,13 +148,14 @@ OUTLIERS = (
 
 L_COMMON         = 80           # length of the common normalized-altitude grid (≥ 60)
 N_FIXED_LEVELS   = 7            # every synthetic profile is on this fixed grid
-N_SAMPLES        = 1000
+N_SAMPLES        = 100000
 
-VAR_TARGET       = 0.99         # cumulative variance target for picking K_RE, K_LWC, K_T, K_VAPOR
-K_RE_MAX         = 12           # hard cap on number of re modes kept
-K_LWC_MAX        = 12           # hard cap on number of lwc modes kept
-K_T_MAX          = 20            # hard cap on number of ERA5 temperature modes kept
-K_VAPOR_MAX      = 20            # hard cap on number of ERA5 vapor-concentration modes kept
+# Set var_target = 1.0 to keep exactly K_RE_MAX / K_LWC_MAX modes
+VAR_TARGET       = 1.0          # cumulative variance target for picking K_RE, K_LWC, K_T, K_VAPOR
+K_RE_MAX         = 3             # hard cap on number of re modes kept
+K_LWC_MAX        = 5             # hard cap on number of lwc modes kept
+K_T_MAX          = 10            # hard cap on number of ERA5 temperature modes kept
+K_VAPOR_MAX      = 8            # hard cap on number of ERA5 vapor-concentration modes kept
 
 LWC_EPS          = 1e-3         # g/m³ floor for log(lwc + eps); below typical in-cloud LWC
 VAPOR_EPS        = 1.0          # molec/cm³ floor for log(vapor + eps)

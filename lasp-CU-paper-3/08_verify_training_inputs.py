@@ -7,20 +7,47 @@ Reads the .nc and produces three paper-quality figures:
   Fig 2 (2x3)  — bulk cloud scalars: alpha, tau_c, LWP, z_top, z_base, thickness
   Fig 3 (2x2)  — per-level envelopes (5/50/95): r_e(z), LWC(z), T(P), vapor(P)
 
-Also prints a one-screen summary of every variable so unexpected values jump out.
+Also prints a one-screen summary of every variable so unexpected values jump out,
+and runs the checks the MATLAB driver (hysics_refl_from_synthetic_NN_inputs.m)
+depends on. The script exits with status 1 if a check fails, so it can gate a
+SLURM submission:  python 08_verify_training_inputs.py <file.nc> && sbatch ...
+
+Usage
+    python 08_verify_training_inputs.py                 # newest training_inputs_*.nc
+    python 08_verify_training_inputs.py path/to/file.nc
+
+Changes on 12 Nov 2026: NC path from the command line (default = newest file),
+figure names carry the .nc stem so runs never overwrite each other, driver
+pre-flight checks, a Mie-table α panel, and no blocking plt.show().
 """
 
-import numpy as np
-import netCDF4 as nc
-import matplotlib.pyplot as plt
+import sys
 from pathlib import Path
+
+import matplotlib
+
+matplotlib.use('Agg')            # write files only; never open windows
+import matplotlib.pyplot as plt  # noqa: E402
+import netCDF4 as nc             # noqa: E402
+import numpy as np               # noqa: E402
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-SCRIPT_DIR  = Path(__file__).parent
-NC_PATH     = SCRIPT_DIR / 'training_inputs' / 'training_inputs_jointMVN_N300001_L7.nc'
-OUT_DIR     = NC_PATH.parent
-FIG_DPI     = 500
+SCRIPT_DIR = Path(__file__).parent
+IN_DIR = SCRIPT_DIR / 'training_inputs'
+if len(sys.argv) > 1:
+    NC_PATH = Path(sys.argv[1])
+else:
+    # newest training-inputs file by modification time
+    NC_PATH = max(IN_DIR.glob('training_inputs_*.nc'), key=lambda f: f.stat().st_mtime)
+OUT_DIR = NC_PATH.parent
+FIG_TAG = NC_PATH.stem.replace('training_inputs_', '')   # e.g. jointMVN_N100000_L7_2026-11-12
+FIG_DPI = 500
+
+# Limits the MATLAB driver / libRadtran set-up depends on (same as 07).
+RE_MIN_UM, RE_MAX_UM = 0.1, 50.0
+ALPHA_RANGE = (1.0, 150.0)
+SZA_MAX_DEG = 50.0
 
 
 def setup_style():
@@ -46,6 +73,7 @@ setup_style()
 # ── Load ──────────────────────────────────────────────────────────────────────
 print(f'Reading {NC_PATH}')
 with nc.Dataset(NC_PATH, 'r') as ds:
+    ds.set_auto_mask(False)    # plain ndarrays (07 writes no fill values)
     re_um         = ds.variables['re_um'][:]                  # (N, 7) μm
     lwc_g         = ds.variables['lwc_g_per_m3'][:]           # (N, 7) g/m³
     z_km          = ds.variables['z_km'][:]                   # (N, 7) km
@@ -59,6 +87,9 @@ with nc.Dataset(NC_PATH, 'r') as ds:
     T_K           = ds.variables['T_K'][:]                    # (N, 37)
     vapor         = ds.variables['vapor_molec_per_cm3'][:]    # (N, 37)
     pressure_hPa  = ds.variables['pressure_hPa'][:]           # (37,)
+    mie_alpha_tab = (ds.variables['mie_alpha_table'][:]       # (N,) α of Mie table
+                     if 'mie_alpha_table' in ds.variables else None)
+    attrs = {k: ds.getncattr(k) for k in ds.ncattrs()}
     n_cloud, n_lev_cld = re_um.shape
     n_lev_atm = T_K.shape[1]
 
@@ -92,6 +123,44 @@ stats('vaz',        vaz,       'deg')
 stats('T',          T_K,       'K')
 stats('vapor',      vapor,     'molec/cm³')
 
+print('\nGlobal attributes:')
+for k in ('source_npz', 'source_insitu_mat', 'K_re', 'K_lwc', 'K_T', 'K_vapor',
+          'tau_c_method', 'geometry_random_seed', 'date_created'):
+    if k in attrs:
+        print(f'  {k:>22} = {attrs[k]}')
+
+
+# ── Pre-flight checks for the MATLAB driver ───────────────────────────────────
+# Hard failures stop a SLURM job from being submitted; warnings are listed with
+# their 1-based cloud index (the idx the MATLAB driver takes).
+def _ids(mask):
+    ids = (np.flatnonzero(mask)[:10] + 1).tolist()
+    return f'  (MATLAB idx: {ids}{" …" if mask.sum() > 10 else ""})' if mask.any() else ''
+
+re_np, lwc_np, z_np = (np.asarray(a, dtype=np.float64) for a in (re_um, lwc_g, z_km))
+hard = {
+    'masked/non-finite values': ~(np.isfinite(re_np).all(1) & np.isfinite(lwc_np).all(1)
+                                  & np.isfinite(z_np).all(1)
+                                  & np.isfinite(np.asarray(T_K)).all(1)
+                                  & np.isfinite(np.asarray(vapor)).all(1)),
+    f'r_e >= {RE_MAX_UM} μm': (re_np >= RE_MAX_UM).any(1),
+    'z not strictly decreasing (top → base)': ~(np.diff(z_np, axis=1) < 0).all(1),
+    f'alpha outside {ALPHA_RANGE}': (np.asarray(alpha) < ALPHA_RANGE[0])
+                                    | (np.asarray(alpha) > ALPHA_RANGE[1]),
+    f'SZA outside [0, {SZA_MAX_DEG})': (np.asarray(sza) < 0) | (np.asarray(sza) >= SZA_MAX_DEG),
+}
+soft = {
+    f'r_e <= {RE_MIN_UM} μm at a level': (re_np <= RE_MIN_UM).any(1),
+    'LWC <= 0 at a level': (lwc_np <= 0).any(1),
+}
+print('\nPre-flight checks:')
+n_hard = 0
+for label, m in hard.items():
+    print(f'  {"FAIL" if m.any() else "ok  "}  {label}: {int(m.sum())}{_ids(m)}')
+    n_hard += int(m.sum())
+for label, m in soft.items():
+    print(f'  {"WARN" if m.any() else "ok  "}  {label}: {int(m.sum())}{_ids(m)}')
+
 
 # ── Figure 1: geometry histograms (2 x 2) ─────────────────────────────────────
 fig, axes = plt.subplots(2, 2, figsize=(11, 8))
@@ -121,13 +190,13 @@ hist_panel(axes[1, 1], vaz, 'VAZ (deg)',
 
 fig.suptitle('Geometry distributions sampled per synthetic cloud', y=1.005)
 fig.tight_layout()
-out1 = OUT_DIR / 'verify_geometry_histograms.png'
+out1 = OUT_DIR / f'verify_geometry_histograms_{FIG_TAG}.png'
 fig.savefig(out1, dpi=FIG_DPI, bbox_inches='tight')
 print(f'\nFig 1 → {out1}  (dpi={FIG_DPI})')
 
 
 # ── Figure 2: bulk cloud scalars (2 x 3) ──────────────────────────────────────
-fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+fig, axes = plt.subplots(2, 4, figsize=(18, 8))
 
 def hist_log(ax, x, xlabel, title, color):
     x = np.asarray(x)
@@ -146,10 +215,28 @@ hist_log  (axes[0, 2], LWP,      r'LWP (g/m$^2$)',      'Liquid water path (log)
 hist_panel(axes[1, 0], z_top,    'z_top (km)',          'Cloud top altitude', 'firebrick')
 hist_panel(axes[1, 1], z_base,   'z_base (km)',         'Cloud base altitude', 'mediumpurple')
 hist_panel(axes[1, 2], thickness,'thickness (km)',      'Cloud geometric depth', 'goldenrod')
+# Mie-table α: the generator labelled tau_c with the table nearest each α; the
+# driver picks its table with the same nearest-α rule.
+if mie_alpha_tab is not None:
+    vals, counts = np.unique(np.asarray(mie_alpha_tab), return_counts=True)
+    axes[0, 3].bar(np.arange(vals.size), counts / counts.sum(), color='steelblue')
+    step = max(1, vals.size // 12)
+    axes[0, 3].set_xticks(np.arange(vals.size)[::step])
+    axes[0, 3].set_xticklabels(vals[::step])
+    axes[0, 3].set_xlabel(r'$\alpha$ of Mie table used')
+    axes[0, 3].set_ylabel('Fraction of clouds')
+    axes[0, 3].set_title('Custom Mie table per cloud')
+    axes[0, 3].grid(alpha=0.3)
+else:
+    axes[0, 3].set_visible(False)
+# relative azimuth |SAZ − VAZ| folded to [0, 180]
+rel_az = np.abs((np.asarray(saz) - np.asarray(vaz) + 180.0) % 360.0 - 180.0)
+hist_panel(axes[1, 3], rel_az, '|SAZ − VAZ| (deg, folded to 0–180)',
+           'Relative azimuth', 'slategray', expected_range=(0, 180))
 
 fig.suptitle('Bulk cloud scalars (per synthetic cloud)', y=1.005)
 fig.tight_layout()
-out2 = OUT_DIR / 'verify_cloud_scalars.png'
+out2 = OUT_DIR / f'verify_cloud_scalars_{FIG_TAG}.png'
 fig.savefig(out2, dpi=FIG_DPI, bbox_inches='tight')
 print(f'Fig 2 → {out2}  (dpi={FIG_DPI})')
 
@@ -210,8 +297,13 @@ ax.grid(alpha=0.3, which='both')
 
 fig.suptitle(f'Per-level envelopes across {n_cloud} synthetic clouds', y=1.005)
 fig.tight_layout()
-out3 = OUT_DIR / 'verify_profile_envelopes.png'
+out3 = OUT_DIR / f'verify_profile_envelopes_{FIG_TAG}.png'
 fig.savefig(out3, dpi=FIG_DPI, bbox_inches='tight')
 print(f'Fig 3 → {out3}  (dpi={FIG_DPI})')
 
-plt.show()
+plt.close('all')
+
+if n_hard:
+    print(f'\n{n_hard} hard check failure(s): do NOT submit this file.')
+    sys.exit(1)
+print('\nAll hard checks passed.')
