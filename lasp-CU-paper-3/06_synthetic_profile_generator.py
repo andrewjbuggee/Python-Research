@@ -95,6 +95,57 @@ TAU_C_MAX        = 40.0         # ... and ≤ this. Both limits apply twice: to 
 # LWP > 50 g/m²); 'computed' rescues those but runs ~20% lower than 'stored' on
 # the profiles where both are sound, so don't mix the two within one run.
 TAU_C_SOURCE     = 'stored'
+
+# ── OUTLIERS ───────────────────────────────────────────────────────────────────
+# In-situ profiles left out of the joint MVN fit (consolidated input only). Each
+# entry is (campaign, date_of_flight, profile_idx), as written per profile by
+# build_synthetic_profile_inputs_from_insitu_and_ERA5.m; profile_idx is the
+# profile's position in that campaign's saved ensemble.
+#
+# ORACLES, 30 Aug 2017, profiles 111 and 112 (rows 202 and 203 of the
+# 08-Nov-2026 combined file):
+#
+#   What they are. Median LWC of 1.9 and 2.3 g/m³ (max 2.6 and 3.1) through
+#   cloud layers only 122 and 125 m deep, at 17–18 °C. An adiabatic parcel at
+#   that temperature and pressure gains about 2.4 g/m³ per km of ascent, i.e.
+#   about 0.3 g/m³ over 125 m. These layers hold roughly ten times the water
+#   that condensation inside them could supply: f_ad = LWP_obs / LWP_ad is 9.3
+#   and 10.4 (Wood 2005 definition, same cloud-base rule and ERA5 Γ_ad as
+#   plot_per_cloud_rmse_kfold.wood_adiabaticity).
+#
+#   How far out they are. Every other profile in the training set
+#   (TAU_C_MIN ≤ τ_c ≤ TAU_C_MAX) has f_ad ≤ 2.75; the next highest is the
+#   VOCALS-REx RF07 drizzle shaft at 2.75. That is a gap of more than a factor
+#   of three, which is why only these two are listed.
+#
+#   Why they distort the MVN. The generator fits ONE Gaussian to the joint
+#   log-space LWC PCA scores, log-thickness and the other features. Two points
+#   this far off the LWP–thickness relation inflate its covariance and loosen
+#   the coupling between LWP and h, which widens the synthetic f_ad
+#   distribution. Generating 100,000 profiles with and without them (same code,
+#   seed RANDOM_SEED = 0 and 08-Nov-2026 inputs, 11 Nov 2026), each compared with
+#   the 290 remaining in-situ profiles resampled to 7 levels:
+#                                    f_ad > 1   p90 f_ad   corr(log h, log LWP)
+#       in-situ, 7 levels             14.8%      1.06        0.80
+#       synthetic, outliers kept      22.2%      1.33        0.73
+#       synthetic, outliers dropped   19.5%      1.24        0.77
+#   KS test on f_ad against the in-situ profiles: D = 0.099 (p = 0.007) kept,
+#   D = 0.073 (p = 0.084) dropped. The medians agree either way (synthetic minus
+#   in-situ +0.02 and +0.01, both within the 95% bootstrap interval of zero).
+#   Dropping them narrows the tail, but the synthetic distribution is still
+#   somewhat wider than the in-situ one.
+#   (adiabaticity_insitu_vs_synthetic.ipynb reproduces the comparison).
+#
+#   What they physically are is uncertain. My inference: a convective cell or
+#   rain shaft rather than stratocumulus, or a probe artifact. Either way they
+#   are not the stratiform population the generator is meant to reproduce.
+#
+# Dropping them is a judgment call; empty this tuple to restore them.
+OUTLIERS = (
+    ('oracles', '2017-08-30', 111),
+    ('oracles', '2017-08-30', 112),
+)
+
 L_COMMON         = 80           # length of the common normalized-altitude grid (≥ 60)
 N_FIXED_LEVELS   = 7            # every synthetic profile is on this fixed grid
 N_SAMPLES        = 1000
@@ -410,13 +461,27 @@ def load_profiles_consolidated(path: Path) -> dict:
     else:
         campaign_all = np.asarray([str(d['campaign'])] * n_file, dtype=object)
 
+    # Identifiers used to match OUTLIERS: (campaign, date_of_flight, profile_idx)
+    if OUTLIERS and not {'date_of_flight', 'profile_idx'}.issubset(d.keys()):
+        raise SystemExit(f'{path.name} has no date_of_flight / profile_idx, so '
+                         f'OUTLIERS cannot be matched. Empty OUTLIERS or rebuild the file.')
+    outlier_set = {(str(c), str(t), int(k)) for c, t, k in OUTLIERS}
+    outliers_found = set()
+
     out = {k: [] for k in ('re', 'lwc', 'z', 'mean_alpha', 'campaign',
                            'z_top', 'z_base', 'tau_c', 'lwp', 'n_levels',
-                           'T', 'vapor')}
-    skips = dict(low_tau=0, high_tau=0, dup=0, missing=0, no_era5=0)
+                           'T', 'vapor', 'source_index')}
+    skips = dict(low_tau=0, high_tau=0, outlier=0, dup=0, missing=0, no_era5=0)
     seen_fingerprints = set()
 
     for i in range(n_file):
+
+        if outlier_set:
+            key = (str(campaign_all[i]), str(d['date_of_flight'][i]), int(d['profile_idx'][i]))
+            if key in outlier_set:
+                skips['outlier'] += 1
+                outliers_found.add(key)
+                continue
 
         re    = np.atleast_1d(np.asarray(d['re'][i],    dtype=np.float64))
         lwc   = np.atleast_1d(np.asarray(d['lwc'][i],   dtype=np.float64))
@@ -449,6 +514,13 @@ def load_profiles_consolidated(path: Path) -> dict:
         out['T'].append(np.asarray(d['era5_T_K'][i], dtype=np.float64))
         out['vapor'].append(
             np.asarray(d['era5_vapor_concentration_cm3'][i], dtype=np.float64))
+        out['source_index'].append(i)     # row in the input file, saved for provenance
+
+    # Every listed outlier should have been found; a miss means the input file
+    # changed and the list needs checking
+    missing_outliers = outlier_set - outliers_found
+    if missing_outliers:
+        print(f'  WARNING: OUTLIERS not found in {path.name}: {sorted(missing_outliers)}')
 
     out['era5_pressure'] = np.asarray(d['era5_pressure_hPa'][0], dtype=np.float64)
     out['skips'] = skips
@@ -479,8 +551,9 @@ def load_profiles_per_profile(mat_dir: Path) -> dict:
 
     out = {k: [] for k in ('re', 'lwc', 'z', 'mean_alpha', 'campaign',
                            'z_top', 'z_base', 'tau_c', 'lwp', 'n_levels',
-                           'T', 'vapor')}
-    skips = dict(low_tau=0, high_tau=0, dup=0, missing=0, no_era5=0)
+                           'T', 'vapor', 'source_index')}
+    # OUTLIERS cannot be matched here (the per-profile files carry no profile_idx)
+    skips = dict(low_tau=0, high_tau=0, outlier=0, dup=0, missing=0, no_era5=0)
     seen_fingerprints = set()
     era5_pressure = None
 
@@ -542,6 +615,7 @@ def load_profiles_per_profile(mat_dir: Path) -> dict:
         out['n_levels'].append(n_use)
         out['T'].append(T_prof)
         out['vapor'].append(vapor_prof)
+        out['source_index'].append(mat_files.index(path))   # file position, for provenance
 
     out['era5_pressure'] = era5_pressure
     out['skips'] = skips
@@ -597,6 +671,8 @@ era5_pressure = data['era5_pressure']
 
 n_skip_low_tau  = data['skips']['low_tau']
 n_skip_high_tau = data['skips']['high_tau']
+n_skip_outlier  = data['skips']['outlier']
+source_index    = np.asarray(data['source_index'], dtype=np.int32)   # (n_train,) input rows used
 n_skip_dup      = data['skips']['dup']
 n_skip_missing  = data['skips']['missing']
 n_skip_no_era5  = data['skips']['no_era5']
@@ -621,7 +697,7 @@ n_oracles = int((campaign_each == 'oracles').sum())
 n_vocals  = int((campaign_each == 'vocals-rex').sum())
 
 print(f'  skipped: {n_skip_low_tau} tau_c<{TAU_C_MIN}, {n_skip_high_tau} tau_c>{TAU_C_MAX}, '
-      f'{n_skip_dup} duplicates, {n_skip_missing} missing keys, '
+      f'{n_skip_outlier} OUTLIERS, {n_skip_dup} duplicates, {n_skip_missing} missing keys, '
       f'{n_skip_no_era5} no era5')
 print(f'  kept   : {n_train} unique profiles  '
       f'(ORACLES = {n_oracles}, VOCALS-REx = {n_vocals})')
@@ -983,6 +1059,11 @@ np.savez_compressed(
     TAU_C_MIN        = np.float32(TAU_C_MIN),
     TAU_C_MAX        = np.float32(TAU_C_MAX),
     n_train_profiles = np.int32(n_train),
+    # Which in-situ profiles trained the MVN: their rows in the input file, the
+    # file itself, and the OUTLIERS that were left out
+    train_source_index = source_index,
+    input_path       = np.array(str(input_path)),
+    outliers         = np.array([f'{c} {t} {k}' for c, t, k in OUTLIERS]),
     # How tau_c was computed (Mie Q̄_ext(r_e, α), trapezoid over the levels)
     tau_c_method     = np.array('mie_qbar_trapz'),
     tau_wavelength_um = np.float32(TAU_WAVELENGTH_UM),
