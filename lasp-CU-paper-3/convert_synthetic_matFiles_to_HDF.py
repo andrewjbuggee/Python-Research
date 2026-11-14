@@ -82,6 +82,14 @@ NOISE_HYSICS = 0.003   # 0.3% Gaussian
 NOISE_EMIT   = 0.015    # 1.5% Gaussian (was 4% in some legacy runs; matches recent)
 NOISE_FM     = 0.0     # forward-model noise budget
 
+# Random seed for the measurement noise added below (added 14 Nov 2026). Every
+# run of this converter now produces the same noisy reflectances; change the
+# seed for a different noise realisation. The seed is printed and stored as the
+# HDF5 attribute 'noise_random_seed'.
+RANDOM_SEED = 20261114
+RNG = np.random.default_rng(RANDOM_SEED)
+print(f'Noise random seed: {RANDOM_SEED}')
+
 R_DRY = 287.05         # J/(kg·K), dry-air specific gas constant
 G0    = 9.80665        # m/s²
 
@@ -96,7 +104,7 @@ def add_gaussian_noise(refl: np.ndarray, noise_level: float) -> tuple:
     The uncertainty is the per-channel 1-sigma value (= noise_level * |refl|);
     the noisy reflectance is refl + noise_level * refl * randn().
     """
-    rnd        = np.random.randn(*refl.shape)
+    rnd        = RNG.standard_normal(refl.shape)     # seeded, see RANDOM_SEED
     refl_noisy = refl + (noise_level * refl) * rnd
     uncert     = np.abs(noise_level * refl)
     return refl_noisy.astype(np.float32), uncert.astype(np.float32)
@@ -477,6 +485,7 @@ with h5py.File(OUT_PATH, 'w') as f:
     f.attrs['tau_global_max']  = tau_global_max
     f.attrs['max_raw_levels']  = max_raw_levels
     f.attrs['source']          = 'synthetic-cloud RT runs'
+    f.attrs['noise_random_seed'] = RANDOM_SEED
 
 print(f'\nDone.')
 print(f'  Output: {OUT_PATH}')

@@ -112,6 +112,14 @@ NOISE_HYSICS = 0.003  # 0.3% Gaussian noise
 NOISE_EMIT   = 0.02   # 4.0% Gaussian noise
 NOISE_FM     = 0      # 0.7% Forward model noise assumption 
 
+# Random seed for the measurement noise added below (added 14 Nov 2026). Every
+# run of this converter now produces the same noisy reflectances; change the
+# seed for a different noise realisation. The seed is printed and stored as the
+# HDF5 attribute 'noise_random_seed'.
+RANDOM_SEED = 20261114
+RNG = np.random.default_rng(RANDOM_SEED)
+print(f'Noise random seed: {RANDOM_SEED}')
+
 _SZA_RE = re.compile(r'_sza_(\d+(?:\.\d+)?)_')
 
 def parse_sza_from_filename(filename: str) -> float:
@@ -141,7 +149,7 @@ def add_gaussian_noise(refl: np.ndarray, noise_level: float) -> tuple:
         Per-channel 1-sigma measurement uncertainty.
     """
     # Generate random noise: same shape, mean=0, std=1
-    random_noise = np.random.randn(*refl.shape)
+    random_noise = RNG.standard_normal(refl.shape)     # seeded, see RANDOM_SEED
 
     # Add noise: noisy = raw + (noise_level * raw) * randn
     refl_noisy = refl + (noise_level * refl) * random_noise
@@ -797,6 +805,7 @@ with h5py.File(OUT_PATH, 'w') as f:
 
     # Root-level metadata
     f.attrs['n_mat_files']     = n_files
+    f.attrs['noise_random_seed'] = RANDOM_SEED
     f.attrs['n_geometries']    = N_GEOMETRIES
     f.attrs['re_global_min']   = re_global_min
     f.attrs['re_global_max']   = re_global_max
