@@ -50,8 +50,7 @@ FIG_HEIGHT_IN_2COL = 5.6
 
 # Default bundle; override with the first command-line argument.
 NPZ_PATH = Path(
-    '/Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/'
-    'synthetic_profiles/synthetic_profiles_jointMVN_N100000_L7_2026-11-12.npz'
+    '/Users/andrewbuggee/Documents/VS_CODE/Python-Research/lasp-CU-paper-3/synthetic_profiles/synthetic_profiles_jointMVN_N100000_L7_2026-11-13.npz'
 )
 
 

@@ -88,7 +88,7 @@ SCRIPT_DIR = Path(__file__).parent
 
 # Default bundle; override with the first command-line argument.
 SYNTHETIC_NPZ = (SCRIPT_DIR / 'synthetic_profiles' /
-                 'synthetic_profiles_jointMVN_N100000_L7_2026-11-12.npz')
+                 'synthetic_profiles_jointMVN_N100000_L7_2026-11-13.npz')
 
 OUT_DIR = SCRIPT_DIR / 'training_inputs'
 SZA_MAX_DEG = 50.0                 # draft §III.D: retrievals degrade above 50°

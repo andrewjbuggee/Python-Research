@@ -46,6 +46,10 @@ Method
    common grid; exp() recovers re and lwc as guaranteed-positive log-normal
    variates at each level. Resample to N_FIXED_LEVELS evenly-spaced
    altitudes from sampled (z_top, z_base). alpha is broadcast as a scalar.
+   Draws are rejected (and replaced by new draws, until N are accepted) if
+   tau_c falls outside [TAU_C_MIN, TAU_C_MAX] or, with LWC_MAX_REJECTION, if
+   LWC at any of the N_FIXED_LEVELS exceeds the in-situ 99th-percentile LWC at
+   that normalised height (see "LWC ceiling" below).
 6. Derive per-sample LWP and tau_c from the re + lwc profile:
        LWP[g/m²] = 1000 · ∫ LWC dz   (LWC g/m³, dz km)
        tau_c     = 750 · ∫ Q̄_ext(r_e, α) · LWC / r_e dz   at 550 nm
@@ -197,6 +201,24 @@ def _versioned_path(path):
 # the tails of the joint MVN produce thinner- and thicker-than-trained clouds.
 REJECTION_BATCH_OVERSAMPLE = 1.6      # draw 1.6× the remaining need each batch
 REJECTION_MAX_BATCHES      = 30
+
+# LWC ceiling (added 13 Nov 2026). The joint MVN is Gaussian in log LWC, so at
+# cloud top, where the in-situ values have a long tail toward tiny LWC and a
+# hard upper limit (topmost measured level ≤ 0.63 g/m³), the symmetric
+# log-normal puts mass far above anything measured: with no ceiling, 1.9 % of
+# synthetic top levels exceeded 1 g/m³ and the largest reached 8.97 g/m³
+# (08b_compare_lwc_insitu_vs_synthetic.py, 12-Nov-2026 bundle). With
+# LWC_MAX_REJECTION, a draw is rejected when LWC at any output level exceeds
+# LWC_MAX_FACTOR × the LWC_CEILING_PERCENTILE-th percentile of the in-situ LWC at
+# that normalised height: the percentile across training profiles of
+# lwc_common (the 80-level grid), read off at the N_FIXED_LEVELS output
+# heights. The 99th percentile rather than the maximum (13 Nov 2026): the
+# maximum at a height is set by a single profile and can be probe noise (e.g.
+# the 7.84 g/m³ VOCALS-REx 2008-10-25 profile-24 spike). Rejecting rather than
+# clipping avoids a pile-up at the ceiling.
+LWC_MAX_REJECTION      = True
+LWC_CEILING_PERCENTILE = 100.0     # 100 = in-situ maximum
+LWC_MAX_FACTOR         = 1.0
 
 
 # ── Paper-quality matplotlib style (mirrors regenerate_kfold_figures.setup_style)
@@ -922,9 +944,30 @@ def reconstruct_batch(samples_batch):
     }
 
 
+# ── LWC ceiling at the output heights ─────────────────────────────────────────
+# Every synthetic cloud has its N_FIXED_LEVELS levels at the same normalised
+# heights u = 1 (top) … 0 (base), so one ceiling vector serves every draw.
+# lwc_common is the in-situ LWC on the 80-level grid, ordered base → top.
+u_out_t2b      = np.linspace(1.0, 0.0, N_FIXED_LEVELS)          # (L_out,) top → base
+# percentile across the training profiles at each of the L_COMMON heights
+lwc_pct_common = np.percentile(lwc_common, LWC_CEILING_PERCENTILE, axis=0)  # (L_COMMON,) g/m³, base → top
+lwc_ceiling    = LWC_MAX_FACTOR * np.interp(u_out_t2b, u_grid_b2t, lwc_pct_common)
+if LWC_MAX_REJECTION:
+    # How many TRAINING profiles would themselves fail this ceiling, judged
+    # the same way (their common-grid LWC read at the output heights)?
+    insitu_at_out = np.array([np.interp(u_out_t2b, u_grid_b2t, row) for row in lwc_common])
+    n_insitu_fail = int((insitu_at_out > lwc_ceiling[None, :]).any(axis=1).sum())
+    print(f'\nLWC ceiling (in-situ {LWC_CEILING_PERCENTILE:g}th percentile × '
+          f'{LWC_MAX_FACTOR:g}) at output levels, top → base [g/m³]: '
+          + ', '.join(f'{v:.3f}' for v in lwc_ceiling))
+    print(f'  {n_insitu_fail} of {n_train} in-situ profiles exceed it at one or more levels')
+
 rng = np.random.default_rng(RANDOM_SEED)
 print(f'\nSampling {N_SAMPLES} synthetic profiles with rejection on '
-      f'{TAU_C_MIN} <= tau_c <= {TAU_C_MAX}...')
+      f'{TAU_C_MIN} <= tau_c <= {TAU_C_MAX}'
+      + (f' and LWC <= in-situ {LWC_CEILING_PERCENTILE:g}th percentile at each level'
+         if LWC_MAX_REJECTION else '')
+      + '...')
 
 accepted = {k: [] for k in
             ('re', 'lwc', 'z', 'alpha', 'T', 'vapor',
@@ -935,6 +978,8 @@ n_drawn_total = 0
 n_passed_total = 0             # draws inside the tau_c limits, used or not
 n_rejected_low_total  = 0      # draws with tau_c < TAU_C_MIN
 n_rejected_high_total = 0      # draws with tau_c > TAU_C_MAX
+n_rejected_wet_total  = 0      # draws with LWC above the ceiling at some level
+                               # (can overlap with the tau_c rejections)
 
 for batch_idx in range(REJECTION_MAX_BATCHES):
     n_need = N_SAMPLES - n_accepted
@@ -947,9 +992,14 @@ for batch_idx in range(REJECTION_MAX_BATCHES):
     out = reconstruct_batch(samples_batch)
     too_thin  = out['tau_c'] < TAU_C_MIN
     too_thick = out['tau_c'] > TAU_C_MAX
+    if LWC_MAX_REJECTION:
+        too_wet = (out['lwc'] > lwc_ceiling[None, :]).any(axis=1)   # (n_draw,)
+    else:
+        too_wet = np.zeros(n_draw, dtype=bool)
     n_rejected_low_total  += int(too_thin.sum())
     n_rejected_high_total += int(too_thick.sum())
-    keep = ~too_thin & ~too_thick
+    n_rejected_wet_total  += int(too_wet.sum())
+    keep = ~too_thin & ~too_thick & ~too_wet
     n_passed_total += int(keep.sum())
     take = min(int(keep.sum()), n_need)
     if take == 0:
@@ -959,14 +1009,16 @@ for batch_idx in range(REJECTION_MAX_BATCHES):
         accepted[k].append(out[k][keep_idx])
     n_accepted += take
     print(f'  batch {batch_idx + 1:2d}: drew {n_draw}, '
-          f'{int(keep.sum())} passed ({TAU_C_MIN}≤tau≤{TAU_C_MAX}), '
+          f'{int(keep.sum())} passed ({TAU_C_MIN}≤tau≤{TAU_C_MAX}'
+          f'{", LWC ceiling" if LWC_MAX_REJECTION else ""}), '
           f'cumulative {n_accepted}/{N_SAMPLES}')
 
 if n_accepted < N_SAMPLES:
     raise RuntimeError(
         f'Only accumulated {n_accepted}/{N_SAMPLES} samples with '
-        f'{TAU_C_MIN} <= tau_c <= {TAU_C_MAX} after {REJECTION_MAX_BATCHES} batches. '
-        f'Increase REJECTION_MAX_BATCHES or relax TAU_C_MIN / TAU_C_MAX.')
+        f'{TAU_C_MIN} <= tau_c <= {TAU_C_MAX} (and the LWC ceiling) after '
+        f'{REJECTION_MAX_BATCHES} batches. Increase REJECTION_MAX_BATCHES or relax '
+        f'TAU_C_MIN / TAU_C_MAX / LWC_MAX_FACTOR.')
 
 re_out      = np.concatenate(accepted['re'])
 lwc_out     = np.concatenate(accepted['lwc'])
@@ -992,7 +1044,9 @@ print(f'  done. acceptance rate = {acceptance_rate:.3f} '
 print(f'  rejected: {n_rejected_low_total} below TAU_C_MIN '
       f'({n_rejected_low_total / n_drawn_total:.1%} of draws), '
       f'{n_rejected_high_total} above TAU_C_MAX '
-      f'({n_rejected_high_total / n_drawn_total:.1%} of draws)')
+      f'({n_rejected_high_total / n_drawn_total:.1%} of draws), '
+      f'{n_rejected_wet_total} above the LWC ceiling '
+      f'({n_rejected_wet_total / n_drawn_total:.1%} of draws; overlaps allowed)')
 
 # For the diagnostic envelope plot we want the FULL common-grid recon of the
 # kept samples. We rebuild it from the saved scores indirectly: just regenerate
@@ -1069,6 +1123,12 @@ np.savez_compressed(
     tau_c_method     = np.array('mie_qbar_trapz'),
     tau_wavelength_um = np.float32(TAU_WAVELENGTH_UM),
     mie_alpha_table  = nearest_mie_alpha(new_alpha).astype(np.int32),   # (N,) α of the table used
+    # LWC ceiling used for rejection (13 Nov 2026); see LWC_MAX_REJECTION
+    lwc_max_rejection = np.bool_(LWC_MAX_REJECTION),
+    lwc_max_factor    = np.float32(LWC_MAX_FACTOR),
+    lwc_ceiling_percentile = np.float32(LWC_CEILING_PERCENTILE),
+    lwc_ceiling       = lwc_ceiling.astype(np.float32),     # (N_FIXED_LEVELS,) g/m³, top → base
+    acceptance_rate   = np.float32(acceptance_rate),
     mie_table_dir    = np.array(str(MIE_TABLE_DIR)),
 )
 print(f'\nSaved → {OUT_PATH}  ({OUT_PATH.stat().st_size / 1e6:.1f} MB)')
