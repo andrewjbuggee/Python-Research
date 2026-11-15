@@ -63,7 +63,8 @@ import h5py
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent          # spectral_feature_importance/
+REPO = HERE.parent                               # lasp-CU-paper-3/ (data.py, models.py)
 sys.path.insert(0, str(REPO))
 
 from models import RetrievalConfig                              # noqa: E402
@@ -73,7 +74,7 @@ from data import LibRadtranDatasetExtras                        # noqa: E402
 RUN_DIR = (REPO / 'hyper_parameter_sweep'
            / 'sweep_results_profile_only_synthetic_M0_rev2' / 'run_004')
 H5_PATH = REPO / 'training_data' / 'synthetic_training_data_7-levels_8_May_2026.h5'
-OUT_DIR = REPO / 'feature_importance_run004'
+OUT_DIR = HERE / 'feature_importance_run004'
 
 N_SPECTRAL = 636          # reflectance channels (indices 0..635)
 N_GEOMETRY = 4            # [SZA, VZA, SAZ, VAZ]  (indices 636..639)

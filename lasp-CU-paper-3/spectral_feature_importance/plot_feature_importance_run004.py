@@ -35,8 +35,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
-REPO = Path(__file__).resolve().parent
-OUT_DIR = REPO / 'feature_importance_run004'
+HERE = Path(__file__).resolve().parent          # spectral_feature_importance/
+REPO = HERE.parent                               # lasp-CU-paper-3/ (data.py, models.py)
+OUT_DIR = HERE / 'feature_importance_run004'
 DPI = 400
 
 C_SPECTRAL = '#1F5FC2'   # blue   — reflectance channels

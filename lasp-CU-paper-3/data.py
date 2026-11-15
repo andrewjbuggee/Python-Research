@@ -107,10 +107,68 @@ ERA5_VAP_LOG10_MAX = 18.0   # log10(molec/cm³) — conservative upper bound
 RE_MIN = 1.5
 RE_MAX = 50.0   # TODO: update from scan
 
-# Optical depth bounds
-# Update TAU_MAX after running convert_matFiles_to_HDF.py scan.
+# Optical depth bounds — LEGACY DEFAULTS ONLY (Nov 2026)
+# The τ head maps its sigmoid output s ∈ [0, 1] to τ = s·(τ_max − τ_min) + τ_min,
+# and the dataset normalizes the τ target with the same two numbers.  A model
+# is only correct when it is trained AND evaluated with one fixed pair, so the
+# pair now travels with the data and the model:
+#   1. step 10 (10_build_training_hdf5.py) writes HDF5 attrs
+#      tau_c_norm_min / tau_c_norm_max = the generator's τ_c rejection limits
+#      (06_synthetic_profile_generator.TAU_C_MIN / TAU_C_MAX = 3 / 40);
+#   2. the trainer records the pair it used as 'tau_bounds' in config.json and
+#      summary.json (and it is also inside best_model.pt as the model's
+#      tau_min / tau_max buffers);
+#   3. evaluation reads the run's pair with tau_bounds_for_run().
+# TAU_MIN / TAU_MAX below are used only when neither an explicit pair nor HDF5
+# attrs exist, i.e. for files and runs from before Nov 2026 (run_004 etc.),
+# so those results stay reproducible.  Do not edit them to retune new models.
 TAU_MIN = 3   # in-situ profiles include sub-cloud layers where tau=0
-TAU_MAX = 97.0  # TODO: update from scan
+TAU_MAX = 97.0  # legacy: chosen from the Apr-2026 in-situ HDF5 scan
+
+LEGACY_TAU_BOUNDS: Tuple[float, float] = (float(TAU_MIN), float(TAU_MAX))
+TAU_BOUNDS_ATTRS = ('tau_c_norm_min', 'tau_c_norm_max')   # HDF5 attribute names
+
+
+def tau_bounds_from_h5(h5_path: Union[str, Path]) -> Optional[Tuple[float, float]]:
+    """(τ_min, τ_max) stored in the HDF5 attrs by step 10, or None if absent."""
+    with h5py.File(h5_path, 'r') as f:
+        if all(k in f.attrs for k in TAU_BOUNDS_ATTRS):
+            return tuple(float(f.attrs[k]) for k in TAU_BOUNDS_ATTRS)
+    return None
+
+
+def resolve_tau_bounds(explicit: Optional[Tuple[float, float]] = None,
+                       h5_path: Optional[Union[str, Path]] = None,
+                       ) -> Tuple[Tuple[float, float], str]:
+    """
+    The τ normalization pair to use, and where it came from.
+    Precedence: explicit pair (e.g. a trained model's) > HDF5 attrs > legacy 3/97.
+    Never derived from the τ values in the file: a data-dependent pair would
+    change the meaning of a trained model's output from file to file.
+    """
+    if explicit is not None:
+        lo, hi = (float(explicit[0]), float(explicit[1]))
+        src = 'explicit'
+    else:
+        stored = tau_bounds_from_h5(h5_path) if h5_path is not None else None
+        if stored is not None:
+            (lo, hi), src = stored, 'HDF5 attrs'
+        else:
+            (lo, hi), src = LEGACY_TAU_BOUNDS, 'legacy data.TAU_MIN/TAU_MAX'
+    if not hi > lo:
+        raise ValueError(f'τ bounds must satisfy max > min, got {(lo, hi)}')
+    return (lo, hi), src
+
+
+def tau_bounds_for_run(summary_or_config: dict) -> Tuple[Tuple[float, float], str]:
+    """
+    The τ pair a trained run used: its 'tau_bounds' entry, else legacy 3/97
+    (every PT run before Nov 2026 was trained with data.TAU_MIN / TAU_MAX).
+    """
+    tb = summary_or_config.get('tau_bounds')
+    if tb is not None:
+        return (float(tb[0]), float(tb[1])), "run's saved tau_bounds"
+    return LEGACY_TAU_BOUNDS, 'legacy 3/97 (run predates saved tau_bounds)'
 
 
 # =============================================================================
@@ -250,7 +308,8 @@ class LibRadtranDataset(Dataset):
     """
 
     def __init__(self, h5_path: str, normalize: bool = True,
-                 instrument: str = 'hysics'):
+                 instrument: str = 'hysics',
+                 tau_bounds: Optional[Tuple[float, float]] = None):
         """
         Parameters
         ----------
@@ -263,6 +322,10 @@ class LibRadtranDataset(Dataset):
             'hysics' (default) — 0.3 % Gaussian noise (HySICS noise level)
             'emit'             — 4 % Gaussian noise (EMIT noise level)
             The underlying RT simulation is identical; only the noise differs.
+        tau_bounds : (τ_min, τ_max) or None
+            Pair used to normalize the τ_c target.  Pass a trained model's
+            pair when evaluating it; None → HDF5 attrs → legacy 3/97
+            (see resolve_tau_bounds).
         """
         if instrument not in ('hysics', 'emit'):
             raise ValueError(f"instrument must be 'hysics' or 'emit', got {instrument!r}")
@@ -270,6 +333,7 @@ class LibRadtranDataset(Dataset):
         self.h5_path   = Path(h5_path)
         self.normalize = normalize
         self.instrument = instrument
+        self.tau_bounds, self.tau_bounds_source = resolve_tau_bounds(tau_bounds, h5_path)
 
         # Determine which HDF5 keys to load based on instrument selection.
         # New files store per-instrument datasets; fall back to the legacy
@@ -314,8 +378,14 @@ class LibRadtranDataset(Dataset):
         # Target normalization
         self.re_min = RE_MIN
         self.re_max = RE_MAX
-        self.tau_min = TAU_MIN
-        self.tau_max = TAU_MAX
+        self.tau_min, self.tau_max = self.tau_bounds
+        # τ outside the pair gives a target outside [0, 1] that the sigmoid
+        # τ head can never reach — say so rather than train on it silently.
+        n_out = int(np.sum((self.tau_c < self.tau_min) | (self.tau_c > self.tau_max)))
+        if n_out:
+            print(f"  WARNING: {n_out} of {len(self.tau_c)} τ_c values lie outside the "
+                  f"normalization bounds {self.tau_min:g}–{self.tau_max:g} "
+                  f"({self.tau_bounds_source}); the τ head cannot output them.")
 
         # Geometry normalization ranges
         # SZA range kept wide for future datasets with non-zero SZA
@@ -393,9 +463,14 @@ def create_dataloaders(h5_path: str,
                        profile_holdout: bool = False,
                        n_val_profiles: int = 14,
                        n_test_profiles: int = 14,
+                       tau_bounds: Optional[Tuple[float, float]] = None,
                        ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train/val/test DataLoaders from an HDF5 file.
+
+    tau_bounds : (τ_min, τ_max) used to normalize the τ_c target; None → the
+        HDF5's stored pair, else legacy 3/97 (see resolve_tau_bounds).  When
+        evaluating a trained model pass that model's pair (tau_bounds_for_run).
 
     Parameters
     ----------
@@ -426,7 +501,10 @@ def create_dataloaders(h5_path: str,
     -------
     train_loader, val_loader, test_loader : DataLoader
     """
-    dataset = LibRadtranDataset(h5_path, normalize=True, instrument=instrument)
+    dataset = LibRadtranDataset(h5_path, normalize=True, instrument=instrument,
+                                tau_bounds=tau_bounds)
+    print(f"  τ normalization bounds: {dataset.tau_min:g}–{dataset.tau_max:g} "
+          f"({dataset.tau_bounds_source})")
 
     if profile_holdout:
         train_idx, val_idx, test_idx = create_profile_aware_splits(
@@ -936,8 +1014,8 @@ class EmulatorDataset(Dataset):
     # Physical normalization bounds — must exactly match LibRadtranDataset / RetrievalConfig
     _RE_MIN  = RE_MIN    # 1.25 μm
     _RE_MAX  = RE_MAX    # 50.0 μm
-    _TAU_MIN = TAU_MIN   # 1.5
-    _TAU_MAX = TAU_MAX   # 40.0
+    _TAU_MIN = TAU_MIN   # legacy 3 (emulator path; not used by the PT trainer)
+    _TAU_MAX = TAU_MAX   # legacy 97
 
     # Geometry ranges — must exactly match LibRadtranDataset._compute_normalization()
     _SZA_RANGE = (0.0, 80.0)

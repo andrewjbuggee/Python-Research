@@ -77,7 +77,7 @@ import numpy as np
 import torch
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # repo root (data.py, models*.py)
 from models_profile_only import ProfileOnlyNetwork
 from models              import RetrievalConfig
 from data                import (LibRadtranDataset,

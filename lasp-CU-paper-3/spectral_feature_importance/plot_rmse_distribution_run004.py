@@ -35,10 +35,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import skew
 
-REPO = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent          # spectral_feature_importance/
+REPO = HERE.parent                               # lasp-CU-paper-3/ (data.py, models.py)
 RUN_DIR = (REPO / 'hyper_parameter_sweep'
            / 'sweep_results_profile_only_synthetic_M0_rev2' / 'run_004')
-OUT_DIR = REPO / 'feature_importance_run004'
+OUT_DIR = HERE / 'feature_importance_run004'
 FI_BASELINE_UM = 0.9641   # mean-per-level RMSE (feature-importance baseline)
 
 C_HIST = '#1F5FC2'

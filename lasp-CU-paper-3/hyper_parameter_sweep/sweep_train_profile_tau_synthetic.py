@@ -28,14 +28,24 @@ Three differences:
 
 τ SCALING
 ---------
-`LibRadtranDataset` normalizes τ with data.TAU_MIN / data.TAU_MAX = 3 / 97,
-while the stock `RetrievalConfig` denormalizes with tau_min / tau_max =
-3 / 75.  Those disagree, so `output['tau_c']` from a network built on the
-default config is mis-scaled by (97-3)/(75-3) = 1.31.  This trainer builds
-RetrievalConfig with the dataset's bounds so the two agree.
+The τ head outputs s ∈ [0, 1] (sigmoid) and τ = s·(τ_max − τ_min) + τ_min;
+the dataset normalizes the τ target with the same pair.  Both sides must use
+one fixed pair per model.  (History: `LibRadtranDataset` once used 3 / 97
+while the stock `RetrievalConfig` used 3 / 75, mis-scaling output['tau_c'] by
+(97-3)/(75-3) = 1.31.)
+
+Since 15 Nov 2026 the pair is resolved once per run, in this order:
+  1. cfg['tau_bounds'] in the config JSON (12_select_configs.py writes it);
+  2. the HDF5 attrs tau_c_norm_min / tau_c_norm_max (10_build_training_hdf5.py
+     writes 3 / 40, the generator's τ_c rejection limits);
+  3. legacy data.TAU_MIN / TAU_MAX = 3 / 97 (all runs before Nov 2026).
+The pair used is written to config.json and summary.json as 'tau_bounds',
+and it is also inside best_model.pt as the model's tau_min / tau_max buffers.
+Evaluation code must read it from the run (data.tau_bounds_for_run), never
+from the data.TAU_MIN / TAU_MAX constants.
 
 With `tau_transform='log10'` the τ target is re-mapped to
-    tau_norm = (log10(τ) - log10(TAU_MIN)) / (log10(TAU_MAX) - log10(TAU_MIN))
+    tau_norm = (log10(τ) - log10(τ_min)) / (log10(τ_max) - log10(τ_min))
 before the NLL, and physical τ is recovered by inverting that here rather than
 reading `output['tau_c']` (which the network computes with the linear map).
 τ in this dataset is right-skewed — median 8.0 against a 3–95 range — so the
@@ -69,12 +79,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from models import DropletProfileNetwork, CombinedLoss, RetrievalConfig
-from data import create_dataloaders, resolve_h5_path, TAU_MIN, TAU_MAX
+from data import create_dataloaders, resolve_h5_path, resolve_tau_bounds
 
-
-# log10 τ bounds, used only when tau_transform == 'log10'
-_LOG_TAU_MIN = float(np.log10(TAU_MIN))
-_LOG_TAU_MAX = float(np.log10(TAU_MAX))
+# τ bounds are per run (see τ SCALING above): every helper below takes the
+# run's pair `bounds = (τ_min, τ_max)` explicitly instead of a module constant.
+TauBounds = Tuple[float, float]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,33 +128,37 @@ def parse_args():
 # τ target / inverse transforms
 #
 # The dataloader always hands back τ linearly normalized as
-# (τ_um_free - TAU_MIN) / (TAU_MAX - TAU_MIN).  These two helpers convert that
-# to whatever space the loss is being computed in, and back to physical τ.
+# (τ - τ_min) / (τ_max - τ_min) with the run's pair.  These helpers convert
+# that to whatever space the loss is computed in, and back to physical τ.
 # ─────────────────────────────────────────────────────────────────────────────
 def tau_norm_to_target(tau_norm_linear: torch.Tensor,
-                       tau_transform: str) -> torch.Tensor:
+                       tau_transform: str, bounds: TauBounds) -> torch.Tensor:
     """Map the loader's linear τ normalization into the loss's τ space."""
+    lo, hi = bounds
     if tau_transform == 'linear':
         return tau_norm_linear
     if tau_transform == 'log10':
-        tau_phys = tau_norm_linear * (TAU_MAX - TAU_MIN) + TAU_MIN
-        tau_phys = tau_phys.clamp(min=TAU_MIN)      # guard float round-trip
-        return ((torch.log10(tau_phys) - _LOG_TAU_MIN)
-                / (_LOG_TAU_MAX - _LOG_TAU_MIN))
+        tau_phys = tau_norm_linear * (hi - lo) + lo
+        tau_phys = tau_phys.clamp(min=lo)           # guard float round-trip
+        log_lo, log_hi = float(np.log10(lo)), float(np.log10(hi))
+        return (torch.log10(tau_phys) - log_lo) / (log_hi - log_lo)
     raise ValueError(f"Unknown tau_transform: {tau_transform!r}")
 
 
-def tau_target_to_physical(tau_norm: np.ndarray, tau_transform: str) -> np.ndarray:
+def tau_target_to_physical(tau_norm: np.ndarray, tau_transform: str,
+                           bounds: TauBounds) -> np.ndarray:
     """Inverse of tau_norm_to_target, in numpy, returning optical thickness."""
+    lo, hi = bounds
     if tau_transform == 'linear':
-        return tau_norm * (TAU_MAX - TAU_MIN) + TAU_MIN
+        return tau_norm * (hi - lo) + lo
     if tau_transform == 'log10':
-        return 10.0 ** (tau_norm * (_LOG_TAU_MAX - _LOG_TAU_MIN) + _LOG_TAU_MIN)
+        log_lo, log_hi = np.log10(lo), np.log10(hi)
+        return 10.0 ** (tau_norm * (log_hi - log_lo) + log_lo)
     raise ValueError(f"Unknown tau_transform: {tau_transform!r}")
 
 
 def tau_sigma_to_physical(tau_norm: np.ndarray, tau_sigma_norm: np.ndarray,
-                          tau_transform: str) -> np.ndarray:
+                          tau_transform: str, bounds: TauBounds) -> np.ndarray:
     """
     Propagate the τ head's normalized σ into optical-thickness units.
 
@@ -155,11 +168,12 @@ def tau_sigma_to_physical(tau_norm: np.ndarray, tau_sigma_norm: np.ndarray,
     only meaningful while σ is small relative to the τ range — which it is
     here (σ floor 0.01 normalized, τ predictions O(10)).
     """
+    lo, hi = bounds
     if tau_transform == 'linear':
-        return tau_sigma_norm * (TAU_MAX - TAU_MIN)
+        return tau_sigma_norm * (hi - lo)
     if tau_transform == 'log10':
-        tau_phys = tau_target_to_physical(tau_norm, 'log10')
-        dtau_dnorm = tau_phys * np.log(10.0) * (_LOG_TAU_MAX - _LOG_TAU_MIN)
+        tau_phys = tau_target_to_physical(tau_norm, 'log10', bounds)
+        dtau_dnorm = tau_phys * np.log(10.0) * (np.log10(hi) - np.log10(lo))
         return tau_sigma_norm * dtau_dnorm
     raise ValueError(f"Unknown tau_transform: {tau_transform!r}")
 
@@ -173,7 +187,7 @@ def tau_sigma_to_physical(tau_norm: np.ndarray, tau_sigma_norm: np.ndarray,
 # is not confounded), grad-norm clip at 1.0.
 # ─────────────────────────────────────────────────────────────────────────────
 def train_one_epoch(model, loader, criterion, optimizer, device,
-                    tau_transform: str,
+                    tau_transform: str, bounds: TauBounds,
                     augment_noise_std: float = 0.0,
                     warmup_steps: int = 0,
                     target_lr: float = None,
@@ -183,7 +197,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
     step = global_step_start
     for x, prof, tau in loader:
         x, prof, tau = x.to(device), prof.to(device), tau.to(device)
-        tau = tau_norm_to_target(tau, tau_transform)
+        tau = tau_norm_to_target(tau, tau_transform, bounds)
 
         if warmup_steps > 0 and step < warmup_steps and target_lr is not None:
             lr_now = target_lr * (step + 1) / warmup_steps
@@ -208,14 +222,14 @@ def train_one_epoch(model, loader, criterion, optimizer, device,
 
 @torch.no_grad()
 def validate(model, loader, criterion, device,
-             tau_transform: str) -> Tuple[float, Dict[str, float]]:
+             tau_transform: str, bounds: TauBounds) -> Tuple[float, Dict[str, float]]:
     """Returns (mean total loss, mean of every individual loss term)."""
     model.eval()
     loss_sum, n = 0.0, 0
     detail: Dict[str, float] = {}
     for x, prof, tau in loader:
         x, prof, tau = x.to(device), prof.to(device), tau.to(device)
-        tau = tau_norm_to_target(tau, tau_transform)
+        tau = tau_norm_to_target(tau, tau_transform, bounds)
         output = model(x)
         losses = criterion(output, prof, tau)
         loss_sum += losses['total'].item()
@@ -228,7 +242,25 @@ def validate(model, loader, criterion, device,
 @torch.no_grad()
 def predict_test(model, loader, device, config: RetrievalConfig,
                  tau_transform: str) -> Dict[str, np.ndarray]:
-    """Test-set predictions in physical units (r_e in μm, τ dimensionless)."""
+    """
+    Test-set predictions in physical units (r_e in μm, τ dimensionless).
+
+    The τ pair is the model's own (config.tau_min / tau_max, which must equal
+    the tau_min / tau_max buffers loaded from best_model.pt).  The loader must
+    have normalized τ with the same pair; both are checked here, because a
+    mismatch would silently rescale every τ.
+    """
+    bounds = (float(config.tau_min), float(config.tau_max))
+    if hasattr(model, 'tau_min') and hasattr(model, 'tau_max'):
+        model_pair = (float(model.tau_min), float(model.tau_max))
+        if not np.allclose(model_pair, bounds):
+            raise RuntimeError(f'model buffers τ {model_pair} != config τ {bounds}')
+    ds = loader.dataset
+    while hasattr(ds, 'dataset'):
+        ds = ds.dataset
+    if hasattr(ds, 'tau_min') and not np.allclose((ds.tau_min, ds.tau_max), bounds):
+        raise RuntimeError(f'dataset normalizes τ with {(ds.tau_min, ds.tau_max)} but the '
+                           f'model uses {bounds}: pass tau_bounds=... to create_dataloaders')
     model.eval()
     prof_pred, prof_std, prof_true = [], [], []
     tau_pred, tau_std, tau_true = [], [], []
@@ -245,10 +277,10 @@ def predict_test(model, loader, device, config: RetrievalConfig,
         # path handles both transforms (see the τ SCALING note in the header).
         tn = out['tau_normalized'].squeeze(-1).cpu().numpy()
         sn = out['tau_std_normalized'].squeeze(-1).cpu().numpy()
-        tau_pred.append(tau_target_to_physical(tn, tau_transform))
-        tau_std.append(tau_sigma_to_physical(tn, sn, tau_transform))
-        # `tau` from the loader is always linearly normalized
-        tau_true.append(tau.numpy() * (TAU_MAX - TAU_MIN) + TAU_MIN)
+        tau_pred.append(tau_target_to_physical(tn, tau_transform, bounds))
+        tau_std.append(tau_sigma_to_physical(tn, sn, tau_transform, bounds))
+        # `tau` from the loader is always linearly normalized with `bounds`
+        tau_true.append(tau.numpy() * (bounds[1] - bounds[0]) + bounds[0])
 
     return {
         'pred':     np.concatenate(prof_pred),
@@ -279,6 +311,12 @@ def main():
     if not h5_path.exists():
         raise FileNotFoundError(f'HDF5 not found: {h5_path}')
     cfg['data']['h5_path'] = str(h5_path)
+
+    # ── τ normalization pair (fixed for this run; see τ SCALING) ─────────
+    tau_bounds, tau_bounds_src = resolve_tau_bounds(cfg.get('tau_bounds'), h5_path)
+    if cfg.get('tau_bounds') is not None:
+        tau_bounds_src = 'config tau_bounds'
+    cfg['tau_bounds'] = list(tau_bounds)          # recorded in config.json
 
     # ── Output dir ───────────────────────────────────────────────────────
     output_root = Path(args.output_dir or cfg.get('output_dir',
@@ -329,7 +367,8 @@ def main():
     print(f"  batch_size    : {hp['batch_size']}")
     print(f"  level_weights : {hp['level_weights_name']} (len={len(hp['level_weights'])})")
     print(f"  tau_weight    : {tau_weight:.4f}")
-    print(f"  tau_transform : {tau_transform}  (τ bounds {TAU_MIN}–{TAU_MAX})")
+    print(f"  tau_transform : {tau_transform}  (τ bounds {tau_bounds[0]:g}–{tau_bounds[1]:g}, "
+          f"from {tau_bounds_src})")
     print(f"  early stop on : val {early_stop_metric}")
     print(f"  n_epochs      : {hp['n_epochs']}"
           + ("  (CLI override)" if args.n_epochs is not None else '')
@@ -337,8 +376,20 @@ def main():
           + ("  (CLI override)" if args.early_stop_patience is not None else ''))
     print()
 
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+    # Two seeds (Nov 2026):
+    #   split seed (--seed, default 42) fixes the profile-aware train/val/test
+    #     split, so every run of a sweep is scored on the SAME validation and
+    #     test clouds;
+    #   init seed (hyperparams['init_seed'], default = split seed) seeds weight
+    #     initialisation, dropout masks, minibatch order and input noise.
+    # Seed replicates of one config (11b_generate_sweep.py) vary only the init
+    # seed, which measures run-to-run training noise without moving the split
+    # (why that noise matters: Bouthillier et al. 2021, Proc. MLSys 3,
+    # https://arxiv.org/abs/2103.03098).
+    init_seed = int(hp.get('init_seed', args.seed))
+    torch.manual_seed(init_seed)          # also seeds every CUDA device
+    np.random.seed(init_seed)
+    print(f"  seeds         : split {args.seed}, init {init_seed}")
 
     # ── Dataloaders (profile-aware split, identical to the M0 sweeps) ────
     train_loader, val_loader, test_loader = create_dataloaders(
@@ -350,6 +401,7 @@ def main():
         profile_holdout=True,
         n_val_profiles=cfg['n_val_profiles'],
         n_test_profiles=cfg['n_test_profiles'],
+        tau_bounds=tau_bounds,
     )
     print(f"Data: {len(train_loader.dataset)} train, "
           f"{len(val_loader.dataset)} val, {len(test_loader.dataset)} test")
@@ -367,8 +419,9 @@ def main():
     level_weights = torch.tensor(hp['level_weights'], dtype=torch.float32)
 
     # ── Model ────────────────────────────────────────────────────────────
-    # tau_min/tau_max pinned to the dataset's normalization constants so that
-    # output['tau_c'] and the target live on the same scale.
+    # tau_min/tau_max = the run's τ pair (same as the dataset's) so that
+    # output['tau_c'] and the target live on the same scale; the pair is also
+    # saved inside best_model.pt as the model's tau_min / tau_max buffers.
     model_cfg = RetrievalConfig(
         n_wavelengths=636,
         n_geometry_inputs=4,
@@ -376,8 +429,8 @@ def main():
         hidden_dims=tuple(hp['hidden_dims']),
         dropout=hp['dropout'],
         activation=hp.get('activation', 'gelu'),
-        tau_min=float(TAU_MIN),
-        tau_max=float(TAU_MAX),
+        tau_min=float(tau_bounds[0]),
+        tau_max=float(tau_bounds[1]),
     )
     sample    = base_ds[0]
     input_dim = int(sample[0].shape[-1])
@@ -429,13 +482,14 @@ def main():
         train_loss, global_step = train_one_epoch(
             model, train_loader, criterion, optimizer, device,
             tau_transform=tau_transform,
+            bounds=tau_bounds,
             augment_noise_std=aug_noise,
             warmup_steps=warmup,
             target_lr=target_lr,
             global_step_start=global_step,
         )
         val_loss, val_detail = validate(model, val_loader, criterion, device,
-                                        tau_transform)
+                                        tau_transform, tau_bounds)
 
         history['train'].append(train_loss)
         history['val'].append(val_loss)
@@ -482,6 +536,22 @@ def main():
     model.load_state_dict(best_state)
     pred = predict_test(model, test_loader, device, model_cfg, tau_transform)
 
+    # Validation metrics in physical units at the selected checkpoint.  Model
+    # selection across a sweep must use these, never the test metrics below:
+    # choosing among many configs by test error makes the reported test error
+    # optimistically biased (Cawley & Talbot 2010, J. Mach. Learn. Res. 11,
+    # 2079-2107, https://www.jmlr.org/papers/v11/cawley10a.html).
+    vpred = predict_test(model, val_loader, device, model_cfg, tau_transform)
+    v_err            = vpred['pred'] - vpred['true']
+    val_level_rmse   = np.sqrt(np.mean(v_err ** 2, axis=0)).tolist()
+    val_mean_rmse    = float(np.mean(val_level_rmse))
+    val_sigma        = float(np.mean(vpred['pred_std']))
+    v_tau_err        = vpred['tau_pred'] - vpred['tau_true']
+    val_tau_rmse     = float(np.sqrt(np.mean(v_tau_err ** 2)))
+    val_tau_var      = float(np.var(vpred['tau_true']))
+    val_tau_r2       = (float(1.0 - np.mean(v_tau_err ** 2) / val_tau_var)
+                        if val_tau_var > 0 else float('nan'))
+
     err            = pred['pred'] - pred['true']
     per_level_rmse = np.sqrt(np.mean(err ** 2, axis=0)).tolist()
     mean_rmse      = float(np.mean(per_level_rmse))
@@ -518,6 +588,8 @@ def main():
         'per_level_rmse_um':  per_level_rmse,
         # τ metrics (dimensionless optical thickness)
         'tau_transform':      tau_transform,
+        'tau_bounds':         list(tau_bounds),
+        'tau_bounds_source':  tau_bounds_src,
         'tau_weight':         tau_weight,
         'tau_test_rmse':      tau_rmse,
         'tau_test_bias':      tau_bias,
@@ -525,11 +597,24 @@ def main():
         'tau_test_r2':        tau_r2,
         'tau_test_sigma':     tau_sigma_mean,
         'tau_rmse_sigma_ratio': tau_rmse_sigma,
+        # validation metrics (physical units) — use THESE to rank configs
+        'mean_val_rmse_um':     val_mean_rmse,
+        'per_level_val_rmse_um': val_level_rmse,
+        'mean_val_sigma_um':    val_sigma,
+        'val_rmse_sigma_ratio': val_mean_rmse / max(val_sigma, 1e-9),
+        'tau_val_rmse':         val_tau_rmse,
+        'tau_val_bias':         float(np.mean(v_tau_err)),
+        'tau_val_r2':           val_tau_r2,
+        # how close the best epoch came to the epoch cap (≈1 → budget binding;
+        # checking where best checkpoints land: Deep Learning Tuning Playbook,
+        # https://github.com/google-research/tuning_playbook)
+        'best_epoch_fraction':  best_epoch / max(int(hp['n_epochs']), 1),
         'hyperparams':        hp,
         'data':               cfg['data'],
         'n_val_profiles':     cfg['n_val_profiles'],
         'n_test_profiles':    cfg['n_test_profiles'],
-        'seed':               args.seed,
+        'seed':               args.seed,           # split seed
+        'init_seed':          init_seed,
     }
 
     with open(run_dir / 'summary.json', 'w') as f:
@@ -548,6 +633,8 @@ def main():
     print(f"  τ RMSE      : {tau_rmse:.3f}  (bias {tau_bias:+.3f}, "
           f"MAPE {tau_mape:.1f}%, R² {tau_r2:.3f})")
     print(f"  τ σ         : {tau_sigma_mean:.3f}  (RMSE/σ = {tau_rmse_sigma:.2f})")
+    print(f"  VALIDATION  : profile RMSE {val_mean_rmse:.3f} μm, τ RMSE {val_tau_rmse:.3f} "
+          f"(used for model selection)")
     print(f"  wall time   : {train_seconds:.0f} s")
     print(f"  saved → {run_dir}")
 

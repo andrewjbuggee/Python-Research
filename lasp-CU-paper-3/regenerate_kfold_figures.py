@@ -1331,7 +1331,7 @@ def main():
             print(f'  wrote {out.name}')
     else:
         print(f'\n[skip] {spec_csv.name} not found; spectral importance figures '
-              f'not regenerated.  Run compute_spectral_feature_importance.py first.')
+              f'not regenerated.  Run spectral_feature_importance/compute_spectral_feature_importance.py first.')
 
     # Per-sample RMSE vs geometry (uses cached CSV when present, builds it
     # from the HDF5 + fold_NN/test_predictions.npz files when --h5-path is

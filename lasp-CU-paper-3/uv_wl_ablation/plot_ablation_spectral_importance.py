@@ -29,12 +29,13 @@ REPO = HERE
 while not (REPO / 'models.py').exists() and REPO != REPO.parent:
     REPO = REPO.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / 'spectral_feature_importance'))   # compute_feature_importance_run004
 from models import RetrievalConfig                                   # noqa: E402
 from models_profile_only_extras import ProfileOnlyNetworkExtras      # noqa: E402
 from compute_feature_importance_run004 import (                      # noqa: E402
     pick_device, mean_per_level_rmse, build_test_inputs)
 
-OUT_DIR = REPO / 'feature_importance_run004'        # save beside the original fig2
+OUT_DIR = REPO / 'spectral_feature_importance' / 'feature_importance_run004'        # save beside the original fig2
 C_SPECTRAL = '#1F5FC2'
 C_BAND = '#E6C98C'
 WV_BANDS_UM = [(0.91, 0.98), (1.10, 1.18), (1.34, 1.44), (1.78, 1.98)]

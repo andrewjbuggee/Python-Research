@@ -66,7 +66,7 @@ def _run_inference(run_dir: Path, h5_override: str | None,
     """Reload the PT-sweep model, reproduce the test split, predict."""
     import torch
     from models import DropletProfileNetwork, RetrievalConfig
-    from data import create_dataloaders, TAU_MIN, TAU_MAX
+    from data import create_dataloaders, tau_bounds_for_run
     from sweep_train_profile_tau_synthetic import predict_test
 
     with (run_dir / 'summary.json').open() as f:
@@ -74,6 +74,9 @@ def _run_inference(run_dir: Path, h5_override: str | None,
     hp            = s['hyperparams']
     tau_transform = s.get('tau_transform', hp.get('tau_transform', 'linear'))
     h5_path       = _resolve_h5_path(s['data']['h5_path'], h5_override)
+    # The run's own τ normalization pair (legacy 3/97 for pre-Nov-2026 runs);
+    # the dataset AND the model must both use it.
+    tau_bounds, tb_src = tau_bounds_for_run(s)
 
     if device_arg:
         device = torch.device(device_arg)
@@ -88,6 +91,7 @@ def _run_inference(run_dir: Path, h5_override: str | None,
     print(f'  device : {device}')
     print(f'  n_val = {s["n_val_profiles"]}, n_test = {s["n_test_profiles"]}, '
           f'seed = {seed}, tau_transform = {tau_transform}')
+    print(f'  τ bounds {tau_bounds[0]:g}–{tau_bounds[1]:g} ({tb_src})')
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -100,20 +104,22 @@ def _run_inference(run_dir: Path, h5_override: str | None,
         profile_holdout=True,
         n_val_profiles=s['n_val_profiles'],
         n_test_profiles=s['n_test_profiles'],
+        tau_bounds=tau_bounds,
     )
     base_ds = train_loader.dataset
     while hasattr(base_ds, 'dataset'):
         base_ds = base_ds.dataset
     n_levels = base_ds.n_levels
 
-    # Same config the trainer built — τ bounds pinned to the dataset constants
-    # (see the τ SCALING note in sweep_train_profile_tau_synthetic.py).
+    # Same config the trainer built — τ bounds = the run's pair (see the
+    # τ SCALING note in sweep_train_profile_tau_synthetic.py).  The checkpoint
+    # also carries them as buffers; predict_test checks the two agree.
     model_cfg = RetrievalConfig(
         n_wavelengths=636, n_geometry_inputs=4, n_levels=n_levels,
         hidden_dims=tuple(hp['hidden_dims']),
         dropout=hp['dropout'],
         activation=hp.get('activation', 'gelu'),
-        tau_min=float(TAU_MIN), tau_max=float(TAU_MAX),
+        tau_min=float(tau_bounds[0]), tau_max=float(tau_bounds[1]),
     )
     model = DropletProfileNetwork(model_cfg).to(device)
     ckpt = torch.load(run_dir / 'best_model.pt',

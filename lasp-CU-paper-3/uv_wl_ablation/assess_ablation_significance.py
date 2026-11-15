@@ -33,6 +33,7 @@ REPO = HERE
 while not (REPO / 'models.py').exists() and REPO != REPO.parent:
     REPO = REPO.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / 'spectral_feature_importance'))   # compute_feature_importance_run004
 from models import RetrievalConfig                                   # noqa: E402
 from models_profile_only_extras import ProfileOnlyNetworkExtras      # noqa: E402
 from compute_feature_importance_run004 import (                      # noqa: E402

@@ -173,7 +173,7 @@ if [ "$N_FOLDS_DONE" -lt 1 ]; then
     echo "  No fold checkpoints found in $SUITE_DIR — skipping STEP 2."
     RC_IMPORT=2
 else
-    python compute_spectral_feature_importance.py \
+    python spectral_feature_importance/compute_spectral_feature_importance.py \
         --output-dir "$SUITE_DIR" \
         --h5-path "$H5_FILE" \
         --training-data-dir "$TRAINING_DATA_DIR" \

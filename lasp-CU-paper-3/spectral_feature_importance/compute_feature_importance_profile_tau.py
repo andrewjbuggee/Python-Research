@@ -51,13 +51,14 @@ import h5py
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent          # spectral_feature_importance/
+REPO = HERE.parent                               # lasp-CU-paper-3/ (data.py, models.py)
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'hyper_parameter_sweep'))
 
 from models import DropletProfileNetwork, RetrievalConfig            # noqa: E402
 from data import (LibRadtranDataset, create_profile_aware_splits,    # noqa: E402
-                  TAU_MIN, TAU_MAX)
+                  tau_bounds_for_run)
 # Full-path override semantics with a training_data/ fallback (same helper the
 # other run-level plot scripts use — NOT data.resolve_h5_path, which treats
 # the override as a directory).
@@ -68,8 +69,8 @@ N_GEOMETRY = 4
 N_INFORMATIVE = N_SPECTRAL + N_GEOMETRY   # 640 — the model's full input
 GEOM_NAMES = ['SZA', 'VZA', 'SAZ', 'VAZ']
 
-_LOG_TAU_MIN = float(np.log10(TAU_MIN))
-_LOG_TAU_MAX = float(np.log10(TAU_MAX))
+# τ bounds are per run: read with data.tau_bounds_for_run(summary) and carried
+# by the model as its tau_min / tau_max buffers (see model_tau_bounds).
 
 
 def pick_device(arg: str | None) -> torch.device:
@@ -82,12 +83,20 @@ def pick_device(arg: str | None) -> torch.device:
     return torch.device('cpu')
 
 
-def tau_norm_to_phys_torch(tau_norm: torch.Tensor, tau_transform: str) -> torch.Tensor:
+def model_tau_bounds(model) -> tuple[float, float]:
+    """The (τ_min, τ_max) pair stored in the model (loaded from best_model.pt)."""
+    return float(model.tau_min), float(model.tau_max)
+
+
+def tau_norm_to_phys_torch(tau_norm: torch.Tensor, tau_transform: str,
+                           bounds: tuple[float, float]) -> torch.Tensor:
     """Differentiable normalized-τ → physical-τ, matching the trainer."""
+    lo, hi = bounds
     if tau_transform == 'linear':
-        return tau_norm * (TAU_MAX - TAU_MIN) + TAU_MIN
+        return tau_norm * (hi - lo) + lo
     if tau_transform == 'log10':
-        return 10.0 ** (tau_norm * (_LOG_TAU_MAX - _LOG_TAU_MIN) + _LOG_TAU_MIN)
+        log_lo, log_hi = float(np.log10(lo)), float(np.log10(hi))
+        return 10.0 ** (tau_norm * (log_hi - log_lo) + log_lo)
     raise ValueError(f'Unknown tau_transform: {tau_transform!r}')
 
 
@@ -98,13 +107,14 @@ def load_run(run_dir: Path, h5_override: str | None, device: torch.device):
     hp = s['hyperparams']
     tau_transform = s.get('tau_transform', hp.get('tau_transform', 'linear'))
     h5_path = _resolve_h5_path(s['data']['h5_path'], h5_override)
+    tau_bounds, _ = tau_bounds_for_run(s)
 
     cfg = RetrievalConfig(
         n_wavelengths=N_SPECTRAL, n_geometry_inputs=N_GEOMETRY,
         n_levels=len(s['per_level_rmse_um']),
         hidden_dims=tuple(hp['hidden_dims']),
         dropout=hp['dropout'], activation=hp.get('activation', 'gelu'),
-        tau_min=float(TAU_MIN), tau_max=float(TAU_MAX),
+        tau_min=float(tau_bounds[0]), tau_max=float(tau_bounds[1]),
     )
     model = DropletProfileNetwork(cfg).to(device)
     ckpt = torch.load(run_dir / 'best_model.pt', map_location=device,
@@ -112,6 +122,9 @@ def load_run(run_dir: Path, h5_override: str | None, device: torch.device):
     state = ckpt['model_state_dict'] if (isinstance(ckpt, dict)
                                          and 'model_state_dict' in ckpt) else ckpt
     model.load_state_dict(state)
+    if not np.allclose(model_tau_bounds(model), tau_bounds):
+        raise RuntimeError(f'checkpoint τ buffers {model_tau_bounds(model)} != run '
+                           f'tau_bounds {tau_bounds}')
     model.eval()
     return model, cfg, s, tau_transform, h5_path
 
@@ -124,7 +137,9 @@ def build_test_inputs(s: dict, h5_path: Path, seed: int):
         n_test_profiles=s['n_test_profiles'],
         seed=seed,
     )
-    ds = LibRadtranDataset(str(h5_path), normalize=True, instrument='hysics')
+    tau_bounds, _ = tau_bounds_for_run(s)
+    ds = LibRadtranDataset(str(h5_path), normalize=True, instrument='hysics',
+                           tau_bounds=tau_bounds)
     X, P, T = [], [], []
     for gi in test_idx:
         xi, profi, taui = ds[int(gi)]
@@ -134,7 +149,8 @@ def build_test_inputs(s: dict, h5_path: Path, seed: int):
     re_min, re_max = float(ds.re_min), float(ds.re_max)
     prof_true_um = (prof_norm * (re_max - re_min) + re_min).astype(np.float32)
     # loader τ is linearly normalized regardless of the loss-space transform
-    tau_true = (np.asarray(T, dtype=np.float32) * (TAU_MAX - TAU_MIN) + TAU_MIN)
+    tau_true = (np.asarray(T, dtype=np.float32) * (tau_bounds[1] - tau_bounds[0])
+                + tau_bounds[0])
     with h5py.File(h5_path, 'r') as f:
         wavelengths_nm = f['wavelengths'][:].astype(np.float64)
     return X, prof_true_um, tau_true, wavelengths_nm
@@ -151,7 +167,8 @@ def eval_metrics(model, X: np.ndarray, prof_true_um: np.ndarray,
         out = model(xb)
         prof_preds.append(out['profile'].cpu().numpy())
         tau_norm = out['tau_normalized'].squeeze(-1)
-        tau_preds.append(tau_norm_to_phys_torch(tau_norm, tau_transform)
+        tau_preds.append(tau_norm_to_phys_torch(tau_norm, tau_transform,
+                                                model_tau_bounds(model))
                          .cpu().numpy())
     prof_pred = np.concatenate(prof_preds, axis=0)
     tau_pred  = np.concatenate(tau_preds,  axis=0)
@@ -206,7 +223,7 @@ def gradient_saliency(model, X, tau_transform, device, batch: int = 4096):
         acc_prof += g_prof.abs().sum(dim=0).detach().cpu().numpy()
 
         tau_phys = tau_norm_to_phys_torch(out['tau_normalized'].squeeze(-1),
-                                          tau_transform)
+                                          tau_transform, model_tau_bounds(model))
         g_tau, = torch.autograd.grad(tau_phys.sum(), xb)
         acc_tau += g_tau.abs().sum(dim=0).detach().cpu().numpy()
     return acc_prof[:N_INFORMATIVE] / n, acc_tau[:N_INFORMATIVE] / n

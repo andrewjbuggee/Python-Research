@@ -32,12 +32,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent          # spectral_feature_importance/
+REPO = HERE.parent                               # lasp-CU-paper-3/ (data.py, models.py)
 sys.path.insert(0, str(REPO))
 RUN_DIR = (REPO / 'hyper_parameter_sweep'
            / 'sweep_results_profile_only_synthetic_M0_rev2' / 'run_004')
 H5 = REPO / 'training_data' / 'synthetic_training_data_7-levels_8_May_2026.h5'
-OUT_DIR = REPO / 'feature_importance_run004'
+OUT_DIR = HERE / 'feature_importance_run004'
 
 
 def pearson(a: np.ndarray, b: np.ndarray) -> float:
