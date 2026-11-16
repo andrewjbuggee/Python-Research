@@ -100,15 +100,56 @@ References (full)
   [LH19]      Loshchilov, I. and F. Hutter (2019): Decoupled weight decay
               regularization. ICLR. https://arxiv.org/abs/1711.05101 (AdamW)
 
+Inputs
+  Both HDF5 arguments name the SAME training file, the one written by step 10.
+  They differ in what the script does with the path, because this script can be
+  run on the laptop (where the configs are then pushed to Alpine) or on Alpine.
+
+  --tag NAME         Sweep name. Output goes to training_runs/<NAME>/ inside
+                     this repo, wherever the script is run. The sweep has no
+                     other output location.
+  --h5-alpine PATH   Where the HDF5 lives ON ALPINE. This path is NOT opened
+                     here. It is only written, as text, into every
+                     configs/run_NNN.json ('data': {'h5_path': ...}) and into
+                     the printed sbatch line. The GPU jobs open it at training
+                     time, so it must be the path as seen from an Alpine
+                     compute node.
+  --h5-local PATH    A copy of the HDF5 that THIS script can open now, on the
+                     machine where it is running. It is read for two facts only:
+                       1. the number of samples (len of 'tau_c'), which sets
+                          the train/val/test split sizes and the cost estimate;
+                       2. the τ normalization pair (attrs tau_c_norm_min/max),
+                          which is written into each config.
+                     Nothing else is read, and its path is not stored.
+  --n-samples N      Instead of --h5-local, when no readable copy is at hand.
+                     The τ pair then comes from --tau-bounds, else 3 40.
+                     Exactly one of --h5-local / --n-samples is required.
+
+  Running ON ALPINE: the file is local there, so pass the same path to both:
+      H5=/scratch/alpine/anbu8374/.../<file>.h5
+      python 11b_generate_sweep.py --tag <tag> --h5-alpine $H5 --h5-local $H5
+  The configs are then already on Alpine (no push needed). Copy or commit
+  training_runs/<tag>/ back to the laptop later so 11c can read it there.
+
+  Running ON THE LAPTOP: --h5-alpine is the scratch path, --h5-local is your
+  laptop copy (e.g. training_data/<file>.h5); then commit and push the configs.
+
+  The remaining options (--n-configs, --n-replicate-configs, --n-extra-seeds,
+  --n-epochs, --early-stop-patience, --sobol-seed, --tau-bounds,
+  --concurrency) have defaults matching the design above; see --help.
+
 Outputs (training_runs/<tag>/)
   configs/run_NNN.json   one per trial (replicates have their own ids)
   runs.txt               run ids, one per line, read by the array script
   search_space.json      the space, seeds, budget and data used (provenance)
 
 Usage
+    # laptop
     python 11b_generate_sweep.py --tag PT_sweep_2026-11-15 \
         --h5-alpine /scratch/alpine/anbu8374/neural_network_training_data/<file>.h5 \
         --h5-local training_data/<file>.h5
+    # or on Alpine (same file for both)
+    python 11b_generate_sweep.py --tag PT_sweep_2026-11-15 --h5-alpine $H5 --h5-local $H5
     then on Alpine, from lasp-CU-paper-3/ (the line is printed):
     sbatch --array=0-<n-1>%8 --export=ALL,TAG=<tag>,H5_PATH=<alpine .h5> 12_train_configs_alpine.sh
 
@@ -216,10 +257,12 @@ def arch_tag(dims: list[int]) -> str:
 def main() -> None:
     p = argparse.ArgumentParser(description='Quasi-random PT hyperparameter sweep (configs only)')
     p.add_argument('--tag', required=True, help='sweep name, e.g. PT_sweep_2026-11-15')
-    p.add_argument('--h5-alpine', required=True, help='HDF5 path on Alpine (baked into configs)')
+    p.add_argument('--h5-alpine', required=True, help='HDF5 path as seen on Alpine; not opened here, only written into each '
+                        'config for the GPU jobs (on Alpine: same as --h5-local)')
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument('--h5-local', type=Path, help='local copy: sample count + τ bounds read from it')
-    g.add_argument('--n-samples', type=int, help='sample count if no local copy')
+    g.add_argument('--h5-local', type=Path, help='a copy of the same HDF5 readable on THIS machine; only the sample '
+                        'count and τ bounds are read from it')
+    g.add_argument('--n-samples', type=int, help='sample count, if no readable copy (instead of --h5-local)')
     p.add_argument('--n-configs', type=int, default=128,
                    help='Sobol points (a power of 2 keeps the sequence balanced)')
     p.add_argument('--n-replicate-configs', type=int, default=4,
@@ -331,7 +374,7 @@ def main() -> None:
         else:
             print(f'  {name:<20} {min(vals):.3g} … {max(vals):.3g}  ({spec["kind"]})')
     print(f'\nwrote {cfg_dir.relative_to(REPO)}/ ({n_tasks} files), runs.txt, search_space.json')
-    print('Push the repo to Alpine, then from lasp-CU-paper-3/:')
+    print('If generated on the laptop, push the repo to Alpine. Then, on Alpine from lasp-CU-paper-3/:')
     print(f'  sbatch --array=0-{n_tasks - 1}%{args.concurrency} '
           f'--export=ALL,TAG={args.tag},H5_PATH={args.h5_alpine} 12_train_configs_alpine.sh')
     print(f'Afterwards: python 11c_analyze_sweep.py --tag {args.tag}')
