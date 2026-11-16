@@ -58,9 +58,33 @@ echo "HDF5:       $H5_PATH"
 echo "Results:    $RESULTS_DIR"
 echo "============================================"
 
+# ── Python environment ──────────────────────────────────────────────────────
+# 15 Nov 2026: every task of job 35753371 failed here with Lmod
+# 'module(s) are unknown: "anaconda"' on c3gpu-a9-u15-1, the node where the
+# same three lines worked in Aug 2026. So: try the anaconda module, then
+# miniforge (CURC's conda module where anaconda is not offered), and if
+# neither loads, fall back to the env's own bin/ (a conda env is a
+# self-contained prefix, so its python runs without `conda activate`).
+# Then stop with a clear message if python/torch are not usable, instead of
+# letting all array tasks fail silently.
+ENV_PREFIX=/projects/anbu8374/software/anaconda/envs/dropProfs_nn
 module purge
-module load anaconda
-conda activate /projects/anbu8374/software/anaconda/envs/dropProfs_nn
+CONDA_MODULE=""
+for m in anaconda miniforge; do
+    if module load "$m" 2>/dev/null && command -v conda >/dev/null 2>&1; then
+        CONDA_MODULE=$m; break
+    fi
+done
+if [ -n "$CONDA_MODULE" ]; then
+    echo "Environment: module $CONDA_MODULE + conda activate $ENV_PREFIX"
+    conda activate "$ENV_PREFIX"
+else
+    echo "Environment: no conda module available; using $ENV_PREFIX/bin directly"
+    export PATH="$ENV_PREFIX/bin:$PATH"
+fi
+echo "MODULEPATH: $MODULEPATH"
+python -c "import sys, torch; print('python', sys.executable); print('torch', torch.__version__, 'cuda', torch.cuda.is_available())" \
+    || { echo "ERROR: python/torch not usable from $ENV_PREFIX"; exit 2; }
 
 for f in "$CONFIG_FILE" "$H5_PATH"; do
     [ -f "$f" ] || { echo "ERROR: not found: $f"; exit 1; }
