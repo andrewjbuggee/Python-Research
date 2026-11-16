@@ -325,7 +325,8 @@ def apply_supercooled(cell: xr.Dataset, book: dict, m: dict,
     sp_pa = cell["sp"].values.astype(float)[:, None, None]       # (t, 1, 1) Pa
     keys = ("liquid_containing", "liquid_only", "mixed")
     masks = {k: m[k][:, None, None] for k in keys}               # the filter's (t, lat, lon)
-    t_C = flt.apply(times, sp_pa, masks, keys=keys)[:, 0, 0]
+    t2m_k = cell["t2m"].values.astype(float)[:, None, None]      # (t, 1, 1) K
+    t_C = flt.apply(times, sp_pa, t2m_k, masks, keys=keys)[:, 0, 0]
     warm = m["liquid_containing"] & ~masks["liquid_containing"][:, 0, 0]
     for k in keys:
         m[k] = masks[k][:, 0, 0]
@@ -395,8 +396,10 @@ def build_output(cell: xr.Dataset, book: dict, m: dict,
             "units": "degC",
             "comment": ("sum_l(clwc_l dp_l T_l) / sum_l(clwc_l dp_l) over the ERA5 pressure "
                         "levels (dp_l clipped at the surface); computed for hours with "
-                        "liquid-containing cloud, NaN otherwise. Liquid-containing hours "
-                        "are kept only where it is < 0 degC"),
+                        "liquid-containing cloud; NaN otherwise, and NaN where the liquid "
+                        "lies below the lowest pressure level (1000 hPa). Liquid-containing "
+                        "hours are kept where it is < 0 degC or, where it is NaN, where "
+                        "both t2m and the lowest above-ground pressure level are < 0 degC"),
         })
     for name, (arr, attrs) in derived.items():
         out[name] = ("valid_time", np.asarray(arr[k], dtype=np.float32))
@@ -473,9 +476,11 @@ def build_output(cell: xr.Dataset, book: dict, m: dict,
         "filter_3_no_precipitation": f"tp < {args.precip_rate_max:g} mm hr-1",
         **({} if book.get("supercooled") is None else {
             "filter_4_supercooled": (
-                "liquid-containing hours kept only if cloud_temperature_liquid_C < 0 degC "
-                "(hours with no pressure-level liquid are dropped too); "
-                f"{book['supercooled']['n_kept']} of {book['supercooled']['n_checked']} kept")}),
+                "liquid-containing hours kept only if cloud_temperature_liquid_C < 0 degC, "
+                "or, where it is undefined (liquid below 1000 hPa), if t2m and the lowest "
+                "above-ground pressure level are both < 0 degC; "
+                f"{book['supercooled']['n_kept']} of {book['supercooled']['n_checked']} kept "
+                f"({book['supercooled']['n_kept_fallback']} by that fallback)")}),
         "phase_liquid_containing": f"IWP/CWP < {args.ice_fraction_min:g}",
         "phase_liquid_only": f"LWP/CWP >= {args.liquid_fraction_min:g}",
         "phase_ice_only": f"IWP/CWP >= {args.ice_fraction_min:g}",

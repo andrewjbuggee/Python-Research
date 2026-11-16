@@ -39,6 +39,9 @@ LOGIN NODES
        ./submit.sh --region arctic_circle --csvs hour_count,per_cell
        Products: hour_count  per_cell  precip  cumulative  ice_vs_water  hourly  netcdf
        Also, only when named: supercooled (see make_era5_supercooled_check.py)
+                              surface_class (figures 1-6 of plot_surface_class_timeseries.ipynb,
+                              1 Aug - 31 Mar, + daily area share per class; see
+                              make_era5_surface_class_timeseries.py)
 
    Figures:
        ./submit.sh --box 82 -175 65 -110 --region-name beaufort_wide --years 2014-2024 --all
@@ -89,10 +92,13 @@ SUPERCOOLED-ONLY FILTER (on by default on Casper)
    With GDEX (or S3), liquid-containing and liquid-only statistics keep only cell-hours
    whose cloud temperature is below 0 C. Cloud temperature = liquid-water-path-weighted
    mean temperature of the column from the 23 pressure levels (cloud_temp_filter.py).
-   Cell-hours with no pressure-level liquid are dropped too; ice-only and clear-sky are
-   untouched. Applies to hour_count, per_cell, precip, cumulative, ice_vs_water (lc_* rows),
+   Liquid below the lowest pressure level (1000 hPa) has no cloud temperature, on Casper
+   as on the laptop (about 16% of liquid cell-hours at Barrow); those are kept if the
+   2 m temperature and the lowest above-ground level are both below 0 C. Ice-only and
+   clear-sky are untouched. Applies to hour_count, per_cell, precip, cumulative, ice_vs_water (lc_* rows),
    hourly and netcdf. NOT to supercooled (the diagnostic itself) or the figure notebook.
-   Laptop runs from local files leave it off (pressure levels for 2024/25 only).
+   Laptop runs from local files leave it off (pressure levels only for 2024/25 and
+   2025/26 in full, so not the 2014-2024 record).
        --supercooled-only auto|on|off    on the scripts and on submit.sh
        OV_SUPERCOOLED_ONLY=off           same thing from the environment
    Filtered output goes to its own folder, <domain>_<span>_supercooled, so it never

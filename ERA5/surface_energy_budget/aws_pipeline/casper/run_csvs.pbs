@@ -9,6 +9,7 @@
 #
 # Variables passed with qsub -v:
 #   PRODUCT      hour_count | per_cell | precip | cumulative | ice_vs_water | hourly | netcdf | supercooled
+#                | surface_class
 #   REGION       a name in era5_seb_variables.REGIONS, or box:N,W,S,E
 #   REGION_NAME  optional name for a box, used in the output folder
 #   YEARS        season START years, e.g. 2014-2024
@@ -40,6 +41,9 @@ case "$PRODUCT" in
   # --fields-out writes the netCDF needed for the tcslw step on the laptop:
   # GDEX has no tcslw. Not part of --csvs all, so it is only run when asked for.
   supercooled) SCRIPT=make_era5_supercooled_check.py; PRODUCT_ARGS="--fields-out" ;;
+  # Figures 1-6 of plot_surface_class_timeseries.ipynb + area-share CSVs. Not part
+  # of --csvs all: it reads a longer season (1 Aug - 31 Mar).
+  surface_class) SCRIPT=make_era5_surface_class_timeseries.py ;;
   *) echo "unknown PRODUCT=$PRODUCT"; exit 1 ;;
 esac
 

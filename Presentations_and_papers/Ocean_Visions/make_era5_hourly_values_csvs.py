@@ -99,7 +99,14 @@ import pandas as pd
 
 # Figure settings and the module path setup live in the netCDF script.
 from make_era5_utqiagvik_filtered_netcdf import HERE, SETTINGS, build_args, git_describe
+# The supercooled fractions table: same groups and writer as the hour counts.
+from make_era5_hour_count_csvs import (  # noqa: E402
+    TALLY_GROUP_ORDER,
+    supercooled_tally_groups,
+    write_supercooled_fractions,
+)
 from cloud_temp_filter import (  # noqa: E402  shared cloud-temperature code
+    FRACTIONS_README,
     PL_BLOCK_HOURS,
     SupercooledFilter,
     open_pressure_archive,
@@ -204,7 +211,7 @@ def accumulate(args: argparse.Namespace) -> dict:
     pl_matched = np.zeros(n_hour, dtype=bool)        # hour has pressure-level data
 
     read_vars = ["tcc", args.liquid_var, "tciw", "tp", "siconc",
-                 "msdwlwrf", "msdwlwrfcs", "sp"]
+                 "msdwlwrf", "msdwlwrfcs", "sp", "t2m"]   # t2m: supercooled fallback
     print(f"  Streaming {n_hour:,} hours ...", flush=True)
     for i0, block in iter_time_blocks(ds, read_vars, args.block_hours,
                                       keep_mask=use_step):
@@ -246,6 +253,7 @@ def accumulate(args: argparse.Namespace) -> dict:
         # --- quantities ------------------------------------------------------
         t_liq = np.full(tcc.shape, np.nan)
         t_ice = np.full(tcc.shape, np.nan)
+        t_low = np.full(tcc.shape, np.nan)       # lowest above-ground level, deg C
         if t_pl.size:
             tk = times[sl][keep]
             pos = np.searchsorted(t_pl, tk)
@@ -258,15 +266,23 @@ def accumulate(args: argparse.Namespace) -> dict:
             sp_pa = block["sp"].values[keep]
             for j0 in range(0, hit.size, PL_BLOCK_HOURS):
                 h = hit[j0:j0 + PL_BLOCK_HOURS]
-                t_liq[h], t_ice[h] = weighted_cloud_temperature(pds, pos[h], sp_pa[h])
+                t_liq[h], t_ice[h], t_low[h] = weighted_cloud_temperature(
+                    pds, pos[h], sp_pa[h], lowest_level=True)
         if flt is not None:
             if not (t_pl.size and match.all()):
                 raise ValueError("the supercooled-only filter needs pressure-level data for "
                                  "every hour; some hours have none")
-            # Removes warm (and undefined) cell-hours from liquid containing and
-            # liquid only, so every LWP, CloudTemp and DLR mean below uses only
-            # supercooled liquid-containing clouds.
-            flt.apply_temperature(t_liq, state)
+            # Removes non-supercooled cell-hours from liquid containing and
+            # liquid only (rules in cloud_temp_filter.py), so every LWP, CloudTemp
+            # and DLR mean below uses only supercooled liquid-containing clouds.
+            # Cells kept by the surface fallback have no T_cloud, so they count
+            # in the LWP and DLR means but not in CloudTemp (see cell_counts/).
+            t2m_C = block["t2m"].values[keep].astype(float) - 273.15
+            # tally: the same per-season, per-group counts as hour_count, so the
+            # two products' fraction tables must agree exactly.
+            flt.apply_temperature(t_liq, t2m_C, t_low, state, tally=supercooled_tally_groups(
+                np.asarray(layout["seasons"])[s_idx[sl][keep]], classes, site_mask,
+                has_site, valid))
         value = {
             "lwp": lwp_g_m2,
             "dlr": block["msdwlwrf"].values[keep],
@@ -299,7 +315,9 @@ def accumulate(args: argparse.Namespace) -> dict:
             "season_of_hour": np.asarray(layout["seasons"])[s_idx[use_step]],
             "n_pl_hours": n_pl_hours, "pl_matched": pl_matched, "site_lat": site_lat, "site_lon": site_lon,
             "has_site": has_site,
-            "supercooled": flt.summary() if flt is not None else None}
+            "supercooled": flt.summary() if flt is not None else None,
+            "supercooled_fractions": (flt.fractions_table(TALLY_GROUP_ORDER)
+                                      if flt is not None else None)}
 
 
 # ----------------------------------------------------------------------------
@@ -428,7 +446,7 @@ Companion to ../era5_hour_count_csv/readME.txt, which describes the ERA5
 data, the filters, the surface classes and the plot colours. The hours and
 cloud types here are the same ones counted there.
 
-{readme_note(R.get("supercooled"))}
+{readme_note(R.get("supercooled"))}{"" if R.get("supercooled") is None else chr(10) + FRACTIONS_README}
 
 1. LAYOUT
 ---------
@@ -531,6 +549,8 @@ def main(argv: list[str] | None = None) -> None:
     R = accumulate(args)
     check_against_earlier_files(R, run)
     written = write_all(R, out_dir)
+    if R.get("supercooled_fractions") is not None:
+        written.append(write_supercooled_fractions(R, out_dir))
     readme = write_readme(R, args, out_dir)
     print(f"\n  -> {len(written)} CSV files + {readme.name} in {out_dir}")
 

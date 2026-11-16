@@ -83,7 +83,8 @@ CELL_WEIGHTING = os.environ.get("OV_CELL_WEIGHTING") or "area"
 # 0 deg C. Cloud temperature comes from the 23-level pressure archive (t, clwc);
 # see cloud_temp_filter.py. Choices:
 #   "auto" : on when ERA5 comes from GDEX or S3 (every season has pressure
-#            levels), off for the local archive (pressure levels for 2024/25 only)
+#            levels), off for the local archive (complete pressure levels only for
+#            2024/25 and 2025/26)
 #   "on"   : always (stops if any wanted hour has no pressure-level data)
 #   "off"  : never
 SUPERCOOLED_ONLY = os.environ.get("OV_SUPERCOOLED_ONLY") or "auto"

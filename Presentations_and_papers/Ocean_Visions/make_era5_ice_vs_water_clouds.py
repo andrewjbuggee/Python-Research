@@ -202,7 +202,7 @@ def accumulate(args: argparse.Namespace, seasons: list[int]) -> dict:
     # cell-hours with cloud temperature < 0 C (sp: surface clip of the integral).
     flt = SupercooledFilter(args, ds) if getattr(args, "supercooled_only", False) else None
     if flt is not None:
-        read.append("sp")
+        read += ["sp", "t2m"]           # t2m: the surface fallback (cloud_temp_filter rule 2)
     for i0, block in iter_time_blocks(ds, read, args.block_hours, keep_mask=keep):
         span = slice(i0, i0 + block.sizes["valid_time"])
         sel = keep[span]
@@ -229,8 +229,8 @@ def accumulate(args: argparse.Namespace, seasons: list[int]) -> dict:
         liquid_containing = phase["liquid"] | phase["mixed"]
         if flt is not None:
             m = {"liquid_containing": liquid_containing}
-            flt.apply(np.asarray(times[span][sel]), block["sp"].values[sel], m,
-                      keys=("liquid_containing",))
+            flt.apply(np.asarray(times[span][sel]), block["sp"].values[sel],
+                      block["t2m"].values[sel], m, keys=("liquid_containing",))
             liquid_containing = m["liquid_containing"]
         overcast = tcc >= args.min_cloud_fraction
         raining = np.isfinite(tp_mm_hr) & (tp_mm_hr >= args.precip_rate_max)

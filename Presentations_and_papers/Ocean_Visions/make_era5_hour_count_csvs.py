@@ -94,7 +94,7 @@ from matplotlib.colors import to_hex, to_rgb
 # The netCDF script holds the figure settings and puts the analysis modules on
 # sys.path; importing it is what keeps the two products on one definition.
 from make_era5_utqiagvik_filtered_netcdf import SETTINGS, build_args, git_describe
-from cloud_temp_filter import SupercooledFilter, readme_note  # noqa: E402
+from cloud_temp_filter import FRACTIONS_README, SupercooledFilter, readme_note  # noqa: E402
 
 import plot_lwp_histogram_by_surface_class as lwph  # noqa: E402
 from cloud_classification import fraction_phase_masks  # noqa: E402
@@ -158,6 +158,37 @@ def active_slots(C: dict) -> list[tuple[int, str]]:
 def season_label(y: int) -> str:
     """2014 -> '2014/15'."""
     return f"{y}/{(y + 1) % 100:02d}"
+
+
+# ----------------------------------------------------------------------------
+# Supercooled-filter bookkeeping (only used when the filter is on)
+# ----------------------------------------------------------------------------
+# Groups of the fractions table: the UTQ cell, the five classes, every cell.
+TALLY_GROUP_ORDER = ["UTQ", *SLOT_CLASS, "AllCells"]
+
+
+def supercooled_tally_groups(season_of_hour: np.ndarray, classes: np.ndarray,
+                             site_mask: np.ndarray, has_site: bool,
+                             valid: np.ndarray) -> dict:
+    """The ``tally=`` argument of SupercooledFilter.apply for one block.
+
+    ``classes`` (t, lat, lon) surface-class codes; ``site_mask`` (lat, lon) the
+    UTQ cell; ``valid`` (t, lat, lon) the denominator. Shared with
+    make_era5_hourly_values_csvs.py so both products tally identical groups.
+    """
+    groups = {name: classes == CLASS_CODES[cls] for name, cls in SLOT_CLASS.items()}
+    groups["AllCells"] = np.ones(classes.shape, dtype=bool)
+    if has_site:
+        groups = {"UTQ": np.broadcast_to(site_mask, classes.shape), **groups}
+    return {"season": season_of_hour, "groups": groups, "valid": valid}
+
+
+def write_supercooled_fractions(C: dict, out_dir: Path) -> Path:
+    """ERA5_supercooledFilter_fractions_<span>.csv: what the filter kept and dropped."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"ERA5_supercooledFilter_fractions_{ov.span_tag(C['seasons'])}.csv"
+    C["supercooled_fractions"].to_csv(path, index=False, float_format="%.6f")
+    return path
 
 
 # ----------------------------------------------------------------------------
@@ -237,7 +268,7 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
     # pressure level at the ground in the cloud-temperature integral.
     flt = SupercooledFilter(args, ds) if getattr(args, "supercooled_only", False) else None
     if flt is not None:
-        read_vars.append("sp")
+        read_vars += ["sp", "t2m"]      # t2m: the surface fallback (cloud_temp_filter rule 2)
     print(f"  Streaming {int(use_step.sum()):,} hours x "
           f"{ds.sizes['latitude']} x {ds.sizes['longitude']} cells ...", flush=True)
     for i0, block in iter_time_blocks(ds, read_vars, args.block_hours,
@@ -283,7 +314,9 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
             # In place on masks["liquid_containing"] and masks["liquid_only"];
             # every table below (counts, per-cell, precip, cumulative) then
             # holds supercooled liquid-containing clouds only.
-            flt.apply(times[sl][keep], block["sp"].values[keep], masks)
+            flt.apply(times[sl][keep], block["sp"].values[keep], block["t2m"].values[keep],
+                      masks, tally=supercooled_tally_groups(
+                          season_years[s_idx[sl][keep]], classes, site_mask, has_site, valid))
 
         # --- accumulate: one bincount per category over (day, slot) --------
         # Flat index day * (n_slot + 1) + slot over every cell-hour.
@@ -330,7 +363,9 @@ def count_cell_hours(args: argparse.Namespace) -> dict:
             "keep_idx": list(keep_idx), "n_unclassified": n_unclassified,
             "site_lat": site_lat, "site_lon": site_lon, "has_site": has_site,
             "grid": (ds.sizes["latitude"], ds.sizes["longitude"]),
-            "supercooled": flt.summary() if flt is not None else None}
+            "supercooled": flt.summary() if flt is not None else None,
+            "supercooled_fractions": (flt.fractions_table(TALLY_GROUP_ORDER)
+                                      if flt is not None else None)}
 
 
 # ----------------------------------------------------------------------------
@@ -609,7 +644,8 @@ this domain. The thresholds here are the same as theirs."""
     supercooled_text = ("" if C.get("supercooled") is None else
                         "\n\nWith the supercooled filter on, the dropped liquid-containing cell-hours are\n"
                         "in neither category, so that sentence no longer holds.\n\n"
-                        + readme_note(C["supercooled"]).rstrip("\n"))
+                        + readme_note(C["supercooled"]).rstrip("\n")
+                        + "\n\n" + FRACTIONS_README.rstrip("\n"))
     text = f"""{title}
 =============================================================
 
@@ -762,6 +798,8 @@ def main(argv: list[str] | None = None) -> None:
         verify_against_module(C, args)
 
     written = write_all(C, out_dir)
+    if C.get("supercooled_fractions") is not None:
+        written.append(write_supercooled_fractions(C, out_dir))
     readme = write_readme(C, args, out_dir, run)
     print(f"\n  -> {len(written)} CSV files + {readme.name} in {out_dir}")
     if C["has_site"]:
