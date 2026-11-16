@@ -521,7 +521,9 @@ def plot_two_panel(res: dict, out_base: Path, title_note: str = "") -> None:
     h, lab = axes[0].get_legend_handles_labels()
     h.append(Patch(color=C_BAND, alpha=0.35, lw=0))
     lab.append(r"H$_2$O vapor band")
-    axes[0].legend(h, lab, loc="upper right", ncol=3, frameon=False)
+    # above the top panel so it never hides a peak
+    axes[0].legend(h, lab, loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=3, frameon=False,
+                   borderaxespad=0.2)
     axes[1].set_xlabel(r"Wavelength ($\mu$m)")
     if title_note:
         fig.suptitle(title_note, fontsize=8, color="0.35")

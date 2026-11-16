@@ -119,8 +119,13 @@ Outputs of each training round live in `training_runs/<tag>/`
 | LWP | `plot_lwp_analysis_profile_tau.py`, `compare_lwp_methods_retrieved_profiles.py` | 15 |
 | profile-only network (June 2026, M0 run_004) | `train_standalone_profile_only_synthetic.py`, `shell_scripts/standalone_synthetic_NN_al40.sh`, `sweep_alpine_profile_only_synthetic_M0/M2.sh` | superseded by the profile + τ network |
 
-Not yet numbered: feature importance (`compute_/plot_feature_importance_profile_tau.py`)
-and the in-situ VOCALS-REx / ORACLES comparison (`03_vocals_validation.ipynb`).
+Feature importance lives in `spectral_feature_importance/`. The current script is
+`spectral_feature_importance/spectral_feature_importance.py --tag <tag> --h5-path <local.h5>`
+(per-profile permutation importance for both r_e profile and τ_c, median + IQR; method and
+sources in its docstring; `--group-width-nm 20` = grouped robustness check). The older
+run_004 / K-fold importance scripts moved there too (15 Nov 2026).
+
+Not yet numbered: the in-situ VOCALS-REx / ORACLES comparison (`03_vocals_validation.ipynb`).
 Before applying a new model to the in-situ spectra, check whether those spectra
 were computed before the Nov-2026 mixed-layer water-cloud fix (not checked here).
 
