@@ -261,6 +261,11 @@ REGIONS: dict[str, Region] = {
     "barrow": Region(80.0, -165.0, 70.0, -150.0, "Barrow strip: 70-80N, 165-150W"),
     # Beaufort/Chukchi shelf and slope, for context around the Barrow strip.
     "beaufort_chukchi": Region(80.0, -170.0, 68.0, -120.0, "Beaufort-Chukchi: 68-80N, 170-120W"),
+    # Ocean Visions analysis domain (Rui): Chukchi + western Beaufort seas,
+    # northern Alaska, Bering Strait; contains Utqiagvik. Named with the same
+    # spelling the earlier --box --region-name runs used, so output folders
+    # (Rui-region_<span>) stay the same. GDEX/S3 only: not on the laptop disk.
+    "Rui-region": Region(80.0, -180.0, 65.0, -140.0, "Rui region: 65-80N, 180-140W"),
     # --- SASSIE 2022 ship track: the three tiles "barrow" does not cover -----
     # The R/V Woldstad ran 69.20-73.52 N, 165.96-144.89 W (Drushka et al., 2024).
     # Enclosing that on the 0.25 deg grid with one cell of margin needs

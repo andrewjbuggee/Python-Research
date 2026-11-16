@@ -71,6 +71,8 @@ WAYS TO NAME A DOMAIN
    --box N W S E                   any box, degrees, longitudes -180..180
    --box 75 170 65 -170            W > E crosses the dateline (170 E to 170 W)
    --region arctic_circle          a name in ERA5/surface_energy_budget/era5_seb_variables.py
+   --region Rui-region             65-80 N, 180-140 W (same as --box 80 -180 65 -140
+                                   --region-name Rui-region, so the same output folders)
    OV_REGION=box:82,-175,65,-110   same thing from the environment or in the notebook
    To keep a domain under a name, add one line to REGIONS in era5_seb_variables.py.
 
