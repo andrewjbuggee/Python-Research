@@ -1,0 +1,27 @@
+SURFACE-CLASS TIME SERIES
+=========================
+Generated 2026-11-16 by make_era5_surface_class_timeseries.py (repo cacace9-dirty)
+Domain Rui-region: 65-80 N, 180-140 W; seasons [2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024] (08-01 to 03-31); ERA5 from the NSF NCAR copy of ERA5 (GDEX dataset d633000, formerly RDA ds633.0).
+Area shares are cos(latitude)-weighted % of the domain (plot_surface_class_timeseries).
+
+Mean area share over the season window [% of domain]:
+  Land                  21.42
+  Coastal (mixed)       16.68
+  Open ocean            16.98
+  Marginal ice zone     13.70
+  Sea ice               31.21
+
+dDLR/dlat within each class, season mean [W m-2 deg-1]:
+  Land                   -2.25
+  Coastal (mixed)        +0.26
+  Open ocean             -2.47
+  Marginal ice zone      -5.69
+  Sea ice                -1.47
+
+dDLR/dlat across class transitions [W m-2 deg-1]  (mean share of all edges):
+  Land ↔ Coastal                               +1.40   ( 54.3%)
+  Coastal ↔ Open ocean                         -5.29   ( 11.0%)
+  Coastal ↔ Marginal ice zone                  -2.61   (  9.5%)
+  Coastal ↔ Sea ice                            -0.45   (  6.1%)
+  Open ocean ↔ Marginal ice zone               -5.30   (  7.7%)
+  Marginal ice zone ↔ Sea ice                  -5.42   ( 11.5%)
