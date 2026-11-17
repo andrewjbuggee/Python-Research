@@ -33,6 +33,9 @@ agree to 0.1 h per month), so it is not varied.
     paths1        LWP and IWP <= 1 g m-2, no cloud cover test
     cre5          DLR - DLR_clear < 5 W m-2, no cloud cover or path test
     cre10         DLR - DLR_clear < 10 W m-2, no cloud cover or path test
+    arm80         tcc <= 0.20, no path test (an analogue of Genie's ARM rule; below)
+    arm80_gt1h    arm80, and the same cell also passes arm80 in the hour before
+                  or the hour after (a clear spell longer than 1 h)
 
 DLR is msdwlwrf and DLR_clear is msdwlwrfcs, ERA5's own clear-sky downward
 longwave: the same radiation calculation with the clouds removed (ECMWF IFS
@@ -40,6 +43,35 @@ documentation, Part IV, chapter 2). Their difference is ERA5's longwave cloud
 radiative effect at the surface. The cre variants therefore ask whether the
 clouds ERA5 does have are too thin to matter radiatively. The thresholds 0.20, 0.1, 1, 5
 and 10 are sensitivity choices of mine, not values from a paper.
+
+AN ERA5 ANALOGUE OF GENIE'S ARM CLEAR-SKY RULE
+==============================================
+Genie calls an hour clear when at least 80% of the 30-s thermocldphase time
+stamps in it have a column labelled clear, i.e. at most 20% of the samples see
+any hydrometeor anywhere in the column. Her Figure 7a counts clear spells
+longer than 1 h.
+
+ERA5 has no sub-hourly samples, but tcc is the fraction of the grid box covered
+by cloud at any level, seen from above. My reasoning (an analogy I have not seen
+in a paper): an hour of 30-s columns samples the cloud field advected over the
+site, roughly 20-30 km at 6-8 m/s, which is about one ERA5 cell (0.25 deg is
+about 28 km north-south). If that time sample is representative of the cell
+(Taylor's frozen-turbulence hypothesis plus an ergodic assumption), "at most 20%
+of columns cloudy" corresponds to "cloud cover at most 0.20". Hence arm80:
+tcc <= 0.20. It has no water-path test, because Genie's rule allows cloud in up
+to 20% of the samples, so the grid-box mean paths need not be near zero.
+
+arm80_gt1h adds persistence for the "> 1 h" in Figure 7a: an hour counts only if
+the same cell also passes arm80 at an adjacent hour stamp (same season, one
+hour apart). That is my reading of "> 1 h"; check it against Genie's code.
+
+Where the analogy is weakest (my inference, not tested):
+  * ERA5 tcc is a model diagnostic from the cloud scheme, not a detection by
+    radar and lidar, so it can count cloud that a lidar would miss, and miss
+    thin cloud that a lidar would see.
+  * tcc is an instantaneous value at the hour stamp, while Genie's 80% is
+    over the hour. arm80_gt1h, which needs two consecutive stamps, is the
+    closer match to a clear hour.
 
 Timing caveat: tcc, tclw, tciw are instantaneous at the time stamp, while tp,
 msdwlwrf and msdwlwrfcs are means over the hour ending at it.
@@ -90,9 +122,24 @@ For the fig7 variant, count (b) must equal the number of filled clear_sky hours 
 era5_hourly_values_csv/ERA5_DLR_perHour_<span>_<class>.csv. check_against_hourly_csvs
 tests this for every month and class.
 
+REGIONS: BARROW OR RUI
+======================
+The domain comes from ov_config, as for the other make_era5_*.py scripts. The
+UTQ panel is the same grid cell in every domain, so its numbers do not depend
+on the domain; Land, Open ocean and Pack ice do.
+
+    Barrow (laptop, the local files)    python make_era5_clear_sky_sensitivity.py
+    Rui region (Casper; GDEX only)       ./submit.sh --region Rui-region --years 2014-2024 \
+                                             --csvs clear_sky --out <run folder>
+
+The Figure 7 check looks for the hourly-values folder of the same run
+(era5_hourly_values_csv or era5_hourly_values_csv_areaWeighted beside the
+hour-count folder), or --hourly-dir, and is skipped with a message if none is
+found.
+
 USAGE
 =====
-    python make_era5_clear_sky_sensitivity.py              # both weightings, ~1 min
+    python make_era5_clear_sky_sensitivity.py              # Barrow, both weightings, ~1 min
     python make_era5_clear_sky_sensitivity.py --plot-only  # redraw from the CSVs
 
 Nothing here is stochastic, so there is no random seed.
@@ -166,6 +213,12 @@ VARIANTS = {
                  label="Radiatively clear: DLR − clear-sky DLR < 5 W m⁻²"),
     "cre10": dict(tcc=None, lwp=None, iwp=None, cre=10.0,
                   label="Radiatively clear: DLR − clear-sky DLR < 10 W m⁻²"),
+    # The ERA5 analogue of Genie's ARM rule (see docstring). tcc_le is inclusive
+    # (<=), matching "at least 80% of samples clear" = "at most 20% cloudy".
+    "arm80": dict(tcc=None, tcc_le=0.20, lwp=None, iwp=None, cre=None,
+                  label="ARM-like: tcc ≤ 0.20, no water-path test"),
+    "arm80_gt1h": dict(tcc=None, tcc_le=0.20, lwp=None, iwp=None, cre=None, persist=True,
+                       label="ARM-like, > 1 h: tcc ≤ 0.20 at this and an adjacent hour"),
 }
 
 # ARM clear sky with durations > 1 h at UTQ, hours per month, read from the
@@ -184,6 +237,9 @@ VARIANT_COLORS = {
     "paths1": "#2c4d6b",
     "cre5": "#f0a95a",
     "cre10": "#b8621b",
+    # A third hue for the definitions modelled on the ARM rule.
+    "arm80": "#b39ddb",
+    "arm80_gt1h": "#5e3c99",
 }
 INK_PRIMARY = "#222222"
 INK_MUTED = "#666666"
@@ -232,6 +288,43 @@ def accumulate(args: argparse.Namespace) -> dict:
     clear_w = {w: np.zeros((n_hour, n_reg, n_var)) for w in WEIGHTINGS}  # n(t)
     any_clear = np.zeros((n_hour, n_reg, n_var), dtype=bool)
 
+    persist_v = [v for v, spec in enumerate(VARIANTS.values()) if spec.get("persist")]
+    hour_ns = np.int64(3_600_000_000_000)                              # one hour in ns
+
+    def add_hits(rows_: np.ndarray, v: int, clear_: np.ndarray, masks_: list) -> None:
+        """Add one variant's clear cells to the sums, per region. clear_ is (t, lat, lon)."""
+        for r, region in enumerate(masks_):
+            hit = region & clear_
+            any_clear[rows_, r, v] = hit.any(axis=(1, 2))
+            for w in WEIGHTINGS:
+                clear_w[w][rows_, r, v] = (hit * weights[w]).sum(axis=(1, 2))
+
+    # The persistence variants need each hour's neighbours, and a block's last
+    # hour has its next neighbour in the following block. So that hour is held
+    # back ("carry") and finished when the next block arrives.
+    # The carry also keeps "was the hour before it clear and adjacent?", because
+    # that hour has already been finished and would otherwise be forgotten.
+    carry = None   # dict(row, time, base and prev (lat, lon) per persist variant, masks)
+
+    def finish_persist(rows_, times_, bases_, masks_, next_base, next_time, prev0) -> None:
+        """Persistence variants for a run of hours: clear now and at an adjacent hour.
+
+        prev0[v] is (lat, lon): whether the hour before rows_[0] was clear and one
+        hour earlier (None when there is no such hour).
+        """
+        for v in persist_v:
+            b = bases_[v]                                                # (t, lat, lon)
+            adj = (np.diff(times_.astype("int64")) == hour_ns)           # (t-1,) consecutive?
+            prev_ok = np.zeros_like(b)
+            prev_ok[1:] = b[:-1] & adj[:, None, None]
+            if prev0 is not None:
+                prev_ok[0] = prev0[v]
+            next_ok = np.zeros_like(b)
+            next_ok[:-1] = b[1:] & adj[:, None, None]
+            if next_base is not None and (next_time - times_[-1]).astype("int64") == hour_ns:
+                next_ok[-1] = next_base[v]
+            add_hits(rows_, v, b & (prev_ok | next_ok), masks_)
+
     read_vars = ["tcc", args.liquid_var, "tciw", "tp", "siconc", "msdwlwrf", "msdwlwrfcs"]
     print(f"  Streaming {n_hour:,} hours ...", flush=True)
     for i0, block in iter_time_blocks(ds, read_vars, args.block_hours, keep_mask=use_step):
@@ -240,6 +333,7 @@ def accumulate(args: argparse.Namespace) -> dict:
         if not keep.any():
             continue
         rows = row_of_step[sl][keep]
+        block_times = times[sl][keep]                                    # (t,) datetime64
 
         # Region masks, (t, lat, lon): the UTQ cell, then the three classes.
         classes = classify_cells(
@@ -260,25 +354,59 @@ def accumulate(args: argparse.Namespace) -> dict:
         raining = np.isfinite(rate_mm_hr) & (rate_mm_hr >= args.precip_rate_max)
         base = valid & ~raining
 
+        bases = {}
         for v, spec in enumerate(VARIANTS.values()):
             clear = base.copy()
             if spec["tcc"] is not None:
                 clear &= tcc < spec["tcc"]
+            if spec.get("tcc_le") is not None:
+                clear &= tcc <= spec["tcc_le"]
             if spec["lwp"] is not None:
                 # "At or below the floor" in the project means value <= floor.
                 clear &= (lwp_g_m2 <= spec["lwp"]) & (iwp_g_m2 <= spec["iwp"])
             if spec["cre"] is not None:
                 clear &= np.isfinite(cre_w_m2) & (cre_w_m2 < spec["cre"])
-            for r, region in enumerate(region_masks):
-                hit = region & clear
-                any_clear[rows, r, v] = hit.any(axis=(1, 2))
-                for w in WEIGHTINGS:
-                    clear_w[w][rows, r, v] = (hit * weights[w]).sum(axis=(1, 2))
+            if spec.get("persist"):
+                bases[v] = clear              # finished below, with its neighbours
+            else:
+                add_hits(rows, v, clear, region_masks)
+
+        if persist_v:
+            # Prepend the held-back hour, finish all but this block's last hour,
+            # and hold that one back in turn.
+            masks_all = [np.asarray(m) for m in region_masks]
+            if carry is not None:
+                rows_c = np.concatenate([[carry["row"]], rows])
+                times_c = np.concatenate([[carry["time"]], block_times])
+                bases_c = {v: np.concatenate([carry["base"][v][None], bases[v]]) for v in persist_v}
+                masks_c = [np.concatenate([cm[None], m]) for cm, m in zip(carry["masks"], masks_all)]
+            else:
+                rows_c, times_c, bases_c, masks_c = rows, block_times, bases, masks_all
+            prev0 = carry["prev"] if carry is not None else None
+            if rows_c.size > 1:
+                finish_persist(rows_c[:-1], times_c[:-1], {v: b[:-1] for v, b in bases_c.items()},
+                               [m[:-1] for m in masks_c],
+                               {v: b[-1] for v, b in bases_c.items()}, times_c[-1], prev0)
+                # The new carry's previous hour is the second-to-last one here.
+                gap_ok = (times_c[-1] - times_c[-2]).astype("int64") == hour_ns
+                new_prev = {v: b[-2] & gap_ok for v, b in bases_c.items()}
+            else:
+                new_prev = prev0
+            carry = {"row": rows_c[-1], "time": times_c[-1],
+                     "base": {v: b[-1] for v, b in bases_c.items()},
+                     "prev": new_prev,
+                     "masks": [m[-1] for m in masks_c]}
 
         for r, region in enumerate(region_masks):
             in_class = region & valid
             for w in WEIGHTINGS:
                 class_w[w][rows, r] = (in_class * weights[w]).sum(axis=(1, 2))
+
+    if persist_v and carry is not None:
+        # The very last hour: no later neighbour.
+        finish_persist(np.array([carry["row"]]), np.array([carry["time"]]),
+                       {v: b[None] for v, b in carry["base"].items()},
+                       [m[None] for m in carry["masks"]], None, None, carry["prev"])
 
     return {"class_w": class_w, "clear_w": clear_w, "any_clear": any_clear,
             "hour_season": hour_season, "hour_month": hour_month, "seasons": list(used)}
@@ -311,8 +439,30 @@ def build_table(A: dict) -> pd.DataFrame:
     return df
 
 
-def check_against_hourly_csvs(df: pd.DataFrame, span: str, hourly_dir: Path) -> None:
+def find_hourly_dir(hour_count_dir: Path, given: Path | None, domain: str) -> Path | None:
+    """The same run's hourly-values folder, or ``given``; None if there is none.
+
+    Tries the names make_era5_hourly_values_csvs.py writes, then the
+    "<name>_<domain>Region" form used for the renamed Barrow folder
+    (era5_hourly_values_csv_barrowRegion). A folder for another domain is never
+    picked up by accident, because each name is matched exactly.
+    """
+    if given is not None:
+        return given
+    for name in ("era5_hourly_values_csv", "era5_hourly_values_csv_areaWeighted",
+                 f"era5_hourly_values_csv_{domain}Region"):
+        candidate = hour_count_dir.parent / name
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def check_against_hourly_csvs(df: pd.DataFrame, span: str, hourly_dir: Path | None) -> None:
     """The fig7 'any cell' counts must equal the filled clear_sky hours in Genie's files."""
+    if hourly_dir is None:
+        print("  !! no hourly-values folder for this run: Figure 7 check skipped "
+              "(pass --hourly-dir to run it)")
+        return
     worst, n_checked = 0.0, 0
     sub = df[(df["count"] == "any_cell") & (df["variant"] == "fig7")]
     seasons = [c for c in df.columns if "/" in c]
@@ -362,7 +512,7 @@ COUNT_NOTES = {
 }
 
 
-def plot(df: pd.DataFrame, path: Path, count: str, n_seasons: int) -> Path:
+def plot(df: pd.DataFrame, path: Path, count: str, n_seasons: int, domain: str) -> Path:
     """Figure 7 layout: one panel per region, months on the x axis, one bar per definition."""
     fig, axes = plt.subplots(len(REGIONS), 1, figsize=(12.0, 14.0), sharex=True)
     n_var = len(VARIANTS)
@@ -413,8 +563,8 @@ def plot(df: pd.DataFrame, path: Path, count: str, n_seasons: int) -> Path:
                title="Clear-sky definition (all with tp < 0.05 mm/hr)", title_fontsize=10)
     fig.text(
         0.01, 0.003,
-        f"{COUNT_NOTES[count]}. Mean of {n_seasons} seasons. Months when a class does not exist "
-        f"count as zero.",
+        f"{domain}. {COUNT_NOTES[count]}. Mean of {n_seasons} seasons. Months when a class "
+        f"does not exist count as zero.",
         fontsize=9, color=INK_MUTED,
     )
     fig.tight_layout(rect=(0.01, 0.01, 1, 0.905))
@@ -444,11 +594,12 @@ def find_span(out_dir: Path) -> str:
     return found[0].name[len(prefix) : -len(suffix)]
 
 
-def draw(out_dir: Path, span: str) -> list[Path]:
+def draw(out_dir: Path, span: str, domain: str) -> list[Path]:
     """The three figures, from the CSV only."""
     df = pd.read_csv(out_dir / names(span)["csv"])
     n_seasons = len([c for c in df.columns if "/" in c])
-    return [plot(df, out_dir / name, count, n_seasons) for count, name in names(span)["fig"].items()]
+    return [plot(df, out_dir / name, count, n_seasons, domain)
+            for count, name in names(span)["fig"].items()]
 
 
 def write_readme(out_dir: Path, span: str, n_seasons: int) -> Path:
@@ -474,6 +625,8 @@ def main(argv: list[str] | None = None) -> None:
                    help="output directory (default <hour-count folder>/clear_sky_sensitivity)")
     p.add_argument("--plot-only", action="store_true",
                    help="redraw the figures from the CSV already in the output folder")
+    p.add_argument("--hourly-dir", type=Path, default=None,
+                   help="hourly-values folder for the Figure 7 check (default: the run's own)")
     ov.add_run_args(p)
     opts = p.parse_args(argv)
     run = ov.run_from_args(opts)
@@ -481,7 +634,7 @@ def main(argv: list[str] | None = None) -> None:
     out_dir = opts.out_dir or hour_count_dir / "clear_sky_sensitivity"
 
     if opts.plot_only:
-        for path in draw(out_dir, find_span(out_dir)):
+        for path in draw(out_dir, find_span(out_dir), run.domain.name):
             print(f"  -> {path}")
         return
 
@@ -491,12 +644,12 @@ def main(argv: list[str] | None = None) -> None:
     A = accumulate(args)
     span = ov.span_tag(A["seasons"])
     df = build_table(A)
-    check_against_hourly_csvs(df, span, hour_count_dir.parent / "era5_hourly_values_csv")
+    check_against_hourly_csvs(df, span, find_hourly_dir(hour_count_dir, opts.hourly_dir, run.domain.name))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_dir / names(span)["csv"], index=False, float_format="%.4f")
     write_readme(out_dir, span, len(A["seasons"]))
-    for path in draw(out_dir, span):
+    for path in draw(out_dir, span, run.domain.name):
         print(f"  -> {path}")
 
     # The numbers in the figure, for the log: hours per month, mean of Oct-Mar.

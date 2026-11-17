@@ -44,6 +44,8 @@ case "$PRODUCT" in
   # Figures 1-6 of plot_surface_class_timeseries.ipynb + area-share CSVs. Not part
   # of --csvs all: it reads a longer season (1 Aug - 31 Mar).
   surface_class) SCRIPT=make_era5_surface_class_timeseries.py ;;
+  # Clear-sky definition sensitivity (Figure 7a vs ARM). Not part of --csvs all.
+  clear_sky) SCRIPT=make_era5_clear_sky_sensitivity.py ;;
   *) echo "unknown PRODUCT=$PRODUCT"; exit 1 ;;
 esac
 
