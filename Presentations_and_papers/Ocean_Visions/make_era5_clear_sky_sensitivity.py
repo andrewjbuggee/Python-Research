@@ -249,13 +249,41 @@ GRID_COLOR = "#e4e4e4"
 # ----------------------------------------------------------------------------
 # The streaming pass
 # ----------------------------------------------------------------------------
-def accumulate(args: argparse.Namespace) -> dict:
-    """Per hour and region: class weight, clear weight per variant, and 'any clear'.
+def clear_sky_hits(fields: dict, spec: dict, args: argparse.Namespace) -> np.ndarray:
+    """Cells that pass one clear-sky variant, (t, lat, lon), before any persistence test.
+
+    ``fields`` holds the block's tcc, lwp_g_m2, iwp_g_m2, cre_w_m2, rate_mm_hr
+    and ``base`` (valid and not raining). make_era5_iceOnly_sensitivity.py passes its own
+    function of the same shape to accumulate().
+    """
+    hit = fields["base"].copy()
+    tcc, lwp_g_m2, iwp_g_m2, cre_w_m2 = (fields[k] for k in ("tcc", "lwp_g_m2", "iwp_g_m2", "cre_w_m2"))
+    if spec["tcc"] is not None:
+        hit &= tcc < spec["tcc"]
+    if spec.get("tcc_le") is not None:
+        hit &= tcc <= spec["tcc_le"]
+    if spec["lwp"] is not None:
+        # "At or below the floor" in the project means value <= floor.
+        hit &= (lwp_g_m2 <= spec["lwp"]) & (iwp_g_m2 <= spec["iwp"])
+    if spec["cre"] is not None:
+        hit &= np.isfinite(cre_w_m2) & (cre_w_m2 < spec["cre"])
+    return hit
+
+
+def accumulate(args: argparse.Namespace, variants: dict | None = None,
+               hits_fn=clear_sky_hits) -> dict:
+    """Per hour and region: class weight, state weight per variant, and 'any cell in state'.
+
+    ``variants`` (default VARIANTS) and ``hits_fn(fields, spec, args)`` define
+    the sky state; a variant with ``persist=True`` also needs the state at an
+    adjacent hour of the same cell. The result keys say "clear" for history,
+    but they hold whatever state hits_fn tests.
 
     Weighted sums are kept for both weightings at once, so one pass serves both.
-    Returns arrays shaped (hour, region, variant) for the clear sums and (hour,
+    Returns arrays shaped (hour, region, variant) for the state sums and (hour,
     region) for the class sums, plus each hour's season and month.
     """
+    variants = VARIANTS if variants is None else variants
     region_dir = resolve_region_dir(args)
     ds = load_seb_data(args.region, None, None, region_dir.parent)
     lsm = align_lsm_to_grid(
@@ -283,12 +311,12 @@ def accumulate(args: argparse.Namespace) -> dict:
         "uniform": np.ones((ds.sizes["latitude"], ds.sizes["longitude"])),
     }                                                                   # each (lat, lon)
 
-    n_hour, n_reg, n_var = int(use_step.sum()), len(REGIONS), len(VARIANTS)
+    n_hour, n_reg, n_var = int(use_step.sum()), len(REGIONS), len(variants)
     class_w = {w: np.zeros((n_hour, n_reg)) for w in WEIGHTINGS}         # N(t)
     clear_w = {w: np.zeros((n_hour, n_reg, n_var)) for w in WEIGHTINGS}  # n(t)
     any_clear = np.zeros((n_hour, n_reg, n_var), dtype=bool)
 
-    persist_v = [v for v, spec in enumerate(VARIANTS.values()) if spec.get("persist")]
+    persist_v = [v for v, spec in enumerate(variants.values()) if spec.get("persist")]
     hour_ns = np.int64(3_600_000_000_000)                              # one hour in ns
 
     def add_hits(rows_: np.ndarray, v: int, clear_: np.ndarray, masks_: list) -> None:
@@ -353,19 +381,12 @@ def accumulate(args: argparse.Namespace) -> dict:
         valid = np.isfinite(tcc) & np.isfinite(lwp_g_m2) & np.isfinite(iwp_g_m2)
         raining = np.isfinite(rate_mm_hr) & (rate_mm_hr >= args.precip_rate_max)
         base = valid & ~raining
+        fields = {"tcc": tcc, "lwp_g_m2": lwp_g_m2, "iwp_g_m2": iwp_g_m2,
+                  "cre_w_m2": cre_w_m2, "rate_mm_hr": rate_mm_hr, "valid": valid, "base": base}
 
         bases = {}
-        for v, spec in enumerate(VARIANTS.values()):
-            clear = base.copy()
-            if spec["tcc"] is not None:
-                clear &= tcc < spec["tcc"]
-            if spec.get("tcc_le") is not None:
-                clear &= tcc <= spec["tcc_le"]
-            if spec["lwp"] is not None:
-                # "At or below the floor" in the project means value <= floor.
-                clear &= (lwp_g_m2 <= spec["lwp"]) & (iwp_g_m2 <= spec["iwp"])
-            if spec["cre"] is not None:
-                clear &= np.isfinite(cre_w_m2) & (cre_w_m2 < spec["cre"])
+        for v, spec in enumerate(variants.values()):
+            clear = hits_fn(fields, spec, args)
             if spec.get("persist"):
                 bases[v] = clear              # finished below, with its neighbours
             else:
@@ -412,12 +433,13 @@ def accumulate(args: argparse.Namespace) -> dict:
             "hour_season": hour_season, "hour_month": hour_month, "seasons": list(used)}
 
 
-def build_table(A: dict) -> pd.DataFrame:
+def build_table(A: dict, variants: dict | None = None) -> pd.DataFrame:
     """Hours per month, one row per region, variant, month and counting method.
 
     Columns: count ('per_cell_area', 'per_cell_uniform', 'any_cell'), one column
     per season, and mean_of_seasons.
     """
+    variants = VARIANTS if variants is None else variants
     labels = [season_label(y) for y in A["seasons"]]
     hour_values = {"any_cell": A["any_clear"].astype(float)}             # (hour, region, variant)
     for w in WEIGHTINGS:
@@ -427,7 +449,7 @@ def build_table(A: dict) -> pd.DataFrame:
     rows = []
     for count, values in hour_values.items():
         for r, region in enumerate(REGIONS):
-            for v, variant in enumerate(VARIANTS):
+            for v, variant in enumerate(variants):
                 for month, month_name in MONTHS.items():
                     row = {"count": count, "region": region, "variant": variant, "month": month_name}
                     for year, label in zip(A["seasons"], labels):
@@ -457,14 +479,15 @@ def find_hourly_dir(hour_count_dir: Path, given: Path | None, domain: str) -> Pa
     return None
 
 
-def check_against_hourly_csvs(df: pd.DataFrame, span: str, hourly_dir: Path | None) -> None:
-    """The fig7 'any cell' counts must equal the filled clear_sky hours in Genie's files."""
+def check_against_hourly_csvs(df: pd.DataFrame, span: str, hourly_dir: Path | None,
+                              column: str = "clear_sky", variant: str = "fig7") -> None:
+    """The ``variant`` 'any cell' counts must equal the filled ``column`` hours in Genie's files."""
     if hourly_dir is None:
         print("  !! no hourly-values folder for this run: Figure 7 check skipped "
               "(pass --hourly-dir to run it)")
         return
     worst, n_checked = 0.0, 0
-    sub = df[(df["count"] == "any_cell") & (df["variant"] == "fig7")]
+    sub = df[(df["count"] == "any_cell") & (df["variant"] == variant)]
     seasons = [c for c in df.columns if "/" in c]
     for region in REGIONS:
         # The DLR files are written per weighting, but which hours are filled does not depend on it.
@@ -472,20 +495,20 @@ def check_against_hourly_csvs(df: pd.DataFrame, span: str, hourly_dir: Path | No
         if not candidates:
             print(f"  !! no hourly DLR file for {region} in {hourly_dir}")
             continue
-        hourly = pd.read_csv(candidates[0], usecols=["date", "clear_sky"])
+        hourly = pd.read_csv(candidates[0], usecols=["date", column])
         when = pd.to_datetime(hourly["date"])
         season_start = np.where(when.dt.month >= 10, when.dt.year, when.dt.year - 1)
         for month, month_name in MONTHS.items():
             for season in seasons:
                 year = int(season.split("/")[0])
                 theirs = hourly.loc[(when.dt.month == month) & (season_start == year),
-                                    "clear_sky"].notna().sum()
+                                    column].notna().sum()
                 mine = sub[(sub["region"] == region) & (sub["month"] == month_name)][season].iloc[0]
                 worst = max(worst, abs(mine - theirs))
                 n_checked += 1
     print(f"  check: Figure 7 counts reproduced for {n_checked} region-months, worst {worst:.0f} h")
     if n_checked and worst > 0:
-        raise AssertionError("the fig7 variant does not reproduce Genie's clear-sky hours")
+        raise AssertionError(f"the {variant} variant does not reproduce Genie's {column} hours")
 
 
 # ----------------------------------------------------------------------------

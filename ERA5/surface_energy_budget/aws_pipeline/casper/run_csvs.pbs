@@ -46,6 +46,7 @@ case "$PRODUCT" in
   surface_class) SCRIPT=make_era5_surface_class_timeseries.py ;;
   # Clear-sky definition sensitivity (Figure 7a vs ARM). Not part of --csvs all.
   clear_sky) SCRIPT=make_era5_clear_sky_sensitivity.py ;;
+  ice_only) SCRIPT=make_era5_iceOnly_sensitivity.py ;;
   *) echo "unknown PRODUCT=$PRODUCT"; exit 1 ;;
 esac
 
