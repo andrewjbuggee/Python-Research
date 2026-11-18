@@ -192,9 +192,10 @@ csv_size_for() {
     surface_class)       echo "4 16GB 12:00:00" ;;
     # One pass over Oct-Mar, like hour_count, plus a one-hour carry. ESTIMATE.
     clear_sky)           echo "4 16GB 12:00:00" ;;
+    ice_only)            echo "4 16GB 12:00:00" ;;
     hourly)              echo "8 16GB 23:00:00" ;;
     netcdf)              echo "4 16GB 12:00:00" ;;
-    *) echo "unknown product $1 (hour_count per_cell precip cumulative ice_vs_water hourly netcdf supercooled surface_class clear_sky)" >&2; exit 1 ;;
+    *) echo "unknown product $1 (hour_count per_cell precip cumulative ice_vs_water hourly netcdf supercooled surface_class clear_sky ice_only)" >&2; exit 1 ;;
   esac
 }
 

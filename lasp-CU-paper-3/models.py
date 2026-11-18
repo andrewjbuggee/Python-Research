@@ -44,10 +44,47 @@ class RetrievalConfig:
     re_max: float = 50.0            # μm
     tau_min: float = 3.0
     tau_max: float = 75.0
+    # Bounds on the raw log-σ output of both uncertainty heads (profile and
+    # τ), in NORMALIZED [0, 1] target space: σ_norm = exp(clamp(log σ, min,
+    # max)). The smallest σ the network can report is therefore
+    #   r_e : exp(log_std_min) × (re_max − re_min)    (= 0.888 μm at −4)
+    #   τ_c : exp(log_std_min) × (tau_max − tau_min)
+    # −4 / +2 were the hard-coded values in every run before 17 Nov 2026, so
+    # they are the defaults: old checkpoints rebuild exactly. Training runs
+    # record the values used in hyperparams['log_std_min' / 'log_std_max'];
+    # evaluation code must rebuild the config with log_std_bounds_for_run().
+    #
+    # Why it matters (17 Nov 2026): in the Aug-2026 run_004, 92–98 % of test
+    # clouds at levels 2–5 and 97 % of τ predictions sat exactly on the −4
+    # floor. torch.clamp passes zero gradient outside its range, so a σ on
+    # the floor is the floor value, not a learned estimate.
+    log_std_min: float = -4.0
+    log_std_max: float = 2.0
 
     @property
     def input_dim(self):
         return self.n_wavelengths + self.n_geometry_inputs
+
+
+# Values used before log_std_min / log_std_max became settings (17 Nov 2026).
+LEGACY_LOG_STD_BOUNDS = (-4.0, 2.0)
+
+
+def log_std_bounds_for_run(summary_or_config: dict) -> Tuple[float, float]:
+    """(log_std_min, log_std_max) a trained run used.
+
+    Accepts a run's summary.json or config.json dict (both carry
+    'hyperparams'). Runs trained before the setting existed have no keys and
+    used the legacy −4 / +2, which is what this returns for them.
+    """
+    hp = summary_or_config.get('hyperparams', summary_or_config)
+    return (float(hp.get('log_std_min', LEGACY_LOG_STD_BOUNDS[0])),
+            float(hp.get('log_std_max', LEGACY_LOG_STD_BOUNDS[1])))
+
+
+def sigma_floor_um(config: 'RetrievalConfig') -> float:
+    """Smallest r_e σ (μm) the network can output under config's clamp."""
+    return float(np.exp(config.log_std_min) * (config.re_max - config.re_min))
 
 
 @dataclass
@@ -141,6 +178,13 @@ class DropletProfileNetwork(nn.Module):
         self.register_buffer('re_max', torch.tensor(c.re_max))
         self.register_buffer('tau_min', torch.tensor(c.tau_min))
         self.register_buffer('tau_max', torch.tensor(c.tau_max))
+        # Plain floats, NOT buffers: a buffer would add state_dict keys that
+        # pre-Nov-2026 checkpoints lack, so they would no longer load. The
+        # value used in training is recorded in the run's hyperparams instead.
+        if not c.log_std_min < c.log_std_max:
+            raise ValueError(f'log_std_min {c.log_std_min} must be < log_std_max {c.log_std_max}')
+        self.log_std_min = float(c.log_std_min)
+        self.log_std_max = float(c.log_std_max)
 
     def forward(self, x: torch.Tensor) -> dict:
         """
@@ -170,25 +214,31 @@ class DropletProfileNetwork(nn.Module):
         profile_norm = self.profile_head(features)       # (batch, n_levels), in [0, 1]
         profile = profile_norm * (self.re_max - self.re_min) + self.re_min
 
-        # Profile std: exp(log_std) in normalized [0,1] space.
-        # Clamp log_std to [-4, 2]:
-        #   lower bound: exp(-4)≈0.018 normalized → 0.018×48.5≈0.9 μm physical
-        #   upper bound: exp(2)≈7.4 normalized → 7.4×48.5≈359 μm physical
-        # The lower bound of -4 prevents σ-collapse (network learning near-zero
-        # uncertainty on memorized training profiles) while still allowing
-        # physically meaningful sub-micron uncertainty (~0.9 μm floor).
+        # Profile std: exp(log_std) in normalized [0,1] space, with log_std
+        # clamped to [log_std_min, log_std_max] (config; legacy −4 / +2).
+        #   lower bound −4: exp(−4) ≈ 0.018 normalized → 0.018 × 48.5 ≈ 0.89 μm
+        #   lower bound −7: exp(−7) ≈ 9.1e-4          → 0.044 μm
+        #   upper bound +2: exp(2) ≈ 7.4 normalized   → ≈ 359 μm (overflow guard)
+        # The lower bound stops σ → 0, where the Gaussian NLL is unbounded
+        # below and the mean's gradient (∝ 1/σ²) blows up; Seitzer et al.
+        # (2022, ICLR, App. B.1, https://arxiv.org/abs/2203.09168) note
+        # NLL training needs such a bound to settle. It should sit well below
+        # the σ being estimated: at −4 it bound for most mid-cloud levels.
         profile_log_std = self.profile_std_head(features)
-        profile_std_norm = torch.exp(profile_log_std.clamp(-4.0, 2.0))  # (batch, n_levels)
+        profile_std_norm = torch.exp(profile_log_std.clamp(
+            self.log_std_min, self.log_std_max))                         # (batch, n_levels)
         profile_std = profile_std_norm * (self.re_max - self.re_min)     # physical units (μm)
 
         # Tau output: sigmoid → [0,1] then scale to physical range
         tau_norm = self.tau_head(features)                # (batch, 1), in [0, 1]
         tau_c = tau_norm * (self.tau_max - self.tau_min) + self.tau_min
 
-        # Tau std: same approach as profile_std — exp(clamped log-std) in normalized space
-        # exp(-4)≈0.018 normalized → 0.018×62≈1.1 optical depth units (floor)
+        # Tau std: same approach and same clamp as profile_std, in normalized
+        # space; floor = exp(log_std_min) × (tau_max − tau_min), e.g. 1.72 for
+        # −4 with the legacy 3/97 pair, 0.68 for −4 with 3/40.
         tau_log_std = self.tau_std_head(features)
-        tau_std_norm = torch.exp(tau_log_std.clamp(-4.0, 2.0))           # (batch, 1)
+        tau_std_norm = torch.exp(tau_log_std.clamp(
+            self.log_std_min, self.log_std_max))                          # (batch, 1)
         tau_std = tau_std_norm * (self.tau_max - self.tau_min)            # physical units
 
         return {

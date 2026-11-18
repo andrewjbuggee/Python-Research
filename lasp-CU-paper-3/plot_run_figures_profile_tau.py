@@ -65,7 +65,7 @@ def _run_inference(run_dir: Path, h5_override: str | None,
                    device_arg: str | None, seed: int = 42) -> dict:
     """Reload the PT-sweep model, reproduce the test split, predict."""
     import torch
-    from models import DropletProfileNetwork, RetrievalConfig
+    from models import DropletProfileNetwork, RetrievalConfig, log_std_bounds_for_run
     from data import create_dataloaders, tau_bounds_for_run
     from sweep_train_profile_tau_synthetic import predict_test
 
@@ -120,6 +120,9 @@ def _run_inference(run_dir: Path, h5_override: str | None,
         dropout=hp['dropout'],
         activation=hp.get('activation', 'gelu'),
         tau_min=float(tau_bounds[0]), tau_max=float(tau_bounds[1]),
+        # the run's own log-σ clamp (legacy −4/+2 for runs before 17 Nov 2026)
+        log_std_min=log_std_bounds_for_run(s)[0],
+        log_std_max=log_std_bounds_for_run(s)[1],
     )
     model = DropletProfileNetwork(model_cfg).to(device)
     ckpt = torch.load(run_dir / 'best_model.pt',

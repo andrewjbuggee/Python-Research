@@ -56,7 +56,8 @@ REPO = HERE.parent                               # lasp-CU-paper-3/ (data.py, mo
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'hyper_parameter_sweep'))
 
-from models import DropletProfileNetwork, RetrievalConfig            # noqa: E402
+from models import (DropletProfileNetwork, RetrievalConfig,              # noqa: E402
+                    log_std_bounds_for_run)
 from data import (LibRadtranDataset, create_profile_aware_splits,    # noqa: E402
                   tau_bounds_for_run)
 # Full-path override semantics with a training_data/ fallback (same helper the
@@ -115,6 +116,9 @@ def load_run(run_dir: Path, h5_override: str | None, device: torch.device):
         hidden_dims=tuple(hp['hidden_dims']),
         dropout=hp['dropout'], activation=hp.get('activation', 'gelu'),
         tau_min=float(tau_bounds[0]), tau_max=float(tau_bounds[1]),
+        # the run's own log-σ clamp (legacy −4/+2 for runs before 17 Nov 2026)
+        log_std_min=log_std_bounds_for_run(s)[0],
+        log_std_max=log_std_bounds_for_run(s)[1],
     )
     model = DropletProfileNetwork(cfg).to(device)
     ckpt = torch.load(run_dir / 'best_model.pt', map_location=device,

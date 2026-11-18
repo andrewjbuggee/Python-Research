@@ -44,6 +44,23 @@ and it is also inside best_model.pt as the model's tau_min / tau_max buffers.
 Evaluation code must read it from the run (data.tau_bounds_for_run), never
 from the data.TAU_MIN / TAU_MAX constants.
 
+LOG-σ CLAMP (17 Nov 2026)
+-------------------------
+Both uncertainty heads output log σ in normalized target space, clamped to
+[log_std_min, log_std_max] before exp() (models.RetrievalConfig). Until
+17 Nov 2026 this was hard-coded at −4 / +2; it is now read from
+hyperparams['log_std_min' / 'log_std_max'] (defaults −4 / +2, so old configs
+train exactly as before) and recorded in summary.json. In run_004 the −4
+floor (0.888 μm for r_e) held 92–98 % of mid-cloud test predictions, so σ
+there was the clamp, not an estimate. hyperparams['sigma_floor'] (the loss-
+side floor on σ_norm) must not exceed exp(log_std_min), or it becomes the
+binding floor; this is checked at start-up.
+
+summary.json also reports, for validation and test, the share of predictions
+on the floor and per-level calibration of the r_e σ (spread of z = err/σ,
+coverage of |z| ≤ 1 and ≤ 1.96), and the validation predictions are saved to
+val_pred_cache.npz so runs can be compared without re-running the model.
+
 With `tau_transform='log10'` the τ target is re-mapped to
     tau_norm = (log10(τ) - log10(τ_min)) / (log10(τ_max) - log10(τ_min))
 before the NLL, and physical τ is recovered by inverting that here rather than
@@ -78,7 +95,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from models import DropletProfileNetwork, CombinedLoss, RetrievalConfig
+from models import (DropletProfileNetwork, CombinedLoss, RetrievalConfig,
+                    LEGACY_LOG_STD_BOUNDS, sigma_floor_um)
 from data import create_dataloaders, resolve_h5_path, resolve_tau_bounds
 
 # τ bounds are per run (see τ SCALING above): every helper below takes the
@@ -264,6 +282,7 @@ def predict_test(model, loader, device, config: RetrievalConfig,
     model.eval()
     prof_pred, prof_std, prof_true = [], [], []
     tau_pred, tau_std, tau_true = [], [], []
+    prof_std_n, tau_std_n = [], []   # σ in normalized space (to test for the clamp)
     re_min, re_max = config.re_min, config.re_max
 
     for x, prof, tau in loader:
@@ -271,12 +290,14 @@ def predict_test(model, loader, device, config: RetrievalConfig,
 
         prof_pred.append(out['profile'].cpu().numpy())
         prof_std.append(out['profile_std'].cpu().numpy())
+        prof_std_n.append(out['profile_std_normalized'].cpu().numpy())
         prof_true.append(prof.numpy() * (re_max - re_min) + re_min)
 
         # Work from the normalized τ head, not out['tau_c'], so the same code
         # path handles both transforms (see the τ SCALING note in the header).
         tn = out['tau_normalized'].squeeze(-1).cpu().numpy()
         sn = out['tau_std_normalized'].squeeze(-1).cpu().numpy()
+        tau_std_n.append(sn)
         tau_pred.append(tau_target_to_physical(tn, tau_transform, bounds))
         tau_std.append(tau_sigma_to_physical(tn, sn, tau_transform, bounds))
         # `tau` from the loader is always linearly normalized with `bounds`
@@ -289,6 +310,37 @@ def predict_test(model, loader, device, config: RetrievalConfig,
         'tau_pred':     np.concatenate(tau_pred),
         'tau_pred_std': np.concatenate(tau_std),
         'tau_true':     np.concatenate(tau_true),
+        'pred_std_norm':     np.concatenate(prof_std_n),   # (n, n_levels)
+        'tau_pred_std_norm': np.concatenate(tau_std_n),    # (n,)
+    }
+
+
+def uncertainty_diagnostics(res: Dict[str, np.ndarray],
+                            log_std_min: float) -> Dict[str, object]:
+    """Floor occupancy and calibration of the predicted σ.
+
+    res : predict_test() output. A prediction is "on the floor" when its
+    normalized σ equals exp(log_std_min) to 1e-4 relative tolerance (what
+    torch.clamp returns there; the check is the same for both τ transforms).
+
+    Calibration uses z = (pred − true) / σ per level. For a calibrated
+    Gaussian σ, std(z) = 1, 68.3 % of |z| ≤ 1 and 95.0 % of |z| ≤ 1.96
+    (standard normal quantiles). std(z) < 1 → σ too large; > 1 → too small.
+    """
+    floor_norm = float(np.exp(log_std_min))
+    on_floor = np.isclose(res['pred_std_norm'], floor_norm, rtol=1e-4, atol=0.0)  # (n, L)
+    tau_on_floor = np.isclose(res['tau_pred_std_norm'], floor_norm, rtol=1e-4, atol=0.0)
+    z = (res['pred'] - res['true']) / res['pred_std']                            # (n, L)
+    tau_z = (res['tau_pred'] - res['tau_true']) / res['tau_pred_std']             # (n,)
+    return {
+        'frac_sigma_on_floor_per_level': on_floor.mean(axis=0).tolist(),
+        'frac_sigma_on_floor':           float(on_floor.mean()),
+        'tau_frac_sigma_on_floor':       float(tau_on_floor.mean()),
+        'z_std_per_level':               z.std(axis=0).tolist(),
+        'coverage_1sigma_per_level':     (np.abs(z) <= 1.0).mean(axis=0).tolist(),
+        'coverage_1p96sigma_per_level':  (np.abs(z) <= 1.96).mean(axis=0).tolist(),
+        'tau_z_std':                     float(tau_z.std()),
+        'tau_coverage_1p96sigma':        float((np.abs(tau_z) <= 1.96).mean()),
     }
 
 
@@ -353,6 +405,19 @@ def main():
     if early_stop_metric not in ('total', 'profile'):
         raise ValueError(f"early_stop_metric must be 'total' or 'profile', "
                          f"got {early_stop_metric!r}")
+
+    # Log-σ clamp (see LOG-σ CLAMP above). Written back into hp so that
+    # summary.json records the values even for configs that omit them.
+    hp.setdefault('log_std_min', LEGACY_LOG_STD_BOUNDS[0])
+    hp.setdefault('log_std_max', LEGACY_LOG_STD_BOUNDS[1])
+    log_std_min = float(hp['log_std_min'])
+    log_std_max = float(hp['log_std_max'])
+    sigma_floor = float(hp.get('sigma_floor', 0.01))
+    if sigma_floor > np.exp(log_std_min) * (1 + 1e-6):
+        raise ValueError(
+            f"sigma_floor {sigma_floor:g} > exp(log_std_min) = {np.exp(log_std_min):.3g}: "
+            f"the loss floor would bind before the model's clamp. Set sigma_floor "
+            f"<= exp(log_std_min) in the config.")
 
     print("=" * 70)
     print(f"  SYNTHETIC PROFILE+τ SWEEP — variant {variant}, run {cfg['run_id']}")
@@ -431,7 +496,13 @@ def main():
         activation=hp.get('activation', 'gelu'),
         tau_min=float(tau_bounds[0]),
         tau_max=float(tau_bounds[1]),
+        log_std_min=log_std_min,
+        log_std_max=log_std_max,
     )
+    print(f"  log-σ clamp   : [{log_std_min:g}, {log_std_max:g}]  →  r_e σ floor "
+          f"{sigma_floor_um(model_cfg):.4f} μm, τ σ floor "
+          f"{np.exp(log_std_min) * (tau_bounds[1] - tau_bounds[0]):.4f}"
+          f"{'  (legacy)' if (log_std_min, log_std_max) == LEGACY_LOG_STD_BOUNDS else ''}")
     sample    = base_ds[0]
     input_dim = int(sample[0].shape[-1])
     if input_dim != model_cfg.input_dim:
@@ -450,7 +521,7 @@ def main():
         lambda_smoothness=hp.get('lambda_smoothness', 0.1),
         lambda_emulator_data=0.0,
         level_weights=level_weights,
-        sigma_floor=hp.get('sigma_floor', 0.01),
+        sigma_floor=sigma_floor,
         tau_weight=tau_weight,
     ).to(device)
 
@@ -567,6 +638,10 @@ def main():
     tau_sigma_mean = float(np.mean(pred['tau_pred_std']))
     tau_rmse_sigma = tau_rmse / max(tau_sigma_mean, 1e-9)
 
+    # Floor occupancy + calibration of σ (validation is what to compare runs on).
+    val_unc  = uncertainty_diagnostics(vpred, log_std_min)
+    test_unc = uncertainty_diagnostics(pred, log_std_min)
+
     summary = {
         'run_id':           cfg['run_id'],
         'tag':              cfg.get('tag', ''),
@@ -609,6 +684,12 @@ def main():
         # checking where best checkpoints land: Deep Learning Tuning Playbook,
         # https://github.com/google-research/tuning_playbook)
         'best_epoch_fraction':  best_epoch / max(int(hp['n_epochs']), 1),
+        # log-σ clamp and what it does to σ (see LOG-σ CLAMP in the header)
+        'log_std_bounds':       [log_std_min, log_std_max],
+        'sigma_floor_um':       sigma_floor_um(model_cfg),
+        'tau_sigma_floor':      float(np.exp(log_std_min) * (tau_bounds[1] - tau_bounds[0])),
+        'val_uncertainty':      val_unc,
+        'test_uncertainty':     test_unc,
         'hyperparams':        hp,
         'data':               cfg['data'],
         'n_val_profiles':     cfg['n_val_profiles'],
@@ -624,6 +705,10 @@ def main():
     with open(run_dir / 'config.json', 'w') as f:
         json.dump(cfg, f, indent=2)
     torch.save(best_state, run_dir / 'best_model.pt')
+    # Validation predictions (physical units + normalized σ) for comparing
+    # runs on validation without reloading the model or the HDF5.
+    val_idx = np.asarray(val_loader.dataset.indices, dtype=np.int64)
+    np.savez_compressed(run_dir / 'val_pred_cache.npz', h5_idx=val_idx, **vpred)
 
     print(f"\n  best epoch  : {best_epoch}  (val total {best_total:.4f})")
     print(f"  mean RMSE   : {mean_rmse:.3f} μm")
@@ -633,6 +718,12 @@ def main():
     print(f"  τ RMSE      : {tau_rmse:.3f}  (bias {tau_bias:+.3f}, "
           f"MAPE {tau_mape:.1f}%, R² {tau_r2:.3f})")
     print(f"  τ σ         : {tau_sigma_mean:.3f}  (RMSE/σ = {tau_rmse_sigma:.2f})")
+    print(f"  σ on floor  : val r_e "
+          + ' '.join(f"{f:.2f}" for f in val_unc['frac_sigma_on_floor_per_level'])
+          + f"  |  val τ {val_unc['tau_frac_sigma_on_floor']:.2f}")
+    print(f"  val std(z)  : "
+          + ' '.join(f"{v:.2f}" for v in val_unc['z_std_per_level'])
+          + "  (1 = calibrated)")
     print(f"  VALIDATION  : profile RMSE {val_mean_rmse:.3f} μm, τ RMSE {val_tau_rmse:.3f} "
           f"(used for model selection)")
     print(f"  wall time   : {train_seconds:.0f} s")

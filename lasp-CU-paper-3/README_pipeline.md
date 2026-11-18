@@ -19,10 +19,13 @@ evaluate the profile + τ network (`DropletProfileNetwork`: 7-level r_e + σ and
 | **11c** | `11c_analyze_sweep.py` | laptop | ranks the sweep on VALIDATION metrics; noise, budget, boundary and sensitivity checks; `comparison.csv` |
 | **12a** | `12_select_configs.py` | laptop | top-N configs of a sweep (`--sweep-tag`, validation ranking; default = Aug-2026 sweep) rewritten for a long retrain (4500 epochs) |
 | **12b** | `12_train_configs_alpine.sh` | Alpine (L40 GPU) | trains each selected config (array job) |
+| **12c** | `12c_log_std_clamp_configs.py` | laptop | control (log-σ clamp −4) vs lowered (default −7) configs of one chosen config, with seed replicates; trained by 12b |
 | **13** | `13_rank_trained_models.py` | laptop | ranks the retrained runs on validation, writes `selected_model.json` |
+| **13b** | `13b_compare_log_std_clamp.py` | laptop | compares the 12c arms on VALIDATION: per-level RMSE, share of σ on the floor, std(z), 95 % coverage, τ_c |
 | **14** | `14_evaluate_model.py` | laptop | test-set predictions (`pred_cache.npz`) + paper figures |
 | **15** | `15_lwp_from_retrievals.py` | laptop | LWP from retrieved r_e + τ_c with the Mie-consistent formula |
 | **16** | `16_error_vs_adiabaticity.py` | laptop | profile / τ_c / LWP error vs Wood (2005) adiabaticity |
+| **17** | `17_per_level_error_figure.py` | laptop | manuscript figure: (a) per-level r_e error, median + 5–95 % (abs and signed versions); (b) predicted aleatoric σ and training-set σ of r_e per level |
 
 Shared physics: `paper3_physics.py` (Wood 2005 adiabaticity — a verbatim
 copy of `plot_per_cloud_rmse_kfold.py`, identical results; Mie extinction as
@@ -62,9 +65,13 @@ sbatch --array=0-10%6 --export=ALL,TAG=PT_2026-11-14,H5_PATH=<alpine .h5> 12_tra
 
 # 13-16 — laptop, after copying training_runs/PT_2026-11-14/results back
 python 13_rank_trained_models.py --tag PT_2026-11-14
+# 12c / 13b — log-σ clamp test of the selected config (train with 12b on Alpine in between)
+python 12c_log_std_clamp_configs.py --tag LSC_2026-11-17 --source-tag PT_2026-11-14 --h5-alpine <alpine .h5>
+python 13b_compare_log_std_clamp.py --tag LSC_2026-11-17
 python 14_evaluate_model.py      --tag PT_2026-11-14 --h5-path training_data/<file>.h5
 python 15_lwp_from_retrievals.py --tag PT_2026-11-14 --h5-path training_data/<file>.h5
 python 16_error_vs_adiabaticity.py --tag PT_2026-11-14 --h5-path training_data/<file>.h5
+python 17_per_level_error_figure.py --tag PT_2026-11-14 --h5-path training_data/<file>.h5
 ```
 
 Outputs of each training round live in `training_runs/<tag>/`
@@ -103,6 +110,15 @@ Outputs of each training round live in `training_runs/<tag>/`
   sat on an edge. The trainer now separates the split seed (`--seed`) from the
   initialisation seed (`hyperparams.init_seed`) and writes validation RMSEs in
   physical units. Design notes and sources: docstring of `11b_generate_sweep.py`.
+* **Log-σ clamp (17 Nov 2026).** Both uncertainty heads clamp log σ (normalized
+  space) before exp(); this was hard-coded at −4 / +2, which floors r_e σ at
+  0.888 μm. In run_004 92–98 % of mid-cloud test predictions and 97 % of τ
+  predictions sat on that floor, so σ there was the clamp, not an estimate. The
+  bounds are now `hyperparams.log_std_min / log_std_max` (default −4 / +2, so old
+  runs rebuild exactly; evaluators read them with `models.log_std_bounds_for_run`).
+  `sigma_floor` must be ≤ exp(log_std_min) (checked by the trainer). The trainer
+  now reports floor occupancy and calibration (std of z = err/σ, 95 % coverage)
+  for validation and test in summary.json and saves `val_pred_cache.npz`.
 * **Split sizes.** The PT configs fixed val/test at 4,199 (10 % of the old
   41,991 samples); step 12a resets them to 10 % of the new file.
 
