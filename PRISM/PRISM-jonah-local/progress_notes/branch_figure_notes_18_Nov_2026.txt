@@ -1,0 +1,51 @@
+PRISM branch figure: notes for this week's meeting -- 18 Nov 2026
+Scripts: J04_..._with_simpleModel_verB.py (2 rows, twin axes) and _verC.py (4 rows); drawing code in
+J04_branch_figure.py. Output: figures/figure_branches_with_simpleModel_<verB|verC>_<continuous|broken>_ssp245.png
+Status: drawn on the laptop with PLACEHOLDER OHC only; not yet run on Casper. Not committed.
+
+------------------------------------------------------------------------------
+WHAT EACH COLUMN SHOWS (ensemble means only; decadal running means for CESM2)
+------------------------------------------------------------------------------
+(a) CESM2 (WACCM6): historical (N=3) -> SSP2-4.5 (N=10), branching in 2035 to
+    ARISE-SAI-1.5 (EXTENDED runs, N=2, to 2100) and ARISE-SAI-1.0 (GAUSS-LOWER-0.5, N=10, to 2069).
+    The ensemble mean changes membership at 2015 (3 historical members -> 10 SSP2-4.5 members).
+(b) CESM2 (CAM6): CMIP6 SSP2-4.5 baseline (N=1, 2015-2069), branching in 2035 to
+    MCB-025/050/075/125PCT (N=1 each). The 10-member smbb MCB-050PCT ensemble is left out: its own
+    SSP2-4.5 trunk is not in our data.
+(c) Three-layer model (ssp245 CO2): no SAI, branching in 2035 to temperature-stabilized
+    (constant_Ta controller) and energy-budget-stabilized (zero_imbalance controller) runs.
+x-axis: "continuous" = 1950-2100 (as in Jonah's slide 30); "broken" = 1850-2015 compressed | 2015-2100.
+
+------------------------------------------------------------------------------
+TO DISCUSS 1: iEEI and OHC reference in the CAM6 column (current J04 convention kept)
+------------------------------------------------------------------------------
+- Every 2015-onward run is integrated from 2015 and shifted up by the WACCM6 historical run's 2014
+  annual-mean iEEI and OHC (J04's "preceding_case").
+- There is no CAM6 historical run in our data, so the CAM6 column starts from WACCM6's 1850-2014
+  accumulation. Its 2015-2069 changes are CAM6's own; only the starting level is borrowed.
+- Alternatives:
+  (i)  measure iEEI/OHC from 2015 in every column, so no model configurations are mixed;
+  (ii) keep 1850 for WACCM6 and the model, start CAM6 at 0 in 2015 with its own y-range;
+  (iii) find or run a CAM6 historical simulation.
+
+------------------------------------------------------------------------------
+TO DISCUSS 2: is CMIP6-baseline.000 the parent of the CMIP6 MCB runs?
+------------------------------------------------------------------------------
+- Consistent with yes: the baseline covers 2015-2069 and the four MCB runs start in Jan 2035. The
+  file names give the same compset (BSSP245cmip6) and grid (f09_g17).
+- Chen et al. (2024, GRL, doi:10.1029/2024GL108860) used CESM2/CAM6 at 1.25 x 0.9 deg: a baseline
+  for 2015-2034 under SSP2-4.5, then MCB runs for 2035-2069. Their five MCB runs are named by seeded
+  area (5% most; 10-40% least susceptible), not 025/050/075/125PCT, so ours may be a different set.
+- Their Table 1 control: 288.8 K (2020-2039) and 289.8 K (2050-2069). Our baseline's global TS:
+  289.85 K and 290.84 K, so about 1.05 K warmer in both periods but with the same ~1.0 K warming. Our
+  WACCM6 SSP2-4.5 mean is also ~1 K above their value (289.75 K for 2020-2039). This is inconclusive;
+  a different temperature variable or averaging is possible (my guess, unverified).
+- Question for Jonah: where do the CMIP6-MCB-xxxPCT runs come from, and what does "xxxPCT" mean?
+
+------------------------------------------------------------------------------
+CHECKS DONE
+------------------------------------------------------------------------------
+- The model's 2100 iEEI matches Jonah's slide 31 (energy gain): 124 / 93 / 59 W yr m-2 for no SAI /
+  stabilize temperature / stabilize energy budget.
+- The MCB runs in the earlier J04 figures are still joined onto the WACCM6 SSP2-4.5 run (J15
+  template). Only the branch figure joins them to the CAM6 baseline.
