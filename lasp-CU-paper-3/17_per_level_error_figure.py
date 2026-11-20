@@ -6,43 +6,30 @@ for one trained model, as a 2 x 1 figure.
 
   (a) Retrieval error at each vertical level over the held-out test set:
       the median (line + markers) and the 5th–95th percentile range (shading).
-  (b) Two quantities, each on its own y-axis:
-        left axis  — mean predicted aleatoric σ at each level, i.e. the
-                     width of the network's predictive distribution
-                     p(r_e(l) | R), averaged over the test set;
-        right axis — standard deviation of the TRAINING-set true r_e at each
-                     level, i.e. the spread of the data the network learned
-                     from.
+  (b) Mean (or median) predicted aleatoric σ at each level over the test set.
+      The network outputs a Gaussian for r_e at each level given the
+      spectrum, p(r_e(l) | R) = N(μ(l), σ(l)²); σ is that Gaussian's standard
+      deviation, written σ(r_e(l) | R) on the axis.
+      A dotted line marks the smallest σ the network can output, set by the
+      run's log-σ clamp: exp(log_std_min) × (re_max − re_min), 0.888 μm for the
+      legacy −4. A σ curve lying on that line is the clamp, not an estimate
+      (17 Nov 2026: 92–98 % of run_004's mid-cloud predictions sit on it).
+      --no-floor-line drops it.
 
 Two versions are written, identical except for panel (a):
   per_level_error_2panel_abs.png     — |retrieved − true|
   per_level_error_2panel_signed.png  —  retrieved − true   (the same sign
                                         convention as steps 15 and 16)
 
-Inputs
-  * <run>/pred_cache.npz from step 14 (pred, pred_std, true, h5_idx; μm).
-  * The training HDF5 (only for the training-set σ of r_e). The training
-    split is rebuilt with data.create_profile_aware_splits using the run's
-    own seed and val/test sizes (same call as plot_run_figures_profile_tau's
-    _run_inference). The script checks that the rebuilt TEST indices equal
-    the cached h5_idx, so the training split is known to be the one the
-    model was trained on. The per-level training σ is then cached in
-    <run>/train_re_std_cache.npz so later replots don't need the HDF5.
-
-Orientation of panel (b)
-  --panel-b vertical (default): vertical level on the y-axis like panel (a);
-      predicted σ on the bottom x-axis, training-set σ on the top x-axis
-      (matplotlib twiny).
-  --panel-b horizontal: vertical level on the x-axis, σ on the left y-axis and
-      training-set σ on the right y-axis (twinx).
+Input: <run>/pred_cache.npz from step 14 (pred, pred_std, true; μm) and the
+run's summary.json (or config.json) for its log-σ clamp. No HDF5 needed.
 
 Usage
-    python 17_per_level_error_figure.py --tag PT_2026-11-14 [--h5-path local.h5]
+    python 17_per_level_error_figure.py --tag PT_2026-11-14
     python 17_per_level_error_figure.py --run-dir <run dir> [--sigma-stat median]
 
-Nothing here is stochastic (the split is a deterministic function of the
-run's seed, which is printed and saved in the stats JSON).
-Author: Andrew J. Buggee, 17 Nov 2026
+Nothing here is stochastic.
+Author: Andrew J. Buggee, 17 Nov 2026 (panel (b) simplified 19 Nov 2026)
 """
 
 from __future__ import annotations
@@ -63,25 +50,26 @@ sys.path.insert(0, str(REPO))
 # Same IEEE single-column style as the earlier per-level figure
 # (plot_per_level_error_percentiles.py), so the manuscript figures match.
 from plot_per_level_error_percentiles import setup_style   # noqa: E402
-from plot_percentile_profiles_synthetic import _resolve_h5_path  # noqa: E402
 
 # ─── Figure configuration ─────────────────────────────────────────────────
 FIG_WIDTH_IN  = 3.25     # IEEE single column
-FIG_HEIGHT_IN = 6.4      # two stacked panels
+FIG_HEIGHT_IN = 6.0      # two stacked panels
 DPI           = 500
 
 # Okabe-Ito / Wong (2011, Nat. Methods 8, 441) colour-blind-safe colours.
-COLOR_ERROR  = '#D55E00'  # vermillion — retrieval error (panel a); same as before
-COLOR_SIGMA  = '#0072B2'  # blue — predicted aleatoric σ (panel b, left axis)
-COLOR_TRAIN  = '#009E73'  # bluish green — training-set σ of r_e (panel b, right axis)
+COLOR_ERROR  = '#D55E00'  # vermillion — retrieval error (panel a)
+COLOR_SIGMA  = '#0072B2'  # blue — predicted aleatoric σ (panel b)
 BAND_ALPHA   = 0.25
 
 PERCENTILES = (5, 50, 95)
 
-# Axis labels requested for panel (b). Units (μm) added; both are r_e
-# standard deviations.
-LABEL_SIGMA = r'Aleatoric $\sigma$ (width of $p(r_e(l)\,|\,\mathbf{R})$) ($\mu$m)'
-LABEL_TRAIN = r'$\sigma$ of training-data $r_e(l)$ ($\mu$m)'
+# σ of the network's conditional Gaussian for r_e at level l given spectrum R.
+LABEL_SIGMA = r'Aleatoric $\sigma(r_e(l)\,|\,\mathbf{R})$ ($\mu$m)'
+
+# r_e normalization range of the network (models.RetrievalConfig re_max − re_min);
+# the r_e σ floor is exp(log_std_min) times this.
+RE_RANGE_UM = 50.0 - 1.5
+LEGACY_LOG_STD_MIN = -4.0   # = models.LEGACY_LOG_STD_BOUNDS[0]
 
 
 # ─── Run directory / metadata ─────────────────────────────────────────────
@@ -95,92 +83,35 @@ def selected_run_dir(tag: str | None, run_dir: str | None) -> Path:
     return (REPO / sel['run_dir']).resolve()
 
 
-def run_split_settings(run_dir: Path) -> dict:
-    """HDF5 path, split seed and val/test sizes the run was trained with.
+def run_log_std_min(run_dir: Path) -> float:
+    """log_std_min the run was trained with (legacy −4 if not recorded).
 
-    Profile + τ runs write summary.json (h5 path under 'data'); the older
-    profile-only runs write config.json (h5 path at top level). The split
-    seed is 'seed' in either file; 42 was the trainers' default.
+    Same rule as models.log_std_bounds_for_run, read here without importing
+    torch so the figure can be made on any machine.
     """
     for name in ('summary.json', 'config.json'):
         p = run_dir / name
         if p.exists():
-            s = json.load(open(p))
-            h5 = s.get('data', {}).get('h5_path') or s.get('h5_path')
-            return {
-                'h5_path':         h5,
-                'seed':            int(s.get('seed', 42)),
-                'n_val_profiles':  int(s['n_val_profiles']),
-                'n_test_profiles': int(s['n_test_profiles']),
-                'source':          name,
-            }
-    raise FileNotFoundError(f'no summary.json or config.json in {run_dir}')
+            hp = json.load(open(p)).get('hyperparams', {})
+            return float(hp.get('log_std_min', LEGACY_LOG_STD_MIN))
+    return LEGACY_LOG_STD_MIN
 
 
-# ─── Training-set σ of r_e per level ──────────────────────────────────────
-def training_re_std(run_dir: Path, h5_override: str | None,
-                    test_idx_cached: np.ndarray, refresh: bool) -> dict:
-    """Per-level standard deviation of the true r_e over the training split.
-
-    Returns {'std_um': (n_lev,), 'mean_um': (n_lev,), 'n_train': int, ...}.
-    Cached in <run>/train_re_std_cache.npz.
-    """
-    cache = run_dir / 'train_re_std_cache.npz'
-    if cache.exists() and not refresh:
-        c = np.load(cache)
-        print(f'Loaded training-set r_e σ from {cache}')
-        return {k: c[k] for k in c.files}
-
-    import h5py
-    from data import create_profile_aware_splits  # imports torch
-
-    st = run_split_settings(run_dir)
-    h5_path = _resolve_h5_path(st['h5_path'], h5_override)
-    print(f'Rebuilding the training split from {h5_path}')
-    print(f'  seed = {st["seed"]}, n_val = {st["n_val_profiles"]}, '
-          f'n_test = {st["n_test_profiles"]} (from {st["source"]})')
-
-    train_idx, _, test_idx = create_profile_aware_splits(
-        str(h5_path),
-        n_val_profiles=st['n_val_profiles'],
-        n_test_profiles=st['n_test_profiles'],
-        seed=st['seed'],
-    )
-    # Hard check: the rebuilt test split must be the one the predictions
-    # were made on. If not, the training split is not the model's either.
-    if not np.array_equal(np.sort(test_idx), np.sort(test_idx_cached)):
-        raise RuntimeError('Rebuilt test indices differ from pred_cache.npz '
-                           'h5_idx; wrong HDF5 or split settings.')
-
-    with h5py.File(h5_path, 'r') as f:
-        # h5py fancy indexing needs increasing indices; train_idx from
-        # np.where is already sorted.
-        re_train_um = f['profiles'][train_idx].astype(np.float64)  # (n_train, n_lev), μm
-
-    # Population std (ddof=0) over training SAMPLES. When a profile is
-    # simulated at several geometries it is counted once per sample, i.e.
-    # weighted the way the network saw it in training.
-    out = {
-        'std_um':  re_train_um.std(axis=0),           # (n_lev,)
-        'mean_um': re_train_um.mean(axis=0),          # (n_lev,)
-        'n_train': np.int64(len(train_idx)),
-        'seed':    np.int64(st['seed']),
-        'h5_path': np.str_(str(h5_path)),
-    }
-    np.savez(cache, **out)
-    print(f'Cached training-set r_e σ -> {cache}')
-    return out
+# Shared x-axis range and tick locations for both panels (μm).
+X_RANGE_UM = (0.0, 4.0)
+X_TICKS_UM = np.arange(0, 5, 1)                          # 0, 1, 2, 3, 4 μm
 
 
 # ─── Figure ───────────────────────────────────────────────────────────────
 def plot_two_panel(pred: np.ndarray, true: np.ndarray, pred_std: np.ndarray,
-                   train_std_um: np.ndarray, out_path: Path,
-                   error_kind: str = 'abs', sigma_stat: str = 'mean',
-                   panel_b: str = 'vertical') -> dict:
+                   out_path: Path, error_kind: str = 'abs',
+                   sigma_stat: str = 'mean',
+                   sigma_floor_um: float | None = None) -> dict:
     """2 x 1 figure. pred, true, pred_std: (n_samples, n_levels) in μm.
 
     error_kind 'abs'    → panel (a) shows |pred − true|
                'signed' → panel (a) shows  pred − true
+    sigma_floor_um      → if given, a dotted line at the clamp floor in (b)
     """
     err = pred - true                                    # (n_samp, n_lev), μm
     if error_kind == 'abs':
@@ -207,17 +138,27 @@ def plot_two_panel(pred: np.ndarray, true: np.ndarray, pred_std: np.ndarray,
     else:
         raise ValueError(f'sigma_stat must be mean or median, got {sigma_stat!r}')
 
+    # The fixed x range can clip data; warn rather than silently hide it.
+    if error_kind == 'abs' and p95.max() > X_RANGE_UM[1]:
+        print(f'WARNING: panel (a) 95th percentile reaches {p95.max():.2f} μm, '
+              f'beyond the {X_RANGE_UM[1]:.0f} μm axis limit')
+    if sigma_c.max() > X_RANGE_UM[1]:
+        print(f'WARNING: panel (b) σ reaches {sigma_c.max():.2f} μm, '
+              f'beyond the {X_RANGE_UM[1]:.0f} μm axis limit')
+
     # Two lines: on one line the label is taller than a 3.25"-wide panel.
     level_label = f'Vertical level\n(1 = cloud top, {n_levels} = cloud base)'
     fig, (ax_a, ax_b) = plt.subplots(2, 1, figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
 
-    # ── (a) error: same layout as the original figure, no σ curve ─────────
+    # ── (a) error ─────────────────────────────────────────────────────────
     ax_a.fill_betweenx(levels, p05, p95, color=COLOR_ERROR, alpha=BAND_ALPHA,
                        linewidth=0, label=f'5–95% of {err_word}')
     ax_a.plot(p50, levels, 'o-', color=COLOR_ERROR, linewidth=1.5,
               markersize=4.5, label=f'Median {err_word}')
     if error_kind == 'abs':
-        ax_a.set_xlim(left=0)
+        # Fixed 0–4 μm range with a tick label at every micron, matching (b).
+        ax_a.set_xlim(*X_RANGE_UM)
+        ax_a.set_xticks(X_TICKS_UM)
     else:
         # Zero line so the sign of the bias is visible.
         ax_a.axvline(0, color='k', linewidth=0.6, zorder=0)
@@ -232,56 +173,27 @@ def plot_two_panel(pred: np.ndarray, true: np.ndarray, pred_std: np.ndarray,
                 frameon=False, handlelength=1.6, columnspacing=1.0,
                 handletextpad=0.5, borderaxespad=0.2)
 
-    # ── (b) predicted σ and training-set σ on separate axes ───────────────
-    if panel_b == 'horizontal':
-        # Level on x; σ on left y, training σ on right y (twinx).
-        ax_t = ax_b.twinx()
-        h1, = ax_b.plot(levels, sigma_c, 'd--', color=COLOR_SIGMA,
-                        linewidth=1.2, markersize=4,
-                        label=fr'{sigma_word} predicted $\sigma$')
-        h2, = ax_t.plot(levels, train_std_um, 's-', color=COLOR_TRAIN,
-                        linewidth=1.2, markersize=3.5,
-                        label=r'Training-set $\sigma$')
-        ax_b.set_xlabel(level_label)
-        ax_b.set_xticks(levels)
-        ax_b.set_ylabel(LABEL_SIGMA, color=COLOR_SIGMA)
-        ax_t.set_ylabel(LABEL_TRAIN, color=COLOR_TRAIN)
-        ax_b.tick_params(axis='y', colors=COLOR_SIGMA)
-        ax_t.tick_params(axis='y', colors=COLOR_TRAIN)
-        ax_b.set_ylim(bottom=0)
-        ax_t.set_ylim(bottom=0)
-    elif panel_b == 'vertical':
-        # Level on y like panel (a); σ on bottom x, training σ on top x (twiny).
-        ax_t = ax_b.twiny()
-        h1, = ax_b.plot(sigma_c, levels, 'd--', color=COLOR_SIGMA,
-                        linewidth=1.2, markersize=4,
-                        label=fr'{sigma_word} predicted $\sigma$')
-        h2, = ax_t.plot(train_std_um, levels, 's-', color=COLOR_TRAIN,
-                        linewidth=1.2, markersize=3.5,
-                        label=r'Training-set $\sigma$')
-        ax_b.set_ylabel(level_label)
-        ax_b.set_yticks(levels)
-        ax_b.invert_yaxis()
-        ax_b.set_xlabel(LABEL_SIGMA, color=COLOR_SIGMA)
-        ax_t.set_xlabel(LABEL_TRAIN, color=COLOR_TRAIN)
-        ax_b.tick_params(axis='x', colors=COLOR_SIGMA)
-        ax_t.tick_params(axis='x', colors=COLOR_TRAIN)
-        ax_b.set_xlim(left=0)
-        ax_t.set_xlim(left=0)
-    else:
-        raise ValueError(f'panel_b must be horizontal or vertical, got {panel_b!r}')
+    # ── (b) predicted aleatoric σ ─────────────────────────────────────────
+    ax_b.plot(sigma_c, levels, 'd--', color=COLOR_SIGMA, linewidth=1.2,
+              markersize=4, label=fr'{sigma_word} predicted $\sigma$')
+    if sigma_floor_um is not None:
+        ax_b.axvline(sigma_floor_um, color='0.35', linestyle=':', linewidth=1.0,
+                     zorder=0, label=r'Smallest $\sigma$ allowed (log-$\sigma$ clamp)')
+    ax_b.set_xlabel(LABEL_SIGMA)
+    ax_b.set_ylabel(level_label)
+    ax_b.set_yticks(levels)
+    ax_b.invert_yaxis()
+    # Fixed 0–4 μm range with a tick label at every micron, matching (a).
+    ax_b.set_xlim(*X_RANGE_UM)
+    ax_b.set_xticks(X_TICKS_UM)
     ax_b.grid(True, linestyle='--', linewidth=0.4, alpha=0.5)
-    # Fixed location: loc='best' only sees ax_b's line, not the twin axis's,
-    # and put the legend on the training-σ curve. Both σ curves are smallest
-    # in mid-cloud, so the empty region is low (horizontal) / lower left
-    # (vertical). Labels are kept short so the legend fits there.
-    legend_loc = 'lower center' if panel_b == 'horizontal' else 'lower left'
-    ax_b.legend(handles=[h1, h2], loc=legend_loc, frameon=True, framealpha=0.9,
-                handlelength=1.6, labelspacing=0.35, handletextpad=0.5,
-                borderaxespad=0.3)
+    # Same placement as panel (a): above the axes, clear of the data.
+    ax_b.legend(loc='lower center', bbox_to_anchor=(0.5, 1.0), ncol=1,
+                frameon=False, handlelength=1.6, labelspacing=0.3,
+                handletextpad=0.5, borderaxespad=0.2)
 
     # Panel letters outside the top-left corner of each axes, so they never
-    # sit on data (inside, '(b)' covered the level-1 marker).
+    # sit on data.
     for ax, letter in ((ax_a, '(a)'), (ax_b, '(b)')):
         ax.text(-0.22, 1.0, letter, transform=ax.transAxes, ha='left',
                 va='bottom', fontweight='bold', fontsize=9)
@@ -299,7 +211,6 @@ def plot_two_panel(pred: np.ndarray, true: np.ndarray, pred_std: np.ndarray,
         'sigma_stat':              sigma_stat,
         'predicted_sigma_um':      sigma_c.tolist(),
         'predicted_sigma_overall_mean_um': float(pred_std.mean()),
-        'train_re_std_um':         np.asarray(train_std_um).tolist(),
         'n_test_samples':          int(pred.shape[0]),
     }
 
@@ -308,14 +219,10 @@ def main() -> None:
     p = argparse.ArgumentParser(description='Per-level r_e error + σ figure (2 x 1)')
     p.add_argument('--tag', default=None, help='training_runs/<tag> (step 13 selection)')
     p.add_argument('--run-dir', default=None, help='run directory (overrides --tag)')
-    p.add_argument('--h5-path', default=None,
-                   help='local HDF5 if the path stored with the run is not reachable')
     p.add_argument('--sigma-stat', choices=['mean', 'median'], default='mean',
                    help='test-set statistic of the predicted σ per level (default mean)')
-    p.add_argument('--panel-b', choices=['vertical', 'horizontal'], default='vertical',
-                   help='orientation of panel (b); see module docstring')
-    p.add_argument('--refresh', action='store_true',
-                   help='recompute the training-set σ instead of using its cache')
+    p.add_argument('--no-floor-line', action='store_true',
+                   help='do not mark the log-σ clamp floor in panel (b)')
     p.add_argument('--out-dir', default=None, help='default: the run directory')
     args = p.parse_args()
 
@@ -328,35 +235,37 @@ def main() -> None:
         raise SystemExit(f'{cache_path} not found — run step 14 first')
     c = np.load(cache_path)
     pred, pred_std, true = c['pred'], c['pred_std'], c['true']  # (n, n_lev), μm
-    if 'h5_idx' not in c.files:
-        raise SystemExit('pred_cache.npz has no h5_idx; rerun step 14 with --refresh')
     print(f'Run      : {run_dir}')
     print(f'Test set : {pred.shape[0]} samples x {pred.shape[1]} levels')
 
-    tr = training_re_std(run_dir, args.h5_path, c['h5_idx'], args.refresh)
-    print(f'Training : {int(tr["n_train"])} samples')
+    lsm = run_log_std_min(run_dir)
+    floor_um = float(np.exp(lsm) * RE_RANGE_UM)
+    # Share of predictions on the floor, per level (σ within 1e-4 relative).
+    on_floor = np.isclose(pred_std, floor_um, rtol=1e-4, atol=0).mean(axis=0)  # (n_lev,)
+    print(f'log-σ clamp min {lsm:g} → σ floor {floor_um:.4f} μm; share on floor per level: '
+          + ' '.join(f'{f:.2f}' for f in on_floor))
 
     setup_style()
-    all_stats = {'run_dir': str(run_dir), 'split_seed': int(tr['seed']),
-                 'n_train_samples': int(tr['n_train']),
-                 'train_re_mean_um': np.asarray(tr['mean_um']).tolist()}
+    all_stats = {'run_dir': str(run_dir), 'log_std_min': lsm,
+                 'sigma_floor_um': floor_um,
+                 'share_sigma_on_floor_per_level': on_floor.tolist()}
     for kind in ('abs', 'signed'):
         out = out_dir / f'per_level_error_2panel_{kind}.png'
-        all_stats[kind] = plot_two_panel(pred, true, pred_std, tr['std_um'], out,
-                                         error_kind=kind, sigma_stat=args.sigma_stat,
-                                         panel_b=args.panel_b)
+        all_stats[kind] = plot_two_panel(
+            pred, true, pred_std, out, error_kind=kind, sigma_stat=args.sigma_stat,
+            sigma_floor_um=None if args.no_floor_line else floor_um)
         print(f'Figure   -> {out}')
 
     # Table for the manuscript text.
     s_abs, s_sgn = all_stats['abs'], all_stats['signed']
     print('\nPer level (μm): median|err|  5–95%|err|   median err  5–95% err   '
-          f'{args.sigma_stat} σ   train σ')
+          f'{args.sigma_stat} σ   on floor')
     for i, L in enumerate(s_abs['levels']):
         print(f'  {L:>2d}  {s_abs["error_median_um"][i]:9.3f}  '
               f'{s_abs["error_p05_um"][i]:5.2f}–{s_abs["error_p95_um"][i]:5.2f}  '
               f'{s_sgn["error_median_um"][i]:+9.3f}  '
               f'{s_sgn["error_p05_um"][i]:+5.2f}–{s_sgn["error_p95_um"][i]:+5.2f}  '
-              f'{s_abs["predicted_sigma_um"][i]:7.3f}  {s_abs["train_re_std_um"][i]:7.3f}')
+              f'{s_abs["predicted_sigma_um"][i]:7.3f}  {on_floor[i]:7.2f}')
     print(f'  mean predicted σ over all samples and levels: '
           f'{s_abs["predicted_sigma_overall_mean_um"]:.3f} μm')
 

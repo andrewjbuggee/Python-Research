@@ -33,6 +33,14 @@ What it reports
               "basin" plots [Playbook, "A scientific approach…"]).
   trade-off   the Pareto set of (validation profile RMSE, validation τ RMSE):
               configs no other config beats on both (standard definition).
+  σ checks    per config (from the trainer's 'val_uncertainty', trials since
+              17 Nov 2026; blank for older runs): share of validation σ on the
+              log-σ clamp floor (r_e, mean over levels; τ_c), and calibration
+              std(z), z = error/σ, averaged over levels (1 = calibrated, < 1 σ
+              too large, > 1 σ too small). Not used for ranking; reported so a
+              floor that still binds, or badly calibrated σ, is seen before a
+              config is chosen. The "> 10 % on the floor" warning threshold is
+              Claude's choice.
 
 Outputs (training_runs/<tag>/)
   comparison.csv      one row per config, ranked; read by 12_select_configs.py
@@ -137,6 +145,12 @@ def main() -> None:
     for cid, g in groups.items():
         hp = g[0]['hyperparams']
         m = lambda k: float(np.mean([t[k] for t in g]))                      # noqa: E731
+
+        def mu(k):
+            """Mean over seeds (and over levels for per-level lists) of a
+            val_uncertainty entry; NaN for trials trained before it existed."""
+            v = [np.mean(t['val_uncertainty'][k]) for t in g if 'val_uncertainty' in t]
+            return float(np.mean(v)) if v else float('nan')
         rows.append(dict(
             run_id=cid, n_seeds=len(g),
             mean_val_rmse_um=m('mean_val_rmse_um'), tau_val_rmse=m('tau_val_rmse'),
@@ -144,6 +158,11 @@ def main() -> None:
             mean_test_rmse_um=m('mean_test_rmse_um'), tau_test_rmse=m('tau_test_rmse'),
             best_epoch_fraction=m('best_epoch_fraction'), epochs_trained=m('epochs_trained'),
             train_hours=m('train_seconds') / 3600,
+            log_std_min=float(hp.get('log_std_min', -4.0)),
+            val_frac_sigma_on_floor=mu('frac_sigma_on_floor'),
+            tau_val_frac_sigma_on_floor=mu('tau_frac_sigma_on_floor'),
+            val_z_std=mu('z_std_per_level'),
+            tau_val_z_std=mu('tau_z_std'),
             **{k: hp[k] for k in cont}, **{k: str(hp[k]) for k in cats}, tag=g[0].get('tag', '')))
     rows.sort(key=lambda r: r['mean_val_rmse_um'])
     for k, r in enumerate(rows, 1):
@@ -200,6 +219,20 @@ def main() -> None:
     for k, d in cat_med.items():
         print(f'  {k}: ' + ', '.join(f'{o} {v:.3f}' for o, v in d.items()))
     print(f'Pareto set (val r_e RMSE vs val τ RMSE): runs {[r["run_id"] for r in rows if r["pareto"]]}')
+    # σ checks on the top 15 (see docstring)
+    if any(np.isfinite(r['val_frac_sigma_on_floor']) for r in rows):
+        print(f'\nσ checks, top 15 (validation): {"run":>4} {"log-σ min":>9} {"r_e on floor":>12} '
+              f'{"τ on floor":>10} {"std(z) r_e":>10} {"std(z) τ":>8}')
+        for r in rows[:15]:
+            print(f'{"":>31} {r["run_id"]:>4} {r["log_std_min"]:>9g} {r["val_frac_sigma_on_floor"]:>12.2f} '
+                  f'{r["tau_val_frac_sigma_on_floor"]:>10.2f} {r["val_z_std"]:>10.2f} {r["tau_val_z_std"]:>8.2f}')
+        stuck = [r['run_id'] for r in rows[:15]
+                 if max(r['val_frac_sigma_on_floor'], r['tau_val_frac_sigma_on_floor']) > 0.10]
+        if stuck:
+            print(f'WARNING: > 10 % of validation σ on the clamp floor in top-15 runs {stuck}: '
+                  f'their σ is partly the clamp, not an estimate')
+    else:
+        print('\nσ checks: no trial has val_uncertainty (trained before 17 Nov 2026)')
     print('test metrics are in comparison.csv for the record; they were not used for ranking')
 
     # ── files ────────────────────────────────────────────────────────────────

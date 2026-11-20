@@ -19,7 +19,7 @@ evaluate the profile + τ network (`DropletProfileNetwork`: 7-level r_e + σ and
 | **11c** | `11c_analyze_sweep.py` | laptop | ranks the sweep on VALIDATION metrics; noise, budget, boundary and sensitivity checks; `comparison.csv` |
 | **12a** | `12_select_configs.py` | laptop | top-N configs of a sweep (`--sweep-tag`, validation ranking; default = Aug-2026 sweep) rewritten for a long retrain (4500 epochs) |
 | **12b** | `12_train_configs_alpine.sh` | Alpine (L40 GPU) | trains each selected config (array job) |
-| **12c** | `12c_log_std_clamp_configs.py` | laptop | control (log-σ clamp −4) vs lowered (default −7) configs of one chosen config, with seed replicates; trained by 12b |
+| **12c** | `12c_log_std_clamp_configs.py` | laptop | control (log-σ clamp −4) vs lowered (default −8) configs of one chosen config, with seed replicates; trained by 12b |
 | **13** | `13_rank_trained_models.py` | laptop | ranks the retrained runs on validation, writes `selected_model.json` |
 | **13b** | `13b_compare_log_std_clamp.py` | laptop | compares the 12c arms on VALIDATION: per-level RMSE, share of σ on the floor, std(z), 95 % coverage, τ_c |
 | **14** | `14_evaluate_model.py` | laptop | test-set predictions (`pred_cache.npz`) + paper figures |

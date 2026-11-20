@@ -3,7 +3,7 @@
 ===============================================================
 Configs for a controlled test of the log-σ clamp: one chosen configuration
 trained at the legacy clamp (log_std_min = −4, the control) and at a lower one
-(default −7), with everything else identical. Step 12b
+(default −8, the same as 11b_generate_sweep.py), with everything else identical. Step 12b
 (12_train_configs_alpine.sh) trains them; 13b_compare_log_std_clamp.py
 compares them on the VALIDATION set.
 
@@ -12,7 +12,7 @@ predictions and 97 % of τ predictions had σ exactly on the −4 floor
 (0.888 μm for r_e), so σ there was the clamp value, not an estimate.
 
 What changes between the arms
-  hyperparams.log_std_min  −4 (control) vs --log-std-min (default −7)
+  hyperparams.log_std_min  −4 (control) vs --log-std-min (default −8)
   hyperparams.sigma_floor  control: the source value (0.01 < exp(−4), inert,
                            as before); test arm: exp(log_std_min), so the
                            loss-side floor equals the model's floor rather
@@ -78,8 +78,8 @@ def main() -> None:
     g.add_argument('--source-tag', default=None)
     p.add_argument('--h5-alpine', default=None,
                    help='HDF5 path on Alpine (default: keep the source config\'s)')
-    p.add_argument('--log-std-min', type=float, default=-7.0,
-                   help='test-arm clamp (default −7 → 0.044 μm r_e floor)')
+    p.add_argument('--log-std-min', type=float, default=-8.0,
+                   help='test-arm clamp (default −8 → 0.016 μm r_e floor, as 11b)')
     p.add_argument('--n-seeds', type=int, default=2, help='init seeds per arm')
     args = p.parse_args()
 

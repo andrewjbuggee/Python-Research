@@ -59,6 +59,22 @@ reading of the Aug-2026 sweep, not results from a source)
      space boundary signals that the bound should move [Playbook,
      "Quasi-random search"]; 11c flags this.
 
+  7. Log-σ clamp lowered (20 Nov 2026). Both σ heads clamp log σ in
+     normalized space; the old hard-coded −4 (r_e σ floor 0.888 μm) bound for
+     most predictions in the Aug-2026 run_004 and in PT_sweep_2026-11-15
+     run_047 (mean predicted σ 0.888 μm at levels 2–5 against validation
+     RMSE 0.18–0.35 μm), so σ there was the clamp, not an estimate. Default
+     --log-std-min −8: floor exp(−8) × 48.5 μm = 0.016 μm for r_e and
+     exp(−8) × 37 = 0.012 for τ_c (3/40 bounds), about 11× below run_047's
+     smallest per-level validation RMSE. sigma_floor (the loss-side floor) is
+     set to exp(log_std_min) so it does not bind above the model's clamp.
+     Why keep any floor: NLL training needs a lower bound on σ to settle
+     (Seitzer et al. 2022, ICLR, App. B.1, https://arxiv.org/abs/2203.09168);
+     Kendall & Gal (2017, NeurIPS, Eq. 8) regress log σ² unclamped. Choosing
+     −8 (rather than −7) from run_047's errors is Claude's judgment, not
+     a value from either source. The value is NOT swept: it is a numerical
+     guard, not a modelling choice, and 11c reports how many σ still sit on it.
+
 Not done here (by choice): adaptive search (Bayesian optimisation / TPE) and
 early-stopping schedulers such as ASHA [Li20]. Both need a trainer that can
 pause and resume and a long-running controller; the Slurm-array quasi-random
@@ -210,9 +226,12 @@ FIXED_HP = {
     'batch_size':          256,      # see design note 5
     'scheduler_patience':  30,       # ReduceLROnPlateau, factor 0.5 (trainer)
     'warmup_steps':        500,
-    'sigma_floor':         0.01,
     'early_stop_metric':   'total',  # as in Aug 2026
+    # log_std_min / log_std_max / sigma_floor are added in main() from
+    # --log-std-min (design note 7); they used to be −4 / +2 / 0.01.
 }
+LOG_STD_MAX = 2.0                      # upper clamp: overflow guard only, unchanged
+RE_RANGE_UM = 50.0 - 1.5               # models.RetrievalConfig re_max − re_min
 
 
 def build_level_weights(scheme: str, n_levels: int = N_LEVELS) -> list[float]:
@@ -274,7 +293,13 @@ def main() -> None:
     p.add_argument('--tau-bounds', type=float, nargs=2, default=None, metavar=('MIN', 'MAX'),
                    help='τ normalization pair; default: HDF5 attrs, else 3 40')
     p.add_argument('--concurrency', type=int, default=8, help='max simultaneous array tasks (printed)')
+    p.add_argument('--log-std-min', type=float, default=-8.0,
+                   help='lower log-σ clamp for every trial (design note 7; legacy −4)')
     args = p.parse_args()
+    # Clamp settings shared by every trial; sigma_floor = exp(log_std_min) so
+    # the loss floor coincides with the model's floor (trainer checks ≤).
+    FIXED_HP.update({'log_std_min': args.log_std_min, 'log_std_max': LOG_STD_MAX,
+                     'sigma_floor': float(np.exp(args.log_std_min))})
 
     # ── data facts: sample count and τ normalization pair ────────────────────
     stored = None
@@ -362,6 +387,10 @@ def main() -> None:
     h_cap = s_per_epoch * args.n_epochs / 3600
     print(f'{args.n_configs} Sobol configs + {n_tasks - args.n_configs} seed replicates = {n_tasks} trials')
     print(f'split {n_train}/{n_val}/{n_test} (seed {SPLIT_SEED}); τ bounds {tau_bounds[0]:g}–{tau_bounds[1]:g}')
+    print(f'log-σ clamp [{args.log_std_min:g}, {LOG_STD_MAX:g}] → σ floor '
+          f'{np.exp(args.log_std_min) * RE_RANGE_UM:.4f} μm (r_e), '
+          f'{np.exp(args.log_std_min) * (tau_bounds[1] - tau_bounds[0]):.4f} (τ_c); '
+          f'sigma_floor {np.exp(args.log_std_min):.3g}')
     print(f'budget {args.n_epochs} epochs, patience {args.early_stop_patience}; '
           f'≈{s_per_epoch:.1f} s/epoch → ≤{h_cap:.1f} h per trial, ≤{h_cap * n_tasks:.0f} GPU-h in all')
     print(f'  (early stopping usually ends trials sooner; ≈{h_cap * n_tasks / args.concurrency:.0f} h '
