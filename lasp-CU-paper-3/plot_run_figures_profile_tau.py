@@ -10,6 +10,9 @@ profile-only counterpart:
   (1)  per_cloud_rmse_paper_4panel.png       — IEEE 2-column 2×2
   (1b) per_cloud_rmse_paper_6panel.png       — IEEE 2-column 3×2, the layout of
          published_figures/per_cloud_rmse_paper_6panel_run004_12_May_2026.png
+  (1c) per_cloud_rmse_paper_4panel_density.png — (1) with points coloured by
+  (1d) per_cloud_rmse_paper_6panel_density.png   local density, RMSE axis 0–3 μm
+         (plot_per_cloud_rmse_density.py, added 20 Nov 2026)
   (2)  per_level_error_percentiles.png       — IEEE single-column
   (3)  profiles_true_vs_pred_percentiles.png — 2×3 percentile profiles
   (4)  tau_retrieval_diagnostics.png         — 2×2: pred-vs-true τ, τ error vs
@@ -310,6 +313,19 @@ def main():
     out_paper_6 = run_dir / 'per_cloud_rmse_paper_6panel.png'
     plot_paper_6panel(per_sample_rmse, predictors, pred.shape[0], out_paper_6)
     print(f'(1b) paper 6-panel      -> {out_paper_6}')
+
+    # (1c, 1d) Density-coloured versions of the two figures above (pale-to-dark
+    # magma_r, RMSE axis 0–3 μm with a "N points beyond 3 μm cut off" note).
+    # Same predictors and per-profile RMSE; see plot_per_cloud_rmse_density.py.
+    from plot_per_cloud_rmse_density import (
+        plot_paper_4panel_density, plot_paper_6panel_density,
+    )
+    out_paper_d = run_dir / 'per_cloud_rmse_paper_4panel_density.png'
+    plot_paper_4panel_density(per_sample_rmse, predictors, out_paper_d)
+    print(f'(1c) 4-panel, density   -> {out_paper_d}')
+    out_paper_6d = run_dir / 'per_cloud_rmse_paper_6panel_density.png'
+    plot_paper_6panel_density(per_sample_rmse, predictors, out_paper_6d)
+    print(f'(1d) 6-panel, density   -> {out_paper_6d}')
 
     print_droplet_size_correlation_table(predictors)
 

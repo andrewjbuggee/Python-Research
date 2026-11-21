@@ -9,7 +9,9 @@ Runs plot_run_figures_profile_tau.py on the run directory, which
     tau_true, h5_idx) — steps 15 and 16 read that cache;
   * writes per_cloud_rmse_paper_{4,6}panel.png (error vs cloud predictors,
     including Wood (2005) adiabaticity with the 7-Nov-2026 base rule, via
-    plot_per_cloud_rmse_kfold.compute_predictors), per_level_error_percentiles
+    plot_per_cloud_rmse_kfold.compute_predictors) and their density-coloured
+    versions per_cloud_rmse_paper_{4,6}panel_density.png (RMSE axis 0–3 μm;
+    plot_per_cloud_rmse_density.py), per_level_error_percentiles
     {,_no_sigma}.png, profiles_true_vs_pred_percentiles.png and
     tau_retrieval_diagnostics.png.
 

@@ -217,7 +217,7 @@ class DropletProfileNetwork(nn.Module):
         # Profile std: exp(log_std) in normalized [0,1] space, with log_std
         # clamped to [log_std_min, log_std_max] (config; legacy −4 / +2).
         #   lower bound −4: exp(−4) ≈ 0.018 normalized → 0.018 × 48.5 ≈ 0.89 μm
-        #   lower bound −7: exp(−7) ≈ 9.1e-4          → 0.044 μm
+        #   lower bound −8: exp(−8) ≈ 3.4e-4          → 0.016 μm (11b sweep default, 20 Nov 2026)
         #   upper bound +2: exp(2) ≈ 7.4 normalized   → ≈ 359 μm (overflow guard)
         # The lower bound stops σ → 0, where the Gaussian NLL is unbounded
         # below and the mean's gradient (∝ 1/σ²) blows up; Seitzer et al.
