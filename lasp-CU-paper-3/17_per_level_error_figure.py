@@ -176,9 +176,9 @@ def plot_two_panel(pred: np.ndarray, true: np.ndarray, pred_std: np.ndarray,
     # ── (b) predicted aleatoric σ ─────────────────────────────────────────
     ax_b.plot(sigma_c, levels, 'd--', color=COLOR_SIGMA, linewidth=1.2,
               markersize=4, label=fr'{sigma_word} predicted $\sigma$')
-    if sigma_floor_um is not None:
-        ax_b.axvline(sigma_floor_um, color='0.35', linestyle=':', linewidth=1.0,
-                     zorder=0, label=r'Smallest $\sigma$ allowed (log-$\sigma$ clamp)')
+    # if sigma_floor_um is not None:
+    #     ax_b.axvline(sigma_floor_um, color='0.35', linestyle=':', linewidth=1.0,
+    #                  zorder=0, label=r'Smallest $\sigma$ allowed (log-$\sigma$ clamp)')
     ax_b.set_xlabel(LABEL_SIGMA)
     ax_b.set_ylabel(level_label)
     ax_b.set_yticks(levels)

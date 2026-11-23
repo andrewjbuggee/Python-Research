@@ -229,7 +229,7 @@ def load_model_and_test_set(run_dir: Path, h5_override: str | None, device) -> d
     """
     import torch
     from data import LibRadtranDataset, create_profile_aware_splits, tau_bounds_for_run
-    from models import DropletProfileNetwork, RetrievalConfig, log_std_bounds_for_run
+    from models import DropletProfileNetwork, RetrievalConfig
     from plot_percentile_profiles_synthetic import _resolve_h5_path
 
     with (run_dir / "summary.json").open() as f:
@@ -285,9 +285,6 @@ def load_model_and_test_set(run_dir: Path, h5_override: str | None, device) -> d
         activation=hp.get("activation", "gelu"),
         tau_min=float(tau_bounds[0]),
         tau_max=float(tau_bounds[1]),
-        # the run's own log-σ clamp (legacy −4/+2 for runs before 17 Nov 2026)
-        log_std_min=log_std_bounds_for_run(hp)[0],
-        log_std_max=log_std_bounds_for_run(hp)[1],
     )
     model = DropletProfileNetwork(cfg).to(device)
     ckpt = torch.load(run_dir / "best_model.pt", map_location=device, weights_only=False)
