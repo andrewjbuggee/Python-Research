@@ -53,6 +53,16 @@ products:
     datastream: epcceilS2.b1
     variables: [first_cbh, second_cbh, third_cbh, detection_status, status_flag, vertical_visibility]
 
+  thermo_interpsonde_M1:
+    description: Temperature (degC), pressure (kPa) and relative humidity (%) profiles from the interpolated sonde VAP (INTERPSONDE, Fairless et al. 2016), Scripps Pier (M1); 1-min x 332 heights (km, 20 m steps)
+    # The file does not say whether `height` is above ground or sea level. Its first level, 0.007 km, equals the
+    # site altitude `alt` = 7 m, which suggests sea level (my inference, unchecked). Either way the difference
+    # (7 m) is below the 20 m grid spacing. Ceilometer cloud bases are above the instrument (see README).
+    datastream: epcinterpolatedsondeM1.c1
+    # For s_ARG00 (MATLAB live script dedrick2026_supersaturation_retrievals.mlx, Part 8): cloud-base T and p,
+    # interpolated to the ceilometer cloud-base height (Dedrick et al. 2026, J. Atmos. Sci., p. 1065).
+    variables: [temp, bar_pres, rh]
+
   # ---- Cloud optical properties at the Scripps Pier (M1) -------------------
   # `variables` must exist in every file (a misspelling stops the download
   # before any bulk transfer and lists what exists). `optional_variables` are
